@@ -208,6 +208,7 @@ def print_project_info(project: dict[str, Any]) -> None:
         if value:
             _emit(f"  {_dim(label + '：')}{value}")
     _emit("  " + "-" * 58)
+    _emit("  0. 返回")
     _emit("")
 
 
@@ -265,7 +266,7 @@ def print_confirm_panel(task_info: dict[str, Any]) -> None:
     _emit("\n".join(lines))
     _emit("  " + "-" * 58)
     _emit("")
-    _emit("  按 Enter 继续；输入 q 退出。")
+    _emit("  回车执行  /  0 返回")
 
 
 # ── 检查表格 ──────────────────────────────────────────────
@@ -433,3 +434,31 @@ def print_warning(message: str) -> None:
 def print_error(message: str) -> None:
     """打印错误消息（红色）。"""
     _emit(f"  {_red('[失败]')} {message}")
+
+
+# ── 自动打开 Excel ─────────────────────────────────────────
+def try_open_excel(excel_path: str | Path) -> bool:
+    """尝试用系统默认程序打开 Excel 文件（仅 Windows）。
+
+    返回 True 表示打开成功或已跳过，False 表示打开失败。
+    """
+    path_str = str(excel_path)
+    if not path_str:
+        return False
+    if not Path(path_str).exists():
+        return False
+    if sys.platform != "win32":
+        return False
+    try:
+        os.startfile(path_str)
+        return True
+    except Exception:
+        return False
+
+
+def print_auto_open_result(opened: bool) -> None:
+    """打印 Excel 自动打开结果。"""
+    if opened:
+        _emit(f"  {_green('[通过]')} 已打开 Excel 文件，请检查数据")
+    else:
+        _emit(f"  {_yellow('[注意]')} Excel 文件自动打开失败，请手动打开查看")

@@ -2164,14 +2164,14 @@ def test_run_pipeline_confirmation_can_quit_before_steps(tmp_path):
         period="15点",
         kst_file=export,
         confirm_before_run=True,
-        input_func=lambda prompt: "q",
-        fetch_baidu_func=lambda **kwargs: (_ for _ in ()).throw(AssertionError("退出后不应抓百度")),
+        input_func=lambda prompt: "0",
+        fetch_baidu_func=lambda **kwargs: (_ for _ in ()).throw(AssertionError("返回后不应抓百度")),
     )
 
     assert report["passed"] is False
     assert report["failed_step"] == "preflight-confirm"
     assert report["steps"] == []
-    assert any("用户取消" in error for error in report["errors"])
+    assert any("用户返回主菜单" in error for error in report["errors"])
 
 
 def test_run_pipeline_requires_confirmation_for_stale_auto_discovered_kst_file(tmp_path):
@@ -2192,7 +2192,7 @@ def test_run_pipeline_requires_confirmation_for_stale_auto_discovered_kst_file(t
         logger=logging.getLogger("test"),
         period="15点",
         kst_file=None,
-        input_func=lambda prompt: "q",
+        input_func=lambda prompt: "0",
         fetch_baidu_func=lambda **kwargs: (_ for _ in ()).throw(AssertionError("旧文件未确认时不应抓百度")),
     )
 
@@ -2733,3 +2733,143 @@ def test_menu_new_text_entries_exist():
     assert "4. 项目信息" in MENU_TEXT
     assert "5. 文件合格校验" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
+
+
+# ── 返回逻辑测试 ──────────────────────────────────────────
+
+
+def test_confirm_panel_shows_return_hint():
+    """确认面板显示"回车执行 / 0 返回"。"""
+    from io import StringIO
+    from modules.console_ui import print_confirm_panel, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_confirm_panel({"task_name": "测试任务", "project_name": "测试项目"})
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "回车执行" in output
+    assert "0 返回" in output
+    assert "执行确认" in output
+
+
+def test_hourly_submenu_shows_return():
+    """小时报子菜单包含 0. 返回主菜单。"""
+    from io import StringIO
+    from modules.console_ui import print_sub_menu_hourly, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_sub_menu_hourly()
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "0. 返回主菜单" in output
+    assert "11点" in output
+    assert "15点" in output
+    assert "18点" in output
+
+
+def test_project_info_shows_return_hint():
+    """项目信息页显示 0. 返回。"""
+    from io import StringIO
+    from modules.console_ui import print_project_info, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_project_info({"project_name": "测试", "project_id": "test"})
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "0. 返回" in output
+    assert "项目信息" in output
+
+
+# ── 自动打开 Excel 测试 ───────────────────────────────────
+
+
+def test_try_open_excel_returns_false_for_nonexistent_file(tmp_path):
+    """目标文件不存在时 try_open_excel 返回 False。"""
+    from modules.console_ui import try_open_excel
+
+    result = try_open_excel(tmp_path / "不存在.xlsx")
+    assert result is False
+
+
+def test_try_open_excel_returns_false_for_empty_path():
+    """空路径时 try_open_excel 返回 False。"""
+    from modules.console_ui import try_open_excel
+
+    assert try_open_excel("") is False
+
+
+def test_print_auto_open_result_shows_status():
+    """自动打开结果输出正确状态。"""
+    from io import StringIO
+    from modules.console_ui import print_auto_open_result, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_auto_open_result(True)
+        print_auto_open_result(False)
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "[通过]" in output
+    assert "[注意]" in output
+    assert "Excel 文件自动打开失败" in output
+
+
+def test_auto_open_failure_does_not_raise():
+    """自动打开失败不抛出异常。"""
+    from modules.console_ui import try_open_excel
+
+    result = try_open_excel("Z:/不存在的路径/文件.xlsx")
+    assert result is False  # 不抛异常，只返回 False
+
+
+# ── 默认输出降噪测试 ──────────────────────────────────────
+
+
+def test_default_output_hides_report_path_in_pipeline_summary():
+    """默认模式不输出 report/json 路径到终端（verbose_print 默认关闭）。"""
+    from io import StringIO
+    from modules.console_ui import set_output_func, set_verbose, verbose_print
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    set_verbose(False)
+    try:
+        verbose_print("报告：reports/final_run_report.json")
+        verbose_print("reports/write_report.json")
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert output == ""  # 默认模式不应输出这些路径
+
+
+def test_verbose_mode_shows_report_path():
+    from io import StringIO
+    from modules.console_ui import set_output_func, set_verbose, verbose_print
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    set_verbose(True)
+    try:
+        verbose_print("报告：reports/final_run_report.json")
+    finally:
+        set_output_func(print)
+        set_verbose(False)
+
+    output = buf.getvalue()
+    assert "reports/final_run_report.json" in output

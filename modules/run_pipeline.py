@@ -210,9 +210,9 @@ def run_half_auto_pipeline(
     needs_stale_confirm = bool(kst_export_info.get("is_stale"))
     if (confirm_before_run or needs_stale_confirm) and not assume_yes:
         _print_preflight_checklist(report)
-        answer = input_func("> ").strip().lower()
-        if answer == "q":
-            errors = ["用户取消运行"]
+        answer = input_func("> ").strip()
+        if answer == "0":
+            errors = ["用户返回主菜单"]
             if needs_stale_confirm:
                 errors.append("快商通导出文件超过 2 小时，未确认继续")
             return fail("preflight-confirm", errors)
@@ -339,8 +339,8 @@ def run_half_auto_pipeline(
     report["finished_at"] = datetime.now().isoformat(timespec="seconds")
     write_summary = report.get("write_summary", {})
     print_final_success(f"写入 {write_summary.get('write_count', 0)} 个单元格，复核通过")
-    from modules.console_ui import print_quiet_line
-    print_quiet_line("报告：reports/final_run_report.json")
+    from modules.console_ui import verbose_print
+    verbose_print("报告：reports/final_run_report.json")
     return _finalize(root, report, logger)
 
 
@@ -523,6 +523,6 @@ def run_daily_pipeline(
     print_final_success(
         f"写入 {write_summary.get('write_count', 0)} 个单元格，覆盖 {write_summary.get('overwrite_count', 0)} 个已有值，复核通过"
     )
-    from modules.console_ui import print_quiet_line
-    print_quiet_line("报告：reports/daily_final_run_report.json")
+    from modules.console_ui import verbose_print
+    verbose_print("报告：reports/daily_final_run_report.json")
     return _finalize_daily(root, report, logger)

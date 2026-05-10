@@ -13,6 +13,7 @@ from modules.console_ui import (
     print_success,
     print_warning,
     set_verbose,
+    verbose_print,
 )
 from modules.baidu_browser import fetch_baidu_account_report
 from modules.baidu_auto import fetch_baidu_auto
@@ -121,7 +122,7 @@ def main() -> None:
     if args.mode == "doctor":
         report = run_doctor(ROOT, config)
         print_doctor_report(report)
-        print_quiet_line(f"详细报告：reports/doctor_report.json")
+        verbose_print(f"详细报告：reports/doctor_report.json")
         return
 
     if args.mode == "inspect-excel":
@@ -186,7 +187,7 @@ def main() -> None:
             print_error(f"百度自动读取失败，已输出诊断报告：reports/baidu_account_data.json")
         else:
             print_success(f"百度自动读取完成：reports/baidu_account_data.json")
-            print_quiet_line(f"自检报告：reports/baidu_validate_report.json")
+            verbose_print(f"自检报告：reports/baidu_validate_report.json")
         return
     if args.mode == "fetch-baidu-daily":
         report = fetch_baidu_daily(config=config, root=ROOT, logger=logger, target_date=args.date)
@@ -196,7 +197,7 @@ def main() -> None:
             print_error(f"百度日报读取失败，已输出诊断报告：reports/baidu_daily_data.json")
         else:
             print_success(f"百度日报读取完成：reports/baidu_daily_data.json")
-            print_quiet_line(f"自检报告：reports/baidu_daily_validate_report.json")
+            verbose_print(f"自检报告：reports/baidu_daily_validate_report.json")
         return
     if args.mode == "baidu-detect":
         report = baidu_detect(config=config, root=ROOT, logger=logger)
@@ -230,7 +231,7 @@ def main() -> None:
         report = validate_baidu_account_data(source, out, get_required_accounts(config))
         logger.info("百度数据自检报告已输出：%s；结果：%s", out, "通过" if report.get("passed") else "失败")
         print_baidu_validate_summary(report)
-        print_quiet_line(f"百度数据自检报告已输出：reports/baidu_validate_report.json")
+        verbose_print(f"百度数据自检报告已输出：reports/baidu_validate_report.json")
         return
     if args.mode == "parse-kst-export":
         export_file = Path(args.file) if args.file else find_latest_kst_export(ROOT, config)

@@ -290,15 +290,17 @@ def run_menu(
         if choice == "4":
             # 项目信息
             print_project_info(project)
-            input_func("  按 Enter 继续...")
+            input_func("  输入 0 返回：").strip()
             continue
 
         if choice == "5":
             # 文件合格校验 (doctor)
             config = build_runtime_config(project, base_config)
             report = dispatch_menu_task("5", config=config, root=root, logger=logger, output_func=output_func)
-            output_func(f"  详细报告：reports/doctor_report.json")
-            input_func("  按 Enter 继续...")
+            from modules.console_ui import verbose_print, is_verbose
+            verbose_print(f"详细报告：reports/doctor_report.json")
+            output_func("")
+            input_func("  输入 0 返回：").strip()
             continue
 
         if choice not in {"1", "2"}:
@@ -331,10 +333,10 @@ def run_menu(
             "kst_file": str(latest) if latest else "",
         })
 
-        answer = input_func("  > ").strip().lower()
-        if answer == "q":
-            output_func("  已退出。")
-            return
+        answer = input_func("  > ").strip()
+        if answer == "0":
+            output_func("  已返回主菜单。")
+            continue
 
         config = build_runtime_config(project, base_config)
         if not _check_chrome_debug(root, config, output_func):
@@ -352,14 +354,23 @@ def run_menu(
         if isinstance(result, dict) and "passed" in result:
             if result.get("passed"):
                 print_final_success("任务完成")
-                output_func(f"  报告：reports/{'daily_' if choice == '2' else ''}final_run_report.json")
+
+                # 写入成功后自动打开 Excel
+                from modules.console_ui import try_open_excel, print_auto_open_result, verbose_print
+                excel_path = excel.get("path") or project.get("excel_path", "")
+                if excel_path:
+                    opened = try_open_excel(excel_path)
+                    print_auto_open_result(opened)
+
+                verbose_print(f"报告：reports/{'daily_' if choice == '2' else ''}final_run_report.json")
             else:
                 print_final_failure(f"失败步骤：{result.get('failed_step') or '未知'}，原因：{result.get('errors') or '未知错误'}")
                 output_func("  详细日志：logs/run.log")
         else:
             output_func("  任务已执行。")
 
-        input_func("  按 Enter 继续...")
+        output_func("")
+        input_func("  输入 0 返回：").strip()
 
 
 if __name__ == "__main__":
