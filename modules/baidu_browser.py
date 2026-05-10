@@ -156,10 +156,12 @@ def fetch_baidu_account_report(
         page.bring_to_front()
         logger.info("已连接百度读取页面：%s", page.url or start_url)
 
-        print()
-        print("请在已打开的 Chrome 中人工登录百度营销后台。")
-        print("进入“数据 → 账户报告”，选择今天日期，并全选三个账户。")
-        print("确认当前页面已经显示账户报告表格后，回到此终端按回车开始读取。")
+        from modules.console_ui import print_quiet_line, print_warning
+
+        print_quiet_line("")
+        print_warning("请在已打开的 Chrome 中人工登录百度营销后台。")
+        print_quiet_line('进入 数据 -> 账户报告，选择今天日期，并全选三个账户。')
+        print_quiet_line('确认当前页面已经显示账户报告表格后，回到此终端按回车开始读取。')
         input("准备好后按回车读取当前页面 DOM 表格...")
         report["self_check"]["manual_enter_received"] = True
 
@@ -197,9 +199,9 @@ def fetch_baidu_account_report(
             _write_debug_artifacts(root, page, report, include_screenshot=bool(baidu_config.get("debug_screenshot", False)))
 
         _write_report(root, config, report)
-        print()
-        print("百度读取报告已输出。Chrome 会保持打开，方便你检查页面。")
-        print("检查完成后，可以手动关闭 Chrome，再回到此终端按回车结束程序。")
+        print_quiet_line("")
+        print_quiet_line("百度读取报告已输出。Chrome 会保持打开，方便你检查页面。")
+        print_quiet_line("检查完成后，可以手动关闭 Chrome，再回到此终端按回车结束程序。")
         input("按回车结束 fetch-baidu...")
     logger.info("百度账户数据报告已输出：%s", baidu_config.get("output_path", "reports/baidu_account_data.json"))
     return report

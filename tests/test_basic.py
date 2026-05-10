@@ -299,12 +299,18 @@ def test_menu_dispatch_uses_existing_pipeline_functions(tmp_path):
 
 
 def test_menu_text_is_simplified_for_new_users():
-    assert "1. 刷新当前项目信息" not in MENU_TEXT
-    assert "1. 运行日报" in MENU_TEXT
-    assert "2. 运行小时报" in MENU_TEXT
-    assert "3. 切换项目" in MENU_TEXT
-    assert "4. 刷新当前项目" in MENU_TEXT
-    assert "5. 检查运行环境" in MENU_TEXT
+    assert "1. 小时报" in MENU_TEXT
+    assert "2. 日报" in MENU_TEXT
+    assert "3. 下一个项目" in MENU_TEXT
+    assert "4. 项目信息" in MENU_TEXT
+    assert "5. 文件合格校验" in MENU_TEXT
+    assert "0. 退出" in MENU_TEXT
+    # 旧文案不应出现
+    assert "运行日报" not in MENU_TEXT
+    assert "运行小时报" not in MENU_TEXT
+    assert "切换项目" not in MENU_TEXT
+    assert "刷新当前项目" not in MENU_TEXT
+    assert "检查运行环境" not in MENU_TEXT
     assert "只抓百度数据" not in MENU_TEXT
     assert "只解析商务通导出表" not in MENU_TEXT
     assert "查看最近报告" not in MENU_TEXT
@@ -2466,3 +2472,195 @@ def test_run_bat_files_support_dragged_kst_file_argument():
         assert f"--period {period}" in text
         assert 'set "KST_FILE=%~1"' in text
         assert '--file "%KST_FILE%"' in text
+
+
+# ── console_ui 新增测试 ──────────────────────────────────
+
+
+def test_print_check_table_shows_pass_fail_warn_status():
+    from io import StringIO
+
+    from modules.console_ui import print_check_table, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_check_table("测试检查", [
+            {"name": "项目A", "status": "pass", "message": "正常"},
+            {"name": "项目B", "status": "fail", "message": "有问题"},
+            {"name": "项目C", "status": "warn", "message": "需关注"},
+        ])
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "[通过]" in output
+    assert "[失败]" in output
+    assert "[注意]" in output
+    assert "项目A" in output
+    assert "正常" in output
+    assert "有问题" in output
+    assert "需关注" in output
+    assert "2/3" in output or "1/3" in output  # 通过/总数
+
+
+def test_console_ui_no_colorama_fallback_does_not_raise():
+    import sys
+
+    from modules.console_ui import set_output_func
+
+    # 模拟 colorama 不可用
+    original_modules = sys.modules.copy()
+    try:
+        # 先清除可能的缓存
+        for key in list(sys.modules.keys()):
+            if "colorama" in key.lower():
+                del sys.modules[key]
+
+        sys.modules["colorama"] = type(sys)("fake_colorama")
+        sys.modules["colorama"].__spec__ = None
+
+        # 强制重新加载 console_ui（带 fallback）
+        import importlib
+        import modules.console_ui as cui
+
+        importlib.reload(cui)
+
+        assert cui._HAS_COLOR is False
+        # 确保核心函数仍然可用
+        buf = __import__("io").StringIO()
+        cui.set_output_func(buf.write)
+        try:
+            cui.print_success("测试")
+            cui.print_error("测试")
+            cui.print_warning("测试")
+        finally:
+            cui.set_output_func(print)
+
+        output = buf.getvalue()
+        assert "[通过]" in output
+        assert "[失败]" in output
+        assert "[注意]" in output
+    finally:
+        # 恢复
+        for key in list(sys.modules.keys()):
+            if "colorama" in key.lower():
+                del sys.modules[key]
+        for key in list(original_modules.keys()):
+            if "colorama" in key.lower() and key not in sys.modules:
+                pass  # 不恢复 colorama mock
+
+
+def test_print_banner_shows_project_and_version():
+    from io import StringIO
+    from pathlib import Path
+
+    from modules.console_ui import print_banner, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_banner({
+            "project_name": "测试项目",
+            "excel": {"path": "/path/to/test.xlsx"},
+        }, version="1.0.0")
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "百度竞价日报" in output
+    assert "小时报自动化助手" in output
+    assert "1.0.0" in output
+    assert "测试项目" in output
+    assert "test.xlsx" in output
+    assert "logs/run.log" in output
+
+
+def test_print_project_info_shows_all_fields():
+    from io import StringIO
+
+    from modules.console_ui import print_project_info, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_project_info({
+            "project_name": "演示项目",
+            "project_id": "demo",
+            "_config_path": "/path/to/config.json",
+            "excel": {
+                "path": "/path/to/excel.xlsx",
+                "hourly_sheet": "时段数据",
+                "daily_sheet": "百度",
+            },
+            "kst": {"export_dir": "/path/to/exports"},
+            "baidu": {"credential_profile": "my_profile"},
+        })
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "项目信息" in output
+    assert "演示项目" in output
+    assert "demo" in output
+    assert "excel.xlsx" in output
+    assert "时段数据" in output
+    assert "百度" in output
+    assert "my_profile" in output
+
+
+def test_default_output_mode_does_not_print_json_blobs(capsys):
+    """默认模式（非 verbose）不应输出大段 JSON。"""
+    from modules.console_ui import print_quiet_line, set_verbose, verbose_print
+
+    set_verbose(False)
+    verbose_print('{"this": "should not appear"}')
+    print_quiet_line("正常信息")
+
+    captured = capsys.readouterr()
+    assert "should not appear" not in captured.out
+    assert "正常信息" in captured.out
+
+
+def test_verbose_mode_still_outputs_debug_info(capsys):
+    from modules.console_ui import set_verbose, verbose_print
+
+    set_verbose(True)
+    verbose_print("调试信息：详细数据")
+
+    captured = capsys.readouterr()
+    assert "调试信息" in captured.out
+
+    set_verbose(False)
+
+
+def test_doctor_report_no_longer_prints_internal_field_names(tmp_path, capsys):
+    """doctor 输出不再包含 _DOCTOR_CHECK_LABELS key 名等内部字段。"""
+    from modules.doctor import print_doctor_report
+
+    report = {
+        "project_name": "测试",
+        "checks": {
+            "python": {"passed": True, "message": "Python 3.14.4"},
+            "chrome": {"passed": False, "level": "warning", "message": "未找到 Chrome"},
+        },
+    }
+    print_doctor_report(report)
+
+    captured = capsys.readouterr()
+    # 应该显示中文标签，而不是内部 key 名
+    assert "Python 版本" in captured.out
+    assert "未找到 Chrome" in captured.out
+    # 不应输出 JSON 结构
+    assert '"passed"' not in captured.out
+    assert '"checks"' not in captured.out
+
+
+def test_menu_new_text_entries_exist():
+    """菜单显示新文案。"""
+    assert "1. 小时报" in MENU_TEXT
+    assert "2. 日报" in MENU_TEXT
+    assert "3. 下一个项目" in MENU_TEXT
+    assert "4. 项目信息" in MENU_TEXT
+    assert "5. 文件合格校验" in MENU_TEXT
+    assert "0. 退出" in MENU_TEXT

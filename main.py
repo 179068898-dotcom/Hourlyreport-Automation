@@ -5,7 +5,15 @@ import json
 from pathlib import Path
 
 from modules.config_manager import load_config
-from modules.console_ui import set_verbose
+from modules.console_ui import (
+    print_error,
+    print_final_failure,
+    print_final_success,
+    print_quiet_line,
+    print_success,
+    print_warning,
+    set_verbose,
+)
 from modules.baidu_browser import fetch_baidu_account_report
 from modules.baidu_auto import fetch_baidu_auto
 from modules.baidu_daily import fetch_baidu_daily
@@ -95,36 +103,25 @@ def main() -> None:
 
     if args.mode == "show-project":
         project = get_current_project(ROOT)
-        print(f"当前默认项目：{project['project_id']} - {project['project_name']}")
-        print(f"配置文件：{project.get('_config_path')}")
-        print(f"Excel：{project.get('excel', {}).get('path')}")
-        print(f"小时报 sheet：{project.get('excel', {}).get('hourly_sheet')}")
-        print(f"日报 sheet：{project.get('excel', {}).get('daily_sheet')}")
-        print(f"商务通导出目录：{project.get('kst', {}).get('export_dir')}")
-        print(f"百度凭据 profile：{project.get('baidu', {}).get('credential_profile')}")
-        print("账户：")
-        for account in project.get("accounts", []):
-            print(
-                f"- {account.get('standard_name')}：Excel={account.get('excel_name')}，"
-                f"百度名称={account.get('baidu_names')}，商务通ID={account.get('kst_ids')}，商务通名称={account.get('kst_names')}"
-            )
+        from modules.console_ui import print_project_info
+        print_project_info(project)
         return
 
     if args.mode == "validate-project":
         project = get_current_project(ROOT)
         errors = validate_project_config(project)
         if errors:
-            print(f"项目配置校验失败：{project.get('project_id')}")
+            print_error(f"项目配置校验失败：{project.get('project_id')}")
             for error in errors:
-                print(f"- {error}")
+                print_quiet_line(f"  - {error}")
         else:
-            print(f"项目配置校验通过：{project.get('project_id')} - {project.get('project_name')}")
+            print_success(f"项目配置校验通过：{project.get('project_id')} - {project.get('project_name')}")
         return
 
     if args.mode == "doctor":
         report = run_doctor(ROOT, config)
         print_doctor_report(report)
-        print(f"详细报告：{ROOT / 'reports' / 'doctor_report.json'}")
+        print_quiet_line(f"详细报告：reports/doctor_report.json")
         return
 
     if args.mode == "inspect-excel":
@@ -132,100 +129,100 @@ def main() -> None:
         out = ROOT / "reports" / "excel_structure_report.json"
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info("Excel 结构识别报告已输出：%s", out)
-        print(f"Excel 结构识别完成：{out}")
+        print_success(f"Excel 结构识别完成：reports/excel_structure_report.json")
         return
 
     if args.mode == "inspect-daily-excel":
         report = inspect_daily_excel_structure(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "daily_excel_structure_report.json"
         if report.get("errors"):
-            print(f"日报 Excel 结构识别存在问题，已输出报告：{out}")
+            print_error(f"日报 Excel 结构识别存在问题，已输出报告：reports/daily_excel_structure_report.json")
         else:
-            print(f"日报 Excel 结构识别完成：{out}")
+            print_success(f"日报 Excel 结构识别完成：reports/daily_excel_structure_report.json")
         return
 
     if args.mode == "dump-sheet-text":
         out = dump_sheet_text(config=config, root=ROOT, logger=logger)
-        print(f"sheet 文本扫描结果已输出：{out}")
+        print_quiet_line(f"sheet 文本扫描结果已输出：{out}")
         return
 
     if args.mode == "mock-write":
         report = mock_write_excel(config=config, root=ROOT, logger=logger, period=args.period)
         out = ROOT / "reports" / "mock_write_report.json"
         if report.get("errors"):
-            print(f"Excel 模拟写入中断：{out}")
+            print_error(f"Excel 模拟写入中断：reports/mock_write_report.json")
         else:
-            print(f"Excel 模拟写入完成：{out}")
+            print_success(f"Excel 模拟写入完成：reports/mock_write_report.json")
         return
     if args.mode == "test-browser":
         report = test_browser_launch(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "browser_test_report.json"
         if report.get("errors"):
-            print(f"Chrome 浏览器启动测试失败，已输出报告：{out}")
+            print_error(f"Chrome 浏览器启动测试失败，已输出报告：reports/browser_test_report.json")
         else:
-            print(f"Chrome 浏览器启动测试完成：{out}")
+            print_success(f"Chrome 浏览器启动测试完成：reports/browser_test_report.json")
         return
     if args.mode == "test-browser-connect":
         report = test_browser_connect(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "browser_connect_report.json"
         if report.get("errors"):
-            print(f"连接已有 Chrome 测试失败，已输出报告：{out}")
+            print_error(f"连接已有 Chrome 测试失败，已输出报告：reports/browser_connect_report.json")
         else:
-            print(f"连接已有 Chrome 测试完成：{out}")
+            print_success(f"连接已有 Chrome 测试完成：reports/browser_connect_report.json")
         return
     if args.mode == "fetch-baidu":
         report = fetch_baidu_account_report(config=config, root=ROOT, logger=logger, period=args.period)
         out = ROOT / config.get("baidu", {}).get("output_path", "reports/baidu_account_data.json")
         if report.get("errors"):
-            print(f"百度数据读取未完成，已输出诊断报告：{out}")
+            print_error(f"百度数据读取未完成，已输出诊断报告：{out}")
         else:
-            print(f"百度数据读取完成：{out}")
+            print_success(f"百度数据读取完成：{out}")
         return
     if args.mode == "fetch-baidu-auto":
         report = fetch_baidu_auto(config=config, root=ROOT, logger=logger, period=args.period)
         out = ROOT / config.get("baidu", {}).get("output_path", "reports/baidu_account_data.json")
         validate_out = ROOT / "reports" / "baidu_validate_report.json"
         if report.get("errors"):
-            print(f"百度自动读取失败，已输出诊断报告：{out}")
+            print_error(f"百度自动读取失败，已输出诊断报告：reports/baidu_account_data.json")
         else:
-            print(f"百度自动读取完成：{out}")
-        print(f"百度自动读取自检报告：{validate_out}")
+            print_success(f"百度自动读取完成：reports/baidu_account_data.json")
+            print_quiet_line(f"自检报告：reports/baidu_validate_report.json")
         return
     if args.mode == "fetch-baidu-daily":
         report = fetch_baidu_daily(config=config, root=ROOT, logger=logger, target_date=args.date)
         out = ROOT / "reports" / "baidu_daily_data.json"
         validate_out = ROOT / "reports" / "baidu_daily_validate_report.json"
         if report.get("errors"):
-            print(f"百度日报读取失败，已输出诊断报告：{out}")
+            print_error(f"百度日报读取失败，已输出诊断报告：reports/baidu_daily_data.json")
         else:
-            print(f"百度日报读取完成：{out}")
-        print(f"百度日报自检报告：{validate_out}")
+            print_success(f"百度日报读取完成：reports/baidu_daily_data.json")
+            print_quiet_line(f"自检报告：reports/baidu_daily_validate_report.json")
         return
     if args.mode == "baidu-detect":
         report = baidu_detect(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "baidu_detect_report.json"
         if report.get("errors"):
-            print(f"百度页面检测失败，已输出报告：{out}")
+            print_error(f"百度页面检测失败，已输出报告：reports/baidu_detect_report.json")
         else:
-            print(f"百度页面检测完成：{out}")
-            print(f"登录状态：{report.get('login_status')}；页面类型：{report.get('page_type')}")
+            print_success(f"百度页面检测完成：reports/baidu_detect_report.json")
+            print_quiet_line(f"登录状态：{report.get('login_status')}；页面类型：{report.get('page_type')}")
         return
     if args.mode == "baidu-open-overview":
         report = baidu_open_overview(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "baidu_open_overview_report.json"
         if report.get("errors"):
-            print(f"百度数据概览搜索推广打开失败，已输出报告：{out}")
+            print_error(f"百度数据概览搜索推广打开失败，已输出报告：reports/baidu_open_overview_report.json")
         else:
-            print(f"百度数据概览搜索推广打开完成：{out}")
-            print(f"最终页面类型：{report.get('final_page_type')}；点击步骤：{report.get('clicked_steps')}")
+            print_success(f"百度数据概览搜索推广打开完成：reports/baidu_open_overview_report.json")
+            print_quiet_line(f"最终页面类型：{report.get('final_page_type')}；点击步骤：{report.get('clicked_steps')}")
         return
     if args.mode == "baidu-prepare-overview":
         report = baidu_prepare_overview(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "baidu_prepare_overview_report.json"
         if report.get("errors"):
-            print(f"百度搜索推广数据页复核失败，已输出报告：{out}")
+            print_error(f"百度搜索推广数据页复核未通过，已输出报告：reports/baidu_prepare_overview_report.json")
         else:
-            print(f"百度搜索推广数据页复核通过：{out}")
+            print_success(f"百度搜索推广数据页复核通过：reports/baidu_prepare_overview_report.json")
         return
     if args.mode == "validate-baidu":
         source = ROOT / config.get("baidu", {}).get("output_path", "reports/baidu_account_data.json")
@@ -233,7 +230,7 @@ def main() -> None:
         report = validate_baidu_account_data(source, out, get_required_accounts(config))
         logger.info("百度数据自检报告已输出：%s；结果：%s", out, "通过" if report.get("passed") else "失败")
         print_baidu_validate_summary(report)
-        print(f"百度数据自检报告已输出：{out}")
+        print_quiet_line(f"百度数据自检报告已输出：reports/baidu_validate_report.json")
         return
     if args.mode == "parse-kst-export":
         export_file = Path(args.file) if args.file else find_latest_kst_export(ROOT, config)
@@ -244,7 +241,7 @@ def main() -> None:
                 "errors": ["未指定 --file，且 kst_exports 目录下没有 Excel/CSV 导出文件"],
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             logger.error("快商通导出解析失败：未找到导出文件。")
-            print(f"快商通导出解析失败，已输出报告：{out}")
+            print_error("快商通导出解析失败：未找到导出文件。")
             return
         result = parse_kst_export_file(export_file, config, ROOT, args.period)
         logger.info(
@@ -253,9 +250,9 @@ def main() -> None:
             "通过" if result["parse_report"].get("passed") else "失败",
         )
         if result["parse_report"].get("passed"):
-            print(f"快商通导出解析完成：{result['outputs']['dialog_data']}")
+            print_success(f"快商通导出解析完成：{result['outputs']['dialog_data']}")
         else:
-            print(f"快商通导出解析失败，已输出报告：{result['outputs']['parse_report']}")
+            print_error(f"快商通导出解析失败，已输出报告：{result['outputs']['parse_report']}")
         return
     if args.mode == "parse-kst-daily":
         export_file = Path(args.file) if args.file else find_latest_kst_export(ROOT, config)
@@ -266,7 +263,7 @@ def main() -> None:
                 "errors": ["未指定 --file，且 kst_exports 目录下没有 Excel/CSV 商务通日报导出文件"],
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             logger.error("商务通日报导出解析失败：未找到导出文件。")
-            print(f"商务通日报导出解析失败，已输出报告：{out}")
+            print_error("商务通日报导出解析失败：未找到导出文件。")
             return
         result = parse_kst_daily_file(export_file, config, ROOT, args.date)
         logger.info(
@@ -275,41 +272,41 @@ def main() -> None:
             "通过" if result["parse_report"].get("passed") else "失败",
         )
         if result["parse_report"].get("passed"):
-            print(f"商务通日报导出解析完成：{result['outputs']['daily_data']}")
+            print_success(f"商务通日报导出解析完成：{result['outputs']['daily_data']}")
         else:
-            print(f"商务通日报导出解析失败，已输出报告：{result['outputs']['parse_report']}")
+            print_error(f"商务通日报导出解析失败，已输出报告：{result['outputs']['parse_report']}")
         return
     if args.mode == "merge-data":
         result = merge_data_files(config=config, root=ROOT, logger=logger, period=args.period)
         if result["validate_report"].get("passed"):
-            print(f"数据合并完成：{result['outputs']['merged']}")
-            print(f"合并自检通过：{result['outputs']['validate_report']}")
+            print_success(f"数据合并完成：{result['outputs']['merged']}")
+            print_quiet_line(f"合并自检通过：{result['outputs']['validate_report']}")
         else:
-            print(f"数据合并失败，已输出自检报告：{result['outputs']['validate_report']}")
+            print_error(f"数据合并失败，已输出自检报告：{result['outputs']['validate_report']}")
         return
     if args.mode == "merge-daily":
         result = merge_daily_files(config=config, root=ROOT, logger=logger, target_date=args.date)
         if result["validate_report"].get("passed"):
-            print(f"日报数据合并完成：{result['outputs']['merged']}")
-            print(f"日报合并自检通过：{result['outputs']['validate_report']}")
+            print_success(f"日报数据合并完成：{result['outputs']['merged']}")
+            print_quiet_line(f"日报合并自检通过：{result['outputs']['validate_report']}")
         else:
-            print(f"日报数据合并失败，已输出自检报告：{result['outputs']['validate_report']}")
+            print_error(f"日报数据合并失败，已输出自检报告：{result['outputs']['validate_report']}")
         return
     if args.mode == "write-excel":
         report = write_merged_hourly_data(config=config, root=ROOT, logger=logger, period=args.period)
         out = ROOT / "reports" / "write_report.json"
         if report.get("errors"):
-            print(f"Excel 正式写入中断，已输出报告：{out}")
+            print_error(f"Excel 正式写入中断，已输出报告：reports/write_report.json")
         else:
-            print(f"Excel 正式写入完成并复核通过：{out}")
+            print_success(f"Excel 正式写入完成并复核通过：reports/write_report.json")
         return
     if args.mode == "write-daily":
         report = write_merged_daily_data(config=config, root=ROOT, logger=logger, target_date=args.date)
         out = ROOT / "reports" / "daily_write_report.json"
         if report.get("errors"):
-            print(f"日报 Excel 写入中断，已输出报告：{out}")
+            print_error(f"日报 Excel 写入中断，已输出报告：reports/daily_write_report.json")
         else:
-            print(f"日报 Excel 写入完成并复核通过：{out}")
+            print_success(f"日报 Excel 写入完成并复核通过：reports/daily_write_report.json")
         return
     if args.mode == "run":
         report = run_half_auto_pipeline(
@@ -323,9 +320,9 @@ def main() -> None:
         )
         out = ROOT / "reports" / "final_run_report.json"
         if report.get("passed"):
-            print(f"半自动一键流完成：{out}")
+            print_final_success(f"半自动一键流完成：reports/final_run_report.json")
         else:
-            print(f"半自动一键流中断，失败步骤：{report.get('failed_step')}，报告：{out}")
+            print_final_failure(f"半自动一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/final_run_report.json")
         return
     if args.mode == "run-daily":
         report = run_daily_pipeline(
@@ -337,9 +334,9 @@ def main() -> None:
         )
         out = ROOT / "reports" / "daily_final_run_report.json"
         if report.get("passed"):
-            print(f"日报一键流完成：{out}")
+            print_final_success(f"日报一键流完成：reports/daily_final_run_report.json")
         else:
-            print(f"日报一键流中断，失败步骤：{report.get('failed_step')}，报告：{out}")
+            print_final_failure(f"日报一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/daily_final_run_report.json")
         return
 
 

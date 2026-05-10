@@ -289,29 +289,25 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def print_doctor_report(report: dict[str, Any]) -> None:
-    from modules.console_ui import print_check_result, print_header
+    from modules.console_ui import print_check_table
 
-    print_header("运行环境检查结果")
-    print(f"项目：{report.get('project_name') or report.get('project_id') or '未知'}")
-
-    passed_count = 0
-    failed_count = 0
+    checks: list[dict[str, Any]] = []
     for key, item in report.get("checks", {}).items():
+        name = _DOCTOR_CHECK_LABELS.get(key, key)
         if item.get("passed"):
-            print_check_result(_DOCTOR_CHECK_LABELS.get(key, key), "pass", item.get("message", ""))
-            passed_count += 1
+            status = "pass"
         elif item.get("level") == "warning":
-            print_check_result(_DOCTOR_CHECK_LABELS.get(key, key), "warn", item.get("message", ""))
-            failed_count += 1
+            status = "warn"
         else:
-            print_check_result(_DOCTOR_CHECK_LABELS.get(key, key), "fail", item.get("message", ""))
-            failed_count += 1
+            status = "fail"
+        checks.append({
+            "name": name,
+            "status": status,
+            "message": item.get("message", ""),
+        })
 
-    total = passed_count + failed_count
-    if failed_count == 0:
-        print(f"\n合计：{passed_count}/{total} 项通过")
-    else:
-        print(f"\n合计：{passed_count}/{total} 项通过，{failed_count} 项需关注")
+    title = f"文件合格校验  —  {report.get('project_name') or report.get('project_id') or '未知'}"
+    print_check_table(title, checks)
 
 
 _DOCTOR_CHECK_LABELS = {

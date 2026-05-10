@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m pytest *)",
+      "Bash(./.venv/Scripts/python.exe -m pytest *)",
+      "Bash(.venv/Scripts/python.exe -m compileall *)",
+      "Bash(./.venv/Scripts/python.exe -m compileall *)",
+      "Bash(.venv/Scripts/python.exe main.py --mode doctor)",
+      "Bash(./.venv/Scripts/python.exe main.py --mode doctor)",
+      "Bash(.venv/Scripts/python.exe main.py --mode list-projects)",
+      "Bash(.venv/Scripts/python.exe main.py --mode show-project)",
+      "Bash(.venv/Scripts/python.exe main.py --mode validate-project)",
+      "Bash(.venv/Scripts/python.exe main.py --mode inspect-excel)",
+      "Bash(.venv/Scripts/python.exe main.py --mode inspect-daily-excel)",
+      "Bash(.venv/Scripts/python.exe main.py --mode dump-sheet-text)",
+      "Bash(.venv/Scripts/python.exe main.py --mode test-browser-connect)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ]
+  }
+}

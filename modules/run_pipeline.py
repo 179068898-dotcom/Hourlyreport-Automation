@@ -135,18 +135,19 @@ def _build_daily_summary_text(report: dict[str, Any]) -> str:
 
 
 def _print_preflight_checklist(report: dict[str, Any]) -> None:
-    from modules.console_ui import print_header
+    from modules.console_ui import print_confirm_panel
 
     kst = report.get("kst_export", {})
-    print_header("运行前确认")
-    print(f"  百度报告页：请确认 Chrome 中已打开并选好日期和三个账户")
-    print(f"  快商通文件：{kst.get('file_name') or '未找到'}")
-    if kst.get("is_stale"):
-        print(f"    [注意] 快商通导出文件已超过 2 小时，请确认是否继续")
-    print(f"  目标 Excel：{report.get('excel_path') or '未配置'}")
-    print(f"  目标 sheet：{report.get('target_sheet') or '未配置'}")
-    print(f"  日期/时段：{report.get('current_date')} / {report.get('period')}")
-    print("  按 Enter 继续；输入 q 后回车退出。")
+    print_confirm_panel({
+        "task_name": f"小时报 — {report.get('period', '')}",
+        "project_name": report.get("project_name", ""),
+        "excel_path": report.get("excel_path", ""),
+        "sheet": report.get("target_sheet", ""),
+        "date": report.get("current_date", ""),
+        "period": report.get("period", ""),
+        "kst_file": kst.get("full_path") or kst.get("file_name", ""),
+        "kst_is_stale": kst.get("is_stale", False),
+    })
 
 
 def run_half_auto_pipeline(
@@ -338,7 +339,8 @@ def run_half_auto_pipeline(
     report["finished_at"] = datetime.now().isoformat(timespec="seconds")
     write_summary = report.get("write_summary", {})
     print_final_success(f"写入 {write_summary.get('write_count', 0)} 个单元格，复核通过")
-    print("  报告：reports/final_run_report.json")
+    from modules.console_ui import print_quiet_line
+    print_quiet_line("报告：reports/final_run_report.json")
     return _finalize(root, report, logger)
 
 
@@ -521,5 +523,6 @@ def run_daily_pipeline(
     print_final_success(
         f"写入 {write_summary.get('write_count', 0)} 个单元格，覆盖 {write_summary.get('overwrite_count', 0)} 个已有值，复核通过"
     )
-    print("  报告：reports/daily_final_run_report.json")
+    from modules.console_ui import print_quiet_line
+    print_quiet_line("报告：reports/daily_final_run_report.json")
     return _finalize_daily(root, report, logger)
