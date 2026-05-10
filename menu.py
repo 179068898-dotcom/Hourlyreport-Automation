@@ -226,19 +226,33 @@ def _select_hourly_period(input_func: Callable[[str], str], output_func: Callabl
 
 
 def _switch_to_next_project(root: Path) -> dict[str, Any] | None:
-    """切换到下一个可用项目（循环）。"""
+    """切换到下一个可用项目（循环）。
+
+    只遍历真实项目，跳过无法加载的配置。没有其他项目时返回 None。
+    """
     projects = list_projects(root)
-    if not projects:
+    if len(projects) <= 1:
         return None
     current = get_current_project(root)
     current_id = current.get("project_id", "")
+
+    # 找到当前项目在列表中的位置
+    start = 0
     for i, proj in enumerate(projects):
         if proj["project_id"] == current_id:
-            next_idx = (i + 1) % len(projects)
-            next_id = projects[next_idx]["project_id"]
+            start = i
+            break
+
+    # 从下一个位置开始尝试切换，跳过加载失败的项目
+    for offset in range(1, len(projects) + 1):
+        idx = (start + offset) % len(projects)
+        next_id = projects[idx]["project_id"]
+        try:
             return set_current_project(root, next_id)
-    # 当前项目不在列表里，切换到第一个
-    return set_current_project(root, projects[0]["project_id"])
+        except Exception:
+            continue
+
+    return None
 
 
 def run_menu(
@@ -283,7 +297,7 @@ def run_menu(
                 project = switched
                 print_success(f"已切换到：{switched['project_name']}")
             else:
-                print_warning("没有可切换的项目。")
+                print_warning("当前没有可切换的其他项目")
             input_func("  按 Enter 继续...")
             continue
 
