@@ -1,0 +1,332 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+
+class BrowserLaunchError(RuntimeError):
+    pass
+
+
+CONNECT_EXISTING_HELP = (
+    '请先用常用 Google Chrome 启动远程调试端口。\n'
+    '注意：如果已经打开 Chrome，新启动参数可能会被旧实例忽略，导致 9222 端口没有监听。'
+    '另外，新版 Chrome 可能禁止在默认个人资料目录上开启远程调试；'
+    '项目脚本会使用 browser_profile/chrome_debug 作为调试专用目录。'
+    '请先关闭所有 Chrome 窗口，或运行项目里的 start_chrome_debug.bat。\n'
+    '手动启动命令：\n'
+    '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
+    '--remote-debugging-port=9222 --profile-directory="Default" https://yingxiao.baidu.com/'
+)
+
+
+def _resolve_path(root: Path, value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute():
+        return path
+    return root / path
+
+
+def get_browser_settings(config: dict[str, Any]) -> dict[str, Any]:
+    browser = config.get("browser") if isinstance(config.get("browser"), dict) else {}
+    managed = browser.get("managed") if isinstance(browser.get("managed"), dict) else {}
+
+    legacy_port = config.get("remote_debugging_port", 9222)
+    cdp_endpoint = browser.get("cdp_endpoint")
+    if not cdp_endpoint:
+        cdp_endpoint = f"http://127.0.0.1:{int(legacy_port)}"
+
+    mode = browser.get("mode", config.get("browser_launch_mode", "connect_existing"))
+    if mode == "cdp":
+        mode = "connect_existing"
+
+    profile_dir = managed.get("profile_dir", config.get("browser_profile_dir", "browser_profile/chrome"))
+    channel = managed.get("channel", config.get("browser_channel", "chrome"))
+    executable_path = managed.get("executable_path", config.get("chrome_executable_path", ""))
+
+    auto_start = browser.get("auto_start_debug_chrome", True)
+    remote_debugging_host = browser.get("remote_debugging_host", "127.0.0.1")
+    remote_debugging_port = int(browser.get("remote_debugging_port", legacy_port))
+    startup_url = browser.get("startup_url", config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/") if isinstance(config.get("baidu"), dict) else "https://yingxiao.baidu.com/")
+    allow_kill = bool(browser.get("allow_kill_existing_chrome", False))
+
+    return {
+        "mode": mode,
+        "cdp_endpoint": cdp_endpoint,
+        "prefer_existing_chrome": bool(browser.get("prefer_existing_chrome", True)),
+        "debug_profile_dir": browser.get("debug_profile_dir", "browser_profile/chrome_debug"),
+        "browser_preference": config.get("browser_preference", "chrome"),
+        "browser_channel": channel,
+        "chrome_executable_path": executable_path,
+        "browser_profile_dir": profile_dir,
+        "browser_launch_mode": mode,
+        "remote_debugging_port": int(str(cdp_endpoint).rstrip("/").split(":")[-1]),
+        "remote_debugging_host": remote_debugging_host,
+        "startup_url": startup_url,
+        "allow_edge_fallback": bool(browser.get("allow_edge_fallback", config.get("allow_edge_fallback", False))),
+        "headless": bool(managed.get("headless", False)),
+        "max_tabs": int(browser.get("max_tabs", config.get("browser_max_tabs", 3))),
+        "auto_start_debug_chrome": auto_start,
+        "allow_kill_existing_chrome": allow_kill,
+    }
+
+
+def _ensure_chrome_only(settings: dict[str, Any]) -> None:
+    if settings["browser_channel"] != "chrome":
+        raise BrowserLaunchError(f"浏览器 channel 必须为 chrome，当前为：{settings['browser_channel']}")
+    if settings["allow_edge_fallback"]:
+        raise BrowserLaunchError("当前阶段禁止自动降级到 Edge；请将 allow_edge_fallback 设为 false。")
+
+
+def _all_pages(browser) -> list:
+    pages = []
+    for context in browser.contexts:
+        pages.extend(context.pages)
+    return pages
+
+
+def _is_baidu_backend_url(url: str) -> bool:
+    normalized = (url or "").lower()
+    return any(domain in normalized for domain in ["cc.baidu.com", "yingxiao.baidu.com", "qingge.baidu.com", "cas.baidu.com"])
+
+
+def find_baidu_page(context, start_url: str):
+    for page in context.pages:
+        if _is_baidu_backend_url(page.url):
+            page.bring_to_front()
+            return page
+    page = context.new_page()
+    page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+    page.bring_to_front()
+    return page
+
+
+def _select_context_and_page(browser, start_url: str):
+    contexts = list(browser.contexts)
+    if not contexts:
+        contexts = [browser.new_context()]
+
+    for context in contexts:
+        for page in context.pages:
+            if _is_baidu_backend_url(page.url):
+                page.bring_to_front()
+                return context, page
+
+    context = contexts[0]
+    page = context.new_page()
+    page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+    page.bring_to_front()
+    return context, page
+
+
+def cleanup_extra_tabs(context, keep_page, max_tabs: int = 3) -> list[str]:
+    try:
+        pages = list(context.pages)
+    except Exception:
+        return []
+    max_tabs = max(1, int(max_tabs or 3))
+    if len(pages) <= max_tabs:
+        return []
+
+    keep_set = {keep_page}
+    keep_slots_left = max_tabs - 1
+    for page in reversed(pages):
+        if keep_slots_left <= 0:
+            break
+        if page in keep_set or not _is_baidu_backend_url(getattr(page, "url", "")):
+            continue
+        keep_set.add(page)
+        keep_slots_left -= 1
+
+    for page in reversed(pages):
+        if keep_slots_left <= 0:
+            break
+        if page in keep_set:
+            continue
+        keep_set.add(page)
+        keep_slots_left -= 1
+
+    closed_urls: list[str] = []
+    for page in pages:
+        if page in keep_set:
+            continue
+        try:
+            closed_urls.append(getattr(page, "url", ""))
+            page.close()
+        except Exception:
+            continue
+    try:
+        keep_page.bring_to_front()
+    except Exception:
+        pass
+    return closed_urls
+
+
+def connect_existing_chrome(playwright, config: dict[str, Any]):
+    settings = get_browser_settings(config)
+    _ensure_chrome_only(settings)
+    endpoint = settings["cdp_endpoint"]
+    start_url = config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/")
+
+    try:
+        browser = playwright.chromium.connect_over_cdp(endpoint)
+    except Exception as exc:
+        raise BrowserLaunchError(f"连接已有 Chrome 失败：{endpoint}\n{CONNECT_EXISTING_HELP}\n原始错误：{exc}") from exc
+
+    context, page = _select_context_and_page(browser, start_url)
+    cleanup_extra_tabs(context, page, settings["max_tabs"])
+    return context, page
+
+
+def launch_managed_chrome_context(playwright, config: dict[str, Any], root: Path):
+    settings = get_browser_settings(config)
+    _ensure_chrome_only(settings)
+    profile_dir = _resolve_path(root, settings["browser_profile_dir"])
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    launch_options: dict[str, Any] = {
+        "user_data_dir": str(profile_dir),
+        "headless": settings["headless"],
+        "viewport": {"width": 1440, "height": 900},
+    }
+    executable_path = settings["chrome_executable_path"]
+    if executable_path:
+        if not Path(executable_path).exists():
+            raise BrowserLaunchError(f"配置的 Chrome 路径不存在：{executable_path}")
+        launch_options["executable_path"] = executable_path
+    else:
+        launch_options["channel"] = "chrome"
+
+    try:
+        context = playwright.chromium.launch_persistent_context(**launch_options)
+    except Exception as exc:
+        raise BrowserLaunchError(
+            "项目专用 Google Chrome 启动失败。本程序不会自动改用 Edge；"
+            f"请确认本机已安装 Chrome 或配置 Chrome 路径。原始错误：{exc}"
+        ) from exc
+    page = context.pages[0] if context.pages else context.new_page()
+    return context, page
+
+
+def launch_chrome_context(playwright, config: dict[str, Any], root: Path):
+    settings = get_browser_settings(config)
+    if settings["mode"] == "connect_existing":
+        return connect_existing_chrome(playwright, config)
+    if settings["mode"] == "launch_managed":
+        return launch_managed_chrome_context(playwright, config, root)
+    raise BrowserLaunchError(f"未知浏览器模式：{settings['mode']}，只支持 connect_existing / launch_managed。")
+
+
+def _write_json(root: Path, relative_path: str, report: dict[str, Any]) -> Path:
+    out = root / relative_path
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+
+def write_browser_test_report(root: Path, report: dict[str, Any]) -> Path:
+    return _write_json(root, "reports/browser_test_report.json", report)
+
+
+def write_browser_connect_report(root: Path, report: dict[str, Any]) -> Path:
+    return _write_json(root, "reports/browser_connect_report.json", report)
+
+
+def test_browser_connect(config: dict[str, Any], root: Path, logger) -> dict[str, Any]:
+    settings = get_browser_settings(config)
+    report: dict[str, Any] = {
+        "mode": "test-browser-connect",
+        "configured_browser_mode": settings["mode"],
+        "browser_type": "chromium",
+        "browser_version": None,
+        "cdp_endpoint": settings["cdp_endpoint"],
+        "allow_edge_fallback": settings["allow_edge_fallback"],
+        "managed_profile_dir": str(_resolve_path(root, settings["browser_profile_dir"])),
+        "debug_profile_dir": str(_resolve_path(root, settings["debug_profile_dir"])),
+        "connected": False,
+        "baidu_page_found": False,
+        "project_managed_chrome_started": False,
+        "edge_started": False,
+        "page_urls": [],
+        "closed_extra_tab_urls": [],
+        "errors": [],
+    }
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        report["errors"].append(f"Playwright 未安装：{exc}")
+        write_browser_connect_report(root, report)
+        return report
+
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.connect_over_cdp(settings["cdp_endpoint"])
+        except Exception as exc:
+            report["errors"].append(f"连接已有 Chrome 失败：{settings['cdp_endpoint']}")
+            report["errors"].append(CONNECT_EXISTING_HELP)
+            report["errors"].append(f"原始错误：{exc}")
+            write_browser_connect_report(root, report)
+            logger.error("连接已有 Chrome 失败：%s", exc)
+            return report
+
+        report["connected"] = True
+        report["browser_version"] = browser.version
+        context, page = _select_context_and_page(browser, config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/"))
+        report["closed_extra_tab_urls"] = cleanup_extra_tabs(context, page, settings["max_tabs"])
+        pages = _all_pages(browser)
+        report["page_urls"] = [page.url for page in pages]
+        report["baidu_page_found"] = any(_is_baidu_backend_url(url) for url in report["page_urls"])
+        logger.info("已连接已有 Chrome，页面数量：%s", len(report["page_urls"]))
+        write_browser_connect_report(root, report)
+
+    return report
+
+
+def test_browser_launch(config: dict[str, Any], root: Path, logger, hold_seconds: int = 20) -> dict[str, Any]:
+    settings = get_browser_settings(config)
+    report: dict[str, Any] = {
+        "mode": "test-browser",
+        "configured_browser_mode": settings["mode"],
+        "browser_type": "chromium",
+        "browser_channel": settings["browser_channel"],
+        "chrome_executable_path": settings["chrome_executable_path"],
+        "browser_profile_dir": str(_resolve_path(root, settings["browser_profile_dir"])),
+        "headless": settings["headless"],
+        "allow_edge_fallback": settings["allow_edge_fallback"],
+        "opened_url": None,
+        "chrome_started": False,
+        "edge_started": False,
+        "errors": [],
+    }
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        report["errors"].append(f"Playwright 未安装：{exc}")
+        write_browser_test_report(root, report)
+        return report
+
+    start_url = config.get("baidu", {}).get("start_url", "about:blank")
+    with sync_playwright() as playwright:
+        try:
+            context, page = launch_chrome_context(playwright, config, root)
+        except BrowserLaunchError as exc:
+            report["errors"].append(str(exc))
+            write_browser_test_report(root, report)
+            logger.error("Chrome 浏览器测试失败：%s", exc)
+            return report
+
+        report["chrome_started"] = settings["mode"] == "launch_managed"
+        try:
+            if "yingxiao.baidu.com" not in page.url:
+                page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+            report["opened_url"] = page.url
+            logger.info("Chrome 浏览器测试页面：%s", page.url)
+            page.wait_for_timeout(max(1, hold_seconds) * 1000)
+        finally:
+            if settings["mode"] == "launch_managed":
+                context.close()
+
+    write_browser_test_report(root, report)
+    return report

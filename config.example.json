@@ -1,0 +1,148 @@
+{
+  "excel_path": "samples/【昆明npx】2026竞价数据.xlsx",
+  "credentials_path": "credentials.local.json",
+  "sheet_name": "时段数据",
+  "default_periods": [
+    "11点",
+    "15点",
+    "18点"
+  ],
+  "browser": {
+    "mode": "connect_existing",
+    "cdp_endpoint": "http://127.0.0.1:9222",
+    "prefer_existing_chrome": true,
+    "allow_edge_fallback": false,
+    "max_tabs": 3,
+    "auto_start_debug_chrome": true,
+    "remote_debugging_host": "127.0.0.1",
+    "remote_debugging_port": 9222,
+    "profile_dir": "browser_profile/chrome",
+    "startup_url": "https://yingxiao.baidu.com/",
+    "allow_kill_existing_chrome": false,
+    "debug_profile_dir": "browser_profile/chrome_debug",
+    "managed": {
+      "channel": "chrome",
+      "executable_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
+      "profile_dir": "browser_profile/chrome",
+      "headless": false
+    }
+  },
+  "accounts": {
+    "银康01": {
+      "baidu_name": "银康01",
+      "excel_name": "银康01",
+      "aliases": [
+        "银康01",
+        "yk01"
+      ]
+    },
+    "银康银屑02": {
+      "baidu_name": "银康银屑02",
+      "excel_name": "银康银屑02",
+      "aliases": [
+        "银康银屑02",
+        "银屑02",
+        "yk银屑02"
+      ]
+    },
+    "银康03": {
+      "baidu_name": "baidu-银康03",
+      "excel_name": "银康03",
+      "aliases": [
+        "银康03",
+        "baidu-银康03",
+        "Baidu-银康03",
+        "baidu银康03"
+      ]
+    }
+  },
+  "baidu": {
+    "start_url": "https://cc.baidu.com/report",
+    "login_url": "https://qingge.baidu.com/login",
+    "cas_login_url": "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport",
+    "report_url": "https://cc.baidu.com/report",
+    "credential_project": "yunnan_yinkang",
+    "manual_login_wait_seconds": 600,
+    "output_path": "reports/baidu_account_data.json"
+  },
+  "kst": {
+    "export_dir": "kst_exports",
+    "output_path": "reports/kst_dialog_data.json",
+    "promotion_id_accounts": {
+      "72828178": "银康01",
+      "72828179": "银康银屑02",
+      "81509165": "银康03"
+    }
+  },
+  "fields": {
+    "baidu": [
+      "展现",
+      "点击",
+      "消费"
+    ],
+    "kst": [
+      "总对话",
+      "有效",
+      "有效转潜",
+      "总转潜"
+    ],
+    "time": [
+      "日期",
+      "时段"
+    ]
+  },
+  "field_aliases": {
+    "日期": [
+      "日期",
+      "时间",
+      "日"
+    ],
+    "时段": [
+      "时段",
+      "时间段",
+      "小时"
+    ],
+    "展现": [
+      "展现",
+      "展现量"
+    ],
+    "点击": [
+      "点击",
+      "点击量"
+    ],
+    "消费": [
+      "消费",
+      "花费"
+    ],
+    "总对话": [
+      "总对话",
+      "对话"
+    ],
+    "有效": [
+      "有效",
+      "有效对话"
+    ],
+    "有效转潜": [
+      "有效转潜"
+    ],
+    "总转潜": [
+      "总转潜"
+    ]
+  },
+  "kst_rules": {
+    "valid_dialog_tags": [
+      "转潜-有效",
+      "有效-一般",
+      "有效-三句"
+    ],
+    "valid_lead_tag": "转潜-有效",
+    "total_lead_contains": "转潜-"
+  },
+  "excel_engine": "openpyxl",
+  "excel": {
+    "path": "samples/【昆明npx】2026竞价数据.xlsx",
+    "hourly_sheet": "时段数据",
+    "daily_sheet": "??",
+    "engine": "openpyxl"
+  }
+}

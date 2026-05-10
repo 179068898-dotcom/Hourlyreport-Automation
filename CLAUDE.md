@@ -1,0 +1,138 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## 项目概述
+
+Windows 本地运行的百度竞价日报/小时报自动化工具。从百度营销后台读取展现/点击/消费，从快商通人工导出文件读取对话转化数据，写入本地 Excel。
+
+当前版本 v0.4.4，不做 QQ、不做截图、不自动发送消息。
+
+全程用中文回复。
+
+## 开发规则（来自 AGENTS.md）
+
+AGENTS.md 包含完整规则，此处只列最高优先级：
+
+1. 分阶段开发，不允许一次性做全流程
+2. Excel 写入前必须先备份原文件
+3. Excel 区域识别必须通过扫描表头/账户区域/字段名，不允许写死固定坐标
+4. 浏览器自动化不允许依赖绝对屏幕坐标，优先用 URL、文本、表头、表格结构、选择器
+5. 浏览器必须优先使用 Google Chrome，不允许默认启动 Edge
+6. 当前版本不做截图，不操作 QQ，不自动发送消息
+7. 遇到不确定的 Excel 结构不要猜测写入，必须中断并输出诊断信息
+8. 每次修改代码后必须说明修改了哪些文件、修改了什么
+9. 每次运行后必须输出日志和自检结果
+
+## 常用命令
+
+```cmd
+# 安装依赖
+python -m venv .venv && .venv\Scripts\activate && pip install -r requirements.txt
+
+# 运行菜单（推荐同事使用）
+.venv\Scripts\python.exe menu.py
+
+# 检查运行环境
+.venv\Scripts\python.exe main.py --mode doctor
+
+# 查看项目列表 / 当前项目 / 校验项目配置
+.venv\Scripts\python.exe main.py --mode list-projects
+.venv\Scripts\python.exe main.py --mode show-project
+.venv\Scripts\python.exe main.py --mode validate-project
+
+# 第一阶段：识别 Excel 结构（时段数据 sheet）
+.venv\Scripts\python.exe main.py --mode inspect-excel
+
+# 百度浏览器连接测试
+.venv\Scripts\python.exe main.py --mode test-browser-connect
+
+# 百度自动读取（小时报）
+.venv\Scripts\python.exe main.py --mode fetch-baidu-auto --period 15点
+
+# 快商通导出文件解析（小时报）
+.venv\Scripts\python.exe main.py --mode parse-kst-export --period 15点 --file "导出文件路径"
+
+# 半自动一键流（小时报，自动选最新 kst_exports 文件）
+.venv\Scripts\python.exe main.py --mode run --period 15点 --yes
+
+# 日报流程各阶段
+.venv\Scripts\python.exe main.py --mode inspect-daily-excel
+.venv\Scripts\python.exe main.py --mode fetch-baidu-daily --date 2026-05-07
+.venv\Scripts\python.exe main.py --mode parse-kst-daily --date 2026-05-07 --file "导出文件路径"
+.venv\Scripts\python.exe main.py --mode merge-daily --date 2026-05-07
+.venv\Scripts\python.exe main.py --mode write-daily --date 2026-05-07
+.venv\Scripts\python.exe main.py --mode run-daily --date 2026-05-07
+```
+
+## 浏览器调试端口启动
+
+```cmd
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Default" https://cc.baidu.com/report
+```
+
+或双击 `start_chrome_debug.bat`。
+
+## 核心架构
+
+### 入口点
+
+- `main.py` — CLI 入口，argparse 统一路由所有 `--mode` 到对应模块函数
+- `menu.py` — 交互式中文菜单，面向非技术同事；内部组装配置后调用与 main.py 相同的 pipeline 函数
+
+### 模块分层
+
+| 模块 | 职责 |
+|---|---|
+| `project_config.py` | 项目配置的 CRUD、标准化、校验；多项目切换的核心 |
+| `config_manager.py` | 简单的 JSON 配置读取（含 fallback） |
+| `excel_inspector.py` / `daily_excel_inspector.py` | 扫描 Excel 表结构，不写入 |
+| `excel_writer.py` | `openpyxl` 引擎写入，含备份、写入、复核三步 |
+| `excel_engine.py` | 引擎选择抽象（openpyxl / excel_com） |
+| `baidu_auto.py` | 百度搜索推广数据自动读取（小时报） |
+| `baidu_daily.py` | 百度日报数据读取 |
+| `baidu_browser.py` | Playwright Chrome CDP 连接/管理 |
+| `baidu_parser.py` | 百度页面表格解析 |
+| `baidu_detector.py` | 百度页面类型检测 |
+| `baidu_overview.py` | 百度数据概览页面导航 |
+| `baidu_validator.py` | 百度数据自检校验 |
+| `browser_manager.py` | 浏览器启动/连接测试 |
+| `kst_export_parser.py` | 快商通小时报导出文件解析 |
+| `kst_daily_parser.py` | 快商通（商务通）日报导出文件解析 |
+| `kst_parser.py` | 快商通字段口径逻辑 |
+| `data_merger.py` | 合并百度 + 快商通数据 |
+| `run_pipeline.py` | 一键流编排（小时报 run / 日报 run-daily） |
+| `doctor.py` | 运行环境自检 |
+| `validators.py` | 通用数据校验 |
+| `credential_manager.py` | 读取 `credentials.local.json` / `secrets/secrets.json` |
+| `logger.py` | 日志配置 |
+| `text_normalizer.py` | 文本标准化工具 |
+
+### 配置系统
+
+```
+configs/app_config.json          # 默认项目 + 配置目录路径
+configs/projects/{project_id}.json  # 每项目一个配置文件
+secrets/secrets.json             # 密码/凭据（不提交）
+```
+
+`project_config.py` 是配置层的核心：`load_app_config` → `get_current_project` → `build_runtime_config_from_project` 将项目配置转换为运行时配置（兼容旧的 config.json 格式），供各模块使用。
+
+菜单中的"切换项目"修改 `app_config.json` 的 `default_project_id`。
+
+### 数据流
+
+小时报一键流 (`run`): `fetch_baidu_auto` + `parse_kst_export_file` → `merge_data_files` → `write_merged_hourly_data`
+
+日报一键流 (`run-daily`): `fetch_baidu_daily` + `parse_kst_daily_file` → `merge_daily_files` → `write_merged_daily_data`
+
+### 输出目录
+
+- `reports/` — 所有 JSON 报告、自检报告
+- `logs/run.log` — 运行日志
+- `backups/` — Excel 写入前自动备份
+- `kst_exports/` — 快商通人工导出文件放置目录
+
+### 固定账户
+
+银康01、银康银屑02、银康03 — 三个账户的别名映射在项目配置的 `accounts` 数组中定义，通过 `get_account_alias_maps()` 生成百度别名→账户、商务通ID→账户等映射表，所有模块统一使用。

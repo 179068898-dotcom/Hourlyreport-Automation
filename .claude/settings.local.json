@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sort -k5 -n -r)",
+      "Bash(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests\\\\test_basic.py -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/test_basic.py -q)",
+      "Bash(.venv/Scripts/python.exe -m compileall main.py menu.py modules)",
+      "Bash(.venv/Scripts/python.exe tools/build_release.py --version 0.4.8)"
+    ]
+  }
+}

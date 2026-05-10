@@ -1,0 +1,5 @@
+{
+  "default_project_id": "kunming_npx",
+  "projects_dir": "configs/projects",
+  "secrets_file": "secrets/secrets.json"
+}
