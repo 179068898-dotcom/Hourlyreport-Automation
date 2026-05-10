@@ -160,7 +160,7 @@ def dispatch_menu_task(
     output_func: Callable[[str], None] = print,
 ) -> Any:
     runners = runners or {}
-    if choice == "1":
+    if choice == "2":
         return runners.get("run_daily", run_daily_pipeline)(
             config=config, root=root, logger=logger, target_date=target_date, kst_file=kst_file
         )
@@ -191,7 +191,7 @@ def _task_meta(choice: str, project: dict[str, Any]) -> dict[str, str | None]:
     hourly_sheet = excel.get("hourly_sheet") or project.get("sheets", {}).get("hourly", "时段数据")
     daily_sheet = excel.get("daily_sheet") or project.get("sheets", {}).get("daily", "百度")
     mapping = {
-        "1": {"name": "运行日报", "sheet": daily_sheet, "date": daily_date, "period": None},
+        "2": {"name": "运行日报", "sheet": daily_sheet, "date": daily_date, "period": None},
         "hourly:11点": {"name": "运行11点小时报", "sheet": hourly_sheet, "date": date.today().isoformat(), "period": "11点"},
         "hourly:15点": {"name": "运行15点小时报", "sheet": hourly_sheet, "date": date.today().isoformat(), "period": "15点"},
         "hourly:18点": {"name": "运行18点小时报", "sheet": hourly_sheet, "date": date.today().isoformat(), "period": "18点"},
@@ -306,7 +306,7 @@ def run_menu(
             continue
 
         dispatch_choice = choice
-        if choice == "2":
+        if choice == "1":
             # 小时报 → 选择时段
             period = _select_hourly_period(input_func, output_func)
             if not period:
@@ -352,7 +352,7 @@ def run_menu(
         if isinstance(result, dict) and "passed" in result:
             if result.get("passed"):
                 print_final_success("任务完成")
-                output_func(f"  报告：reports/{'daily_' if choice == '1' else ''}final_run_report.json")
+                output_func(f"  报告：reports/{'daily_' if choice == '2' else ''}final_run_report.json")
             else:
                 print_final_failure(f"失败步骤：{result.get('failed_step') or '未知'}，原因：{result.get('errors') or '未知错误'}")
                 output_func("  详细日志：logs/run.log")

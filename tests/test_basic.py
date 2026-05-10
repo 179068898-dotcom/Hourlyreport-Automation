@@ -286,7 +286,7 @@ def test_menu_dispatch_uses_existing_pipeline_functions(tmp_path):
         return {"passed": True}
 
     dispatch_menu_task(
-        "1",
+        "2",
         config={},
         root=tmp_path,
         logger=None,
@@ -332,6 +332,75 @@ def test_menu_hourly_dispatch_uses_internal_period_while_confirm_can_show_simple
     )
 
     assert calls == ["15点"]
+
+
+def test_menu_choice_1_must_not_be_valid_dispatch_choice(tmp_path):
+    """菜单选项 1（小时报）已在 run_menu 中转为 hourly:XX，不应直接到达 dispatch_menu_task。"""
+    raised = False
+    try:
+        dispatch_menu_task(
+            "1",
+            config={},
+            root=tmp_path,
+            logger=None,
+        )
+    except ValueError as exc:
+        raised = True
+        assert "不支持的菜单选项" in str(exc)
+    assert raised, "dispatch_menu_task('1') 应该抛出 ValueError"
+
+
+def test_menu_choice_2_binds_daily_pipeline(tmp_path):
+    """菜单选项 2 必须绑定日报 pipeline。"""
+    calls = []
+
+    def fake_daily(**kwargs):
+        calls.append(("daily", kwargs["target_date"]))
+        return {"passed": True}
+
+    dispatch_menu_task(
+        "2",
+        config={},
+        root=tmp_path,
+        logger=None,
+        target_date="2026-05-07",
+        runners={"run_daily": fake_daily},
+    )
+
+    assert calls == [("daily", "2026-05-07")]
+
+
+def test_menu_task_meta_daily_mapped_to_choice_2(tmp_path):
+    """_task_meta 中日报映射 key 为 '2'。"""
+    from menu import _task_meta
+
+    project = {
+        "excel": {"hourly_sheet": "时段", "daily_sheet": "日报"},
+        "sheets": {},
+    }
+
+    meta = _task_meta("2", project)
+
+    assert meta["name"] == "运行日报"
+    assert meta["sheet"] == "日报"
+    assert meta["period"] is None
+    assert meta["date"] is not None  # 有默认日期
+
+
+def test_menu_task_meta_hourly_choices_still_work(tmp_path):
+    """_task_meta 中 hourly:XX 映射仍然正常。"""
+    from menu import _task_meta
+
+    project = {
+        "excel": {"hourly_sheet": "时", "daily_sheet": "日"},
+        "sheets": {},
+    }
+
+    for period_key, period_name in [("hourly:11点", "11点"), ("hourly:15点", "15点"), ("hourly:18点", "18点")]:
+        meta = _task_meta(period_key, project)
+        assert meta["period"] == period_name
+        assert meta["sheet"] == "时"
+        assert meta["date"] is not None
 
 
 def test_doctor_reports_project_excel_sheets_and_missing_secrets(tmp_path):
