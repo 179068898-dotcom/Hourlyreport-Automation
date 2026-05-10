@@ -17,4 +17,11 @@ browser_profile/*
 !browser_profile/.gitkeep
 !reports/.gitkeep
 !logs/.gitkeep
-!samples/.gitkeep
+!samples/.gitkeepreports/*
+!reports/.gitkeep
+logs/*
+!logs/.gitkeep
+backups/*
+!backups/.gitkeep
+kst_exports/*
+!kst_exports/.gitkeep
