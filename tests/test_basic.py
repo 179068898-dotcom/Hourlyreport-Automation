@@ -2873,3 +2873,170 @@ def test_verbose_mode_shows_report_path():
 
     output = buf.getvalue()
     assert "reports/final_run_report.json" in output
+
+
+# ── 项目列表排除模板 ──────────────────────────────────────
+
+
+def test_list_projects_excludes_project_template_json():
+    """list_projects 不包含 project_template.json。"""
+    root = Path(__file__).resolve().parents[1]
+    projects = list_projects(root)
+
+    ids = [p["project_id"] for p in projects]
+    assert "your_project_id" not in ids, "列表不应包含模板 project_id"
+    for p in projects:
+        assert "project_template.json" not in p["path"], f"不应包含模板文件：{p['path']}"
+
+
+def test_list_projects_excludes_is_template_true():
+    """list_projects 排除 is_template=true 的配置。"""
+    tmp = Path(__file__).resolve().parents[1] / "tests" / "__tmp_test_projects"
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        (tmp / "configs").mkdir(exist_ok=True)
+        (tmp / "configs" / "app_config.json").write_text(
+            '{"default_project_id":"real_proj","projects_dir":"projects","secrets_file":"s.json"}',
+            encoding="utf-8",
+        )
+        (tmp / "projects").mkdir(exist_ok=True)
+        (tmp / "projects" / "real_proj.json").write_text(json.dumps({
+            "project_id": "real_proj",
+            "project_name": "真项目",
+            "excel": {"path": "a.xlsx", "hourly_sheet": "H", "daily_sheet": "D", "engine": "openpyxl"},
+            "kst": {"export_dir": "e", "auto_pick_latest": True, "max_file_age_hours": 2},
+            "baidu": {"credential_profile": "p", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+            "accounts": [
+                {"standard_name": "A1", "baidu_names": ["B1"], "excel_name": "A1", "kst_ids": ["1"], "kst_names": ["K1"]},
+                {"standard_name": "A2", "baidu_names": ["B2"], "excel_name": "A2", "kst_ids": ["2"], "kst_names": ["K2"]},
+                {"standard_name": "A3", "baidu_names": ["B3"], "excel_name": "A3", "kst_ids": ["3"], "kst_names": ["K3"]},
+            ],
+            "hourly": {"periods": ["11点", "15点", "18点"]},
+            "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+        }, ensure_ascii=False), encoding="utf-8")
+        (tmp / "projects" / "template_proj.json").write_text(json.dumps({
+            "is_template": True,
+            "project_id": "template_proj",
+            "project_name": "模板",
+            "excel": {"path": "b.xlsx", "hourly_sheet": "H", "daily_sheet": "D", "engine": "openpyxl"},
+            "kst": {"export_dir": "e2", "auto_pick_latest": True, "max_file_age_hours": 2},
+            "baidu": {"credential_profile": "p2", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+            "accounts": [
+                {"standard_name": "T1", "baidu_names": ["B1"], "excel_name": "T1", "kst_ids": ["1"], "kst_names": ["K1"]},
+                {"standard_name": "T2", "baidu_names": ["B2"], "excel_name": "T2", "kst_ids": ["2"], "kst_names": ["K2"]},
+                {"standard_name": "T3", "baidu_names": ["B3"], "excel_name": "T3", "kst_ids": ["3"], "kst_names": ["K3"]},
+            ],
+            "hourly": {"periods": ["11点", "15点", "18点"]},
+            "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+        }, ensure_ascii=False), encoding="utf-8")
+
+        projects = list_projects(tmp)
+        ids = [p["project_id"] for p in projects]
+        assert "real_proj" in ids
+        assert "template_proj" not in ids, "is_template=true 的项目不应出现在列表中"
+    finally:
+        import shutil
+        shutil.rmtree(tmp)
+        # clean up test dir
+
+
+def test_list_projects_excludes_your_project_id():
+    """list_projects 排除 project_id 为 your_project_id 的配置。"""
+    tmp = Path(__file__).resolve().parents[1] / "tests" / "__tmp_test_projects_2"
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        (tmp / "configs").mkdir(exist_ok=True)
+        (tmp / "configs" / "app_config.json").write_text(
+            '{"default_project_id":"good","projects_dir":"projects","secrets_file":"s.json"}',
+            encoding="utf-8",
+        )
+        (tmp / "projects").mkdir(exist_ok=True)
+        (tmp / "projects" / "good.json").write_text(json.dumps({
+            "project_id": "good",
+            "project_name": "好项目",
+            "excel": {"path": "a.xlsx", "hourly_sheet": "H", "daily_sheet": "D", "engine": "openpyxl"},
+            "kst": {"export_dir": "e", "auto_pick_latest": True, "max_file_age_hours": 2},
+            "baidu": {"credential_profile": "p", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+            "accounts": [
+                {"standard_name": "A1", "baidu_names": ["B1"], "excel_name": "A1", "kst_ids": ["1"], "kst_names": ["K1"]},
+                {"standard_name": "A2", "baidu_names": ["B2"], "excel_name": "A2", "kst_ids": ["2"], "kst_names": ["K2"]},
+                {"standard_name": "A3", "baidu_names": ["B3"], "excel_name": "A3", "kst_ids": ["3"], "kst_names": ["K3"]},
+            ],
+            "hourly": {"periods": ["11点", "15点", "18点"]},
+            "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+        }, ensure_ascii=False), encoding="utf-8")
+        # 第二个文件：文件名不同，project_id 是 your_project_id
+        (tmp / "projects" / "not_a_template.json").write_text(json.dumps({
+            "project_id": "your_project_id",
+            "project_name": "伪模板",
+            "excel": {"path": "b.xlsx", "hourly_sheet": "H", "daily_sheet": "D", "engine": "openpyxl"},
+            "kst": {"export_dir": "e2", "auto_pick_latest": True, "max_file_age_hours": 2},
+            "baidu": {"credential_profile": "p2", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+            "accounts": [
+                {"standard_name": "T1", "baidu_names": ["B1"], "excel_name": "T1", "kst_ids": ["1"], "kst_names": ["K1"]},
+                {"standard_name": "T2", "baidu_names": ["B2"], "excel_name": "T2", "kst_ids": ["2"], "kst_names": ["K2"]},
+                {"standard_name": "T3", "baidu_names": ["B3"], "excel_name": "T3", "kst_ids": ["3"], "kst_names": ["K3"]},
+            ],
+            "hourly": {"periods": ["11点", "15点", "18点"]},
+            "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+        }, ensure_ascii=False), encoding="utf-8")
+
+        projects = list_projects(tmp)
+        ids = [p["project_id"] for p in projects]
+        assert "good" in ids
+        assert "your_project_id" not in ids, "project_id=your_project_id 不应出现在列表中"
+    finally:
+        import shutil
+        shutil.rmtree(tmp)
+        # clean up test dir
+
+
+def test_switch_to_next_project_skips_bad_configs(tmp_path):
+    """_switch_to_next_project 遇到坏配置不会 traceback，跳过并尝试下一个。"""
+    from menu import _switch_to_next_project
+
+    projects_dir = tmp_path / "configs" / "projects"
+    projects_dir.mkdir(parents=True)
+    (tmp_path / "configs" / "app_config.json").write_text(
+        json.dumps({
+            "default_project_id": "good",
+            "projects_dir": "configs/projects",
+            "secrets_file": "secrets/secrets.json",
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    def make_project(pid, name, excel_path="a.xlsx"):
+        return json.dumps({
+            "project_id": pid,
+            "project_name": name,
+            "excel": {"path": excel_path, "hourly_sheet": "H", "daily_sheet": "D", "engine": "openpyxl"},
+            "kst": {"export_dir": "e", "auto_pick_latest": True, "max_file_age_hours": 2},
+            "baidu": {"credential_profile": "p", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+            "accounts": [
+                {"standard_name": "A1", "baidu_names": ["B1"], "excel_name": "A1", "kst_ids": ["1"], "kst_names": ["K1"]},
+                {"standard_name": "A2", "baidu_names": ["B2"], "excel_name": "A2", "kst_ids": ["2"], "kst_names": ["K2"]},
+                {"standard_name": "A3", "baidu_names": ["B3"], "excel_name": "A3", "kst_ids": ["3"], "kst_names": ["K3"]},
+            ],
+            "hourly": {"periods": ["11点", "15点", "18点"]},
+            "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+        }, ensure_ascii=False)
+
+    (projects_dir / "good.json").write_text(make_project("good", "好项目"), encoding="utf-8")
+    # 第二个项目：project_id 与文件名不匹配（会被 list_projects 跳过）
+    (projects_dir / "misnamed.json").write_text(make_project("mismatched_id", "错名项目"), encoding="utf-8")
+
+    # 当前项目是 good，只有 1 个真实项目
+    result = _switch_to_next_project(tmp_path)
+    assert result is None, "只有一个真实项目时，应返回 None"
+
+
+def test_switch_to_next_project_does_not_switch_to_your_project_id():
+    """_switch_to_next_project 不会切到 your_project_id。"""
+    root = Path(__file__).resolve().parents[1]
+    from menu import _switch_to_next_project
+
+    # 只验证当前项目存在且 list_projects 不包含模板
+    projects = list_projects(root)
+    for p in projects:
+        assert p["project_id"] != "your_project_id", "真实项目列表不应包含 your_project_id"

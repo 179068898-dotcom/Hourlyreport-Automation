@@ -95,9 +95,21 @@ def list_projects(root: str | Path) -> list[dict[str, str]]:
         return []
     projects: list[dict[str, str]] = []
     for path in sorted(projects_dir.glob("*.json")):
+        # 排除模板文件
+        if path.name == "project_template.json":
+            continue
         data = normalize_project_config(_read_json(path))
+        project_id = str(data.get("project_id") or "")
+        # 排除模板标记
+        if data.get("is_template") is True:
+            continue
+        if project_id == "your_project_id":
+            continue
+        # 文件名必须与 project_id 一致
+        if f"{project_id}.json" != path.name:
+            continue
         projects.append({
-            "project_id": str(data.get("project_id") or path.stem),
+            "project_id": project_id,
             "project_name": str(data.get("project_name") or ""),
             "path": str(path),
         })
