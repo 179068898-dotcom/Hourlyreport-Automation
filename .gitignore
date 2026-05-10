@@ -27,3 +27,4 @@ kst_exports/*
 !kst_exports/.gitkeep
 reports/baidu_page_text_dump.txt
 reports/baidu_visible_text.txt
+dist/
