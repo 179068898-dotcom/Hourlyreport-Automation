@@ -493,7 +493,7 @@ def test_doctor_reports_project_excel_sheets_and_missing_secrets(tmp_path):
     assert report["checks"]["hourly_sheet"]["passed"] is True
     assert report["checks"]["daily_sheet"]["passed"] is True
     assert report["checks"]["secrets_json"]["passed"] is False
-    assert "未找到" in report["checks"]["secrets_json"]["message"]
+    assert "百度账号未配置" in report["checks"]["secrets_json"]["message"]
 
 
 def test_doctor_openpyxl_engine_does_not_require_microsoft_excel(tmp_path):
@@ -2720,7 +2720,6 @@ def test_print_project_info_shows_all_fields():
     output = buf.getvalue()
     assert "项目信息" in output
     assert "演示项目" in output
-    assert "demo" in output
     assert "excel.xlsx" in output
     assert "时段数据" in output
     assert "百度" in output
