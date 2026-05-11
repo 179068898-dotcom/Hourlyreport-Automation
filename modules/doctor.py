@@ -135,15 +135,15 @@ def _check_openpyxl_installed() -> dict[str, Any]:
 def _check_secret_profile(secrets_file: Path | None, project: dict[str, Any]) -> dict[str, Any]:
     profile = project.get("baidu", {}).get("credential_profile")
     if not secrets_file or not secrets_file.exists():
-        return _warn(f"未找到 secrets.json：{secrets_file}；如需自动登录，请从 secrets.example.json 复制后填写")
+        return _warn("百度账号未配置，如需自动登录请联系管理员")
     try:
         data = json.loads(secrets_file.read_text(encoding="utf-8-sig"))
     except Exception as exc:
-        return _warn(f"secrets.json 读取失败：{exc}")
+        return _warn("百度凭据文件无法读取")
     item = data.get("baidu", {}).get(profile)
     if isinstance(item, dict) and item.get("username") and item.get("password"):
-        return _ok(f"百度凭据 profile 存在：{profile}")
-    return _warn(f"secrets.json 中未找到当前项目百度凭据 profile：{profile}")
+        return _ok(f"已配置：{profile}")
+    return _warn(f"百度账号未配置：{profile}")
 
 
 def _check_chrome(config: dict[str, Any]) -> dict[str, Any]:
@@ -239,11 +239,13 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     elif excel_engine == "excel_com":
         checks["excel_app"] = _check_excel_available()
 
+    pid = project.get("project_id", "") if project else ""
     excel_path = _project_excel_path(root_path, project) if project else None
     if excel_path and excel_path.exists():
-        checks["target_excel"] = _ok(f"目标 Excel 存在：{excel_path}")
+        checks["target_excel"] = _ok(f"已找到：{excel_path.name}")
     else:
-        checks["target_excel"] = _warn(f"目标 Excel 不存在：{excel_path or '未配置'}")
+        hint = f"请修改 configs/projects/{pid}.json 的 excel.path" if pid else "请在项目配置中设置 excel.path"
+        checks["target_excel"] = _warn(hint)
 
     if excel_engine == "openpyxl" and checks.get("target_excel", {}).get("passed"):
         save_test = test_openpyxl_save_copy(excel_path, root_path) if excel_path else {"passed": False, "message": "目标 Excel 未配置"}
@@ -254,20 +256,21 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
 
     export_dir = _resolve(root_path, project.get("kst", {}).get("export_dir") if project else config.get("kst", {}).get("export_dir", "kst_exports"))
     if export_dir and export_dir.is_file():
-        checks["kst_export_dir"] = _ok(f"商务通导出路径是具体文件：{export_dir}")
+        checks["kst_export_dir"] = _ok(f"已找到：{export_dir}")
     elif export_dir and export_dir.exists():
-        checks["kst_export_dir"] = _ok(f"商务通导出目录存在：{export_dir}")
+        checks["kst_export_dir"] = _ok(f"已找到：{export_dir}")
     else:
-        checks["kst_export_dir"] = _warn(f"商务通导出目录/文件不存在：{export_dir or '未配置'}")
+        hint = f"请修改 configs/projects/{pid}.json 的 kst.export_dir" if pid else "请在项目配置中设置 kst.export_dir"
+        checks["kst_export_dir"] = _warn(hint)
 
     secrets_file = _resolve(root_path, app_config.get("secrets_file")) if app_config else root_path / "secrets" / "secrets.json"
     checks["secrets_json"] = _check_secret_profile(secrets_file, project)
 
     latest = find_latest_kst_export(root_path, {"kst": {"export_dir": str(export_dir)}}) if export_dir else None
     if latest:
-        checks["latest_kst_export"] = _ok(f"已找到最新商务通导出文件：{latest}", {"path": str(latest)})
+        checks["latest_kst_export"] = _ok(f"已找到：{latest.name}")
     else:
-        checks["latest_kst_export"] = _warn("未找到商务通导出 Excel/CSV 文件，请先导出到 kst_exports 目录")
+        checks["latest_kst_export"] = _warn("目录中未找到 Excel/CSV 导出表，请把商务通导出表放到该目录")
 
     passed_count = sum(1 for item in checks.values() if item.get("passed"))
     report = {

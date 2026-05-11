@@ -335,28 +335,24 @@ def print_task_status_header(project: dict[str, Any], root: Path | None = None) 
 
 
 def print_project_info(project: dict[str, Any]) -> None:
-    """打印当前项目的简洁摘要。"""
+    """打印当前项目的简洁摘要 — 只显示同事需要关注的字段。"""
     excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
     sheets = project.get("sheets", {}) or {}
     kst = project.get("kst", {}) or {}
     baidu_cfg = project.get("baidu", {}) or {}
 
+    excel_path = excel.get("path") or project.get("excel_path", "")
+    kst_dir = kst.get("export_dir", "")
+
     _emit("")
     _emit(_bright("  项目信息"))
     _emit("  " + "-" * 58)
-    rows = [
-        ("项目名称", project.get("project_name", "")),
-        ("项目 ID", project.get("project_id", "")),
-        ("配置文件", _shorten_path(project.get("_config_path", ""))),
-        ("目标 Excel", excel.get("path") or project.get("excel_path", "")),
-        ("小时报 sheet", excel.get("hourly_sheet") or sheets.get("hourly", "")),
-        ("日报 sheet", excel.get("daily_sheet") or sheets.get("daily", "")),
-        ("商务通目录", kst.get("export_dir", "")),
-        ("百度凭据 profile", baidu_cfg.get("credential_profile", "")),
-    ]
-    for label, value in rows:
-        if value:
-            _emit(f"  {_dim(label + '：')}{value}")
+    _emit(f"  项目：{project.get('project_name', '')}")
+    _emit(f"  Excel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}")
+    _emit(f"  日报 sheet：{_dim(excel.get('daily_sheet') or sheets.get('daily', ''))}")
+    _emit(f"  小时报 sheet：{_dim(excel.get('hourly_sheet') or sheets.get('hourly', ''))}")
+    _emit(f"  商务通目录：{kst_dir if kst_dir else '未配置'}")
+    _emit(f"  凭据：{_dim(baidu_cfg.get('credential_profile', ''))}")
     _emit("  " + "-" * 58)
     _emit("  0. 返回")
     _emit("")
@@ -394,27 +390,25 @@ def print_confirm_panel(task_info: dict[str, Any]) -> None:
     _emit(_bright("  执行确认"))
     _emit("  " + "-" * 58)
     lines = []
-    if task_info.get("project_name"):
-        lines.append(f"  项目：{task_info['project_name']}")
     if task_info.get("task_name"):
         lines.append(f"  任务：{_cyan(task_info['task_name'])}")
-    if task_info.get("excel_path"):
-        lines.append(f"  目标表格：{_truncate_excel_name(task_info['excel_path'])}")
-    if task_info.get("sheet"):
-        lines.append(f"  目标 sheet：{task_info['sheet']}")
+    if task_info.get("project_name"):
+        lines.append(f"  项目：{task_info['project_name']}")
     if task_info.get("date"):
         label = f"  日期：{task_info['date']}"
         if task_info.get("period"):
-            label += f"  /  时段：{task_info['period']}"
+            label += f"    时段：{task_info['period']}"
         lines.append(label)
     elif task_info.get("period"):
         lines.append(f"  时段：{task_info['period']}")
+    if task_info.get("excel_path"):
+        lines.append(f"  Excel：{_truncate_excel_name(task_info['excel_path'])}")
     if task_info.get("kst_file"):
-        lines.append(f"  商务通文件：{_truncate_excel_name(task_info['kst_file'])}")
+        lines.append(f"  商务通：{_truncate_excel_name(task_info['kst_file'])}")
         if task_info.get("kst_is_stale"):
-            lines.append(f"    {_yellow('[注意] 快商通导出文件已超过 2 小时，请确认是否继续')}")
+            lines.append(f"    {_yellow('[注意] 导出文件已超过 2 小时，请确认是否继续')}")
     if task_info.get("already_done"):
-        lines.append(f"    {_yellow('[注意] 当前任务今天已成功写入过，仍可继续执行。')}")
+        lines.append(f"    {_yellow('[注意] 今天已成功写入过，仍可继续执行')}")
     _emit("\n".join(lines))
     _emit("  " + "-" * 58)
     _emit("")

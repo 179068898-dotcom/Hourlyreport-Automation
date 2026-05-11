@@ -1672,10 +1672,10 @@ def test_merge_hourly_data_requires_three_accounts_and_strict_field_types():
     assert list(merged["accounts"].keys()) == ["银康01", "银康银屑02", "银康03"]
     assert merged["accounts"]["银康03"]["消费"] == 91.75
     assert merged["accounts"]["银康银屑02"]["总对话"] == 9
-    assert validate_merged_hourly_data(merged, baidu, kst) == []
+    assert validate_merged_hourly_data(merged, baidu, kst, required_accounts=km_accounts) == []
 
     merged["accounts"]["银康01"]["点击"] = 187.5
-    errors = validate_merged_hourly_data(merged, baidu, kst)
+    errors = validate_merged_hourly_data(merged, baidu, kst, required_accounts=km_accounts)
     assert any("点击 必须是整数" in error for error in errors)
 
 
@@ -1707,10 +1707,10 @@ def test_merge_daily_data_combines_baidu_and_kst_daily_fields():
     assert merged["accounts"]["银康01"]["有效对话"] == 1
     assert merged["accounts"]["银康01"]["无效对话"] == 10
     assert merged["accounts"]["银康03"]["总对话"] == 0
-    assert validate_merged_daily_data(merged, baidu, kst) == []
+    assert validate_merged_daily_data(merged, baidu, kst, required_accounts=km_accounts) == []
 
     merged["accounts"]["银康01"]["无效对话"] = 9
-    errors = validate_merged_daily_data(merged, baidu, kst)
+    errors = validate_merged_daily_data(merged, baidu, kst, required_accounts=km_accounts)
     assert any("无效对话不等于总对话减有效对话" in error for error in errors)
 
 
