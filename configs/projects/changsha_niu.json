@@ -1,0 +1,68 @@
+{
+  "project_id": "changsha_niu",
+  "project_name": "长沙牛",
+  "excel": {
+    "path": "D:\\长沙牛\\竞价数据.xlsx",
+    "hourly_sheet": "时段数据",
+    "daily_sheet": "百度",
+    "engine": "openpyxl"
+  },
+  "kst": {
+    "export_dir": "D:\\商务通数据\\长沙牛",
+    "auto_pick_latest": true,
+    "max_file_age_hours": 2
+  },
+  "baidu": {
+    "credential_profile": "changsha_niu_baidu",
+    "data_path": [
+      "首页",
+      "数据报告",
+      "数据概览",
+      "搜索推广"
+    ]
+  },
+  "accounts": [
+    {
+      "standard_name": "竞网CS博润241209",
+      "baidu_names": ["竞网CS博润241209"],
+      "excel_name": "竞网CS博润241209",
+      "kst_ids": ["61561000"],
+      "kst_names": ["竞网CS博润241209"]
+    },
+    {
+      "standard_name": "竞网CS博润240304",
+      "baidu_names": ["竞网CS博润240304"],
+      "excel_name": "竞网CS博润240304",
+      "kst_ids": ["53559272"],
+      "kst_names": ["竞网CS博润240304"]
+    },
+    {
+      "standard_name": "竞网CS博润251218",
+      "baidu_names": ["竞网CS博润251218"],
+      "excel_name": "竞网CS博润251218",
+      "kst_ids": ["77609531"],
+      "kst_names": ["竞网CS博润251218"]
+    }
+  ],
+  "hourly": {
+    "periods": ["11点", "15点", "18点"]
+  },
+  "daily": {
+    "write_fields": [
+      "展现",
+      "点击",
+      "消费",
+      "有效对话",
+      "无效对话",
+      "一般有效对话",
+      "有效转潜",
+      "总转潜"
+    ],
+    "do_not_write_fields": [
+      "总对话",
+      "预约",
+      "到诊",
+      "就诊"
+    ]
+  }
+}

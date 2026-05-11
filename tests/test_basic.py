@@ -558,22 +558,20 @@ def test_project_template_and_demo_project_are_complete():
             assert set(["standard_name", "baidu_names", "excel_name", "kst_ids", "kst_names"]) <= set(account)
 
 
-def test_demo_project_can_be_listed_switched_and_shown_in_menu_header():
+def test_demo_project_is_template_and_not_in_project_list():
+    """demo_project 是模板，不出现在项目列表中，但可以单独加载验证。"""
     root = Path(__file__).resolve().parents[1]
-    original_project = get_current_project(root)["project_id"]
 
-    try:
-        projects = list_projects(root)
-        assert any(project["project_id"] == "demo_project" for project in projects)
+    projects = list_projects(root)
+    ids = [p["project_id"] for p in projects]
+    assert "demo_project" not in ids, "demo_project 是模板，不应出现在项目列表"
 
-        demo = set_current_project(root, "demo_project")
-        header = __import__("menu").build_menu_header(root, demo)
-
-        assert get_current_project(root)["project_id"] == "demo_project"
-        assert "演示项目" in header
-        assert validate_project_config(demo) == []
-    finally:
-        set_current_project(root, original_project)
+    # 但可以直接加载和校验
+    from modules.project_config import load_project_config
+    demo = load_project_config(root, "demo_project")
+    assert demo["project_name"] == "演示项目"
+    assert demo.get("is_template") is True
+    assert validate_project_config(demo) == []
 
 
 def test_release_builder_accepts_version_and_includes_project_template_docs(tmp_path):
@@ -2252,7 +2250,7 @@ def test_load_credentials_from_secrets_json_structure(tmp_path):
     secrets_file.write_text(
         json.dumps({
             "baidu": {
-                "kunming_npx_baidu": {
+                "kunming_niu_baidu": {
                     "username": "test_user",
                     "password": "test_pass",
                 },
@@ -2263,9 +2261,9 @@ def test_load_credentials_from_secrets_json_structure(tmp_path):
 
     credentials = load_project_credentials(
         tmp_path,
-        {"credentials_path": "secrets/secrets.json", "baidu": {"credential_project": "kunming_npx_baidu"}},
+        {"credentials_path": "secrets/secrets.json", "baidu": {"credential_project": "kunming_niu_baidu"}},
         "baidu",
-        "kunming_npx_baidu",
+        "kunming_niu_baidu",
     )
 
     assert credentials is not None
@@ -2319,12 +2317,12 @@ def test_load_credentials_returns_none_when_profile_missing(tmp_path):
 def test_build_login_failure_message_shows_actual_path_and_profile():
     msg = build_login_failure_message({
         "credentials_path": "secrets/secrets.json",
-        "baidu": {"credential_project": "kunming_npx_baidu"},
+        "baidu": {"credential_project": "kunming_niu_baidu"},
     })
 
     assert "credentials.local.json" not in msg
     assert "secrets/secrets.json" in msg
-    assert "kunming_npx_baidu" in msg
+    assert "kunming_niu_baidu" in msg
     assert "验证码" in msg
 
 
@@ -3322,5 +3320,89 @@ def test_missing_time_does_not_error(tmp_path):
 
     output = buf.getvalue()
     assert "[已完成]" in output
-    # 时间缺失时不显示"完成于："也不报错
-    # （仅显示 [已完成]）
+
+
+# ── 四项目预置测试 ────────────────────────────────────────
+
+
+def test_list_projects_includes_four_niu_projects():
+    """list_projects 能识别四个真实项目。"""
+    root = Path(__file__).resolve().parents[1]
+    projects = list_projects(root)
+    ids = {p["project_id"] for p in projects}
+    assert "kunming_niu" in ids
+    assert "nanjing_niu" in ids
+    assert "ningbo_niu" in ids
+    assert "changsha_niu" in ids
+
+
+def test_list_projects_excludes_old_kunming():
+    """list_projects 不再识别 kunming_npx。"""
+    root = Path(__file__).resolve().parents[1]
+    projects = list_projects(root)
+    ids = {p["project_id"] for p in projects}
+    assert "kunming_npx" not in ids
+
+
+def test_default_project_is_kunming_niu():
+    """默认项目是 kunming_niu。"""
+    root = Path(__file__).resolve().parents[1]
+    current = get_current_project(root)
+    assert current["project_id"] == "kunming_niu"
+    assert current["project_name"] == "昆明牛"
+
+
+def test_kunming_niu_accounts():
+    """昆明牛账户映射为银康01、银康银屑02、银康03。"""
+    root = Path(__file__).resolve().parents[1]
+    from modules.project_config import load_project_config
+    proj = load_project_config(root, "kunming_niu")
+    accounts = proj["accounts"]
+    assert accounts[0]["standard_name"] == "银康01"
+    assert accounts[0]["kst_ids"] == ["72828178"]
+    assert accounts[1]["standard_name"] == "银康银屑02"
+    assert accounts[1]["kst_ids"] == ["72828179"]
+    assert accounts[2]["standard_name"] == "银康03"
+    assert accounts[2]["kst_ids"] == ["81509165"]
+    assert "baidu-银康03" in accounts[2]["baidu_names"]
+
+
+def test_secrets_example_has_four_profiles():
+    """secrets.example.json 包含四个 profile，密码为空。"""
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
+    baidu = data["baidu"]
+    for profile in ["kunming_niu_baidu", "nanjing_niu_baidu", "ningbo_niu_baidu", "changsha_niu_baidu"]:
+        assert profile in baidu
+        assert baidu[profile]["username"] == ""
+        assert baidu[profile]["password"] == ""
+
+
+def test_regular_build_excludes_secrets_json():
+    """普通 build_release 不包含 secrets/secrets.json。"""
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="0.4.15")
+    assert "hourly_report_bot_release_v0.4.15" in release.name
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "secrets/secrets.json" not in names
+    assert "secrets/secrets.example.json" in names
+    for pid in ["kunming_niu", "nanjing_niu", "ningbo_niu", "changsha_niu"]:
+        assert f"configs/projects/{pid}.json" in names
+    assert "configs/projects/kunming_npx.json" not in names
+    assert "reports/menu_task_status.json" not in names
+    assert "configs/projects/project_template.json" in names
+
+
+def test_internal_build_includes_secrets_json():
+    """内部 build_release 包含 secrets/secrets.json。"""
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="0.4.15", internal=True)
+    assert "hourly_report_bot_internal_v0.4.15" in release.name
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "secrets/secrets.json" in names
