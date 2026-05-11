@@ -6,11 +6,11 @@ from pathlib import Path
 
 
 DEFAULT_VERSION = "0.4.4"
-EXCLUDE_DIRS = {".venv", "browser_profile", "__pycache__", ".pytest_cache", "dist"}
+EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "dist"}
 RUNTIME_KEEP_DIRS = {"reports", "logs", "backups", "kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak"}
 EXCLUDE_FILES = {"config.json", "credentials.local.json"}
-EXCLUDE_REPORT_FILES = {"menu_task_status.json"}
+EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json"}
 
 
 def normalize_version(version: str | None) -> str:

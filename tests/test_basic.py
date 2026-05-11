@@ -1,6 +1,50 @@
 import json
+from pathlib import Path
+from datetime import date
 
 from modules.text_normalizer import normalize_text
+
+
+def _kunming_niu_runtime_config() -> dict:
+    """返回昆明牛项目的运行时配置，供单元测试使用。
+    避免测试依赖当前 app_config 的运行状态。
+    """
+    return {
+        "accounts": {
+            "银康01": {
+                "baidu_name": "银康01",
+                "baidu_names": ["银康01"],
+                "excel_name": "银康01",
+                "kst_ids": ["72828178"],
+                "kst_names": ["银康01"],
+                "aliases": ["银康01"],
+            },
+            "银康银屑02": {
+                "baidu_name": "银康银屑02",
+                "baidu_names": ["银康银屑02"],
+                "excel_name": "银康银屑02",
+                "kst_ids": ["72828179"],
+                "kst_names": ["银康银屑02"],
+                "aliases": ["银康银屑02"],
+            },
+            "银康03": {
+                "baidu_name": "baidu-银康03",
+                "baidu_names": ["baidu-银康03", "银康03"],
+                "excel_name": "银康03",
+                "kst_ids": ["81509165"],
+                "kst_names": ["银康03"],
+                "aliases": ["银康03", "baidu-银康03"],
+            },
+        },
+        "kst": {
+            "promotion_id_accounts": {
+                "72828178": "银康01",
+                "72828179": "银康银屑02",
+                "81509165": "银康03",
+            },
+        },
+    }
+
 from modules.kst_export_parser import parse_kst_export_file
 from modules.kst_daily_parser import classify_daily_dialog_by_tags, parse_kst_daily_file
 from modules.kst_parser import aggregate_kst_export_rows, classify_dialog_by_tags, has_visitor_dialog
@@ -783,7 +827,7 @@ def test_aggregate_kst_export_rows_maps_remark_promotion_ids_and_counts_tags():
         {"备注说明": "999999", "名片标签": "转潜-有效", "对话时间": "2026-05-07 10:04", "访客消息数": "1"},
     ]
 
-    parsed = aggregate_kst_export_rows(rows, {})
+    parsed = aggregate_kst_export_rows(rows, _kunming_niu_runtime_config())
 
     assert parsed["errors"] == []
     assert parsed["accounts"]["银康01"]["总对话"] == 2
@@ -803,7 +847,7 @@ def test_aggregate_kst_export_rows_skips_rows_without_visitor_messages():
         {"备注说明": "72828178", "名片标签": "有效-一般", "对话时间": "2026-05-07 10:01", "访客消息数": "1"},
     ]
 
-    parsed = aggregate_kst_export_rows(rows, {})
+    parsed = aggregate_kst_export_rows(rows, _kunming_niu_runtime_config())
 
     assert parsed["accounts"]["银康01"]["总对话"] == 1
     assert parsed["accounts"]["银康01"]["有效"] == 1
@@ -823,7 +867,8 @@ def test_parse_kst_export_csv_outputs_reports(tmp_path):
         encoding="utf-8-sig",
     )
     reports = tmp_path / "reports"
-    config = {"kst": {"export_dir": str(tmp_path)}}
+    config = _kunming_niu_runtime_config()
+    config["kst"] = {"export_dir": str(tmp_path), "promotion_id_accounts": _kunming_niu_runtime_config()["kst"]["promotion_id_accounts"]}
 
     result = parse_kst_export_file(export, config, tmp_path, "15点")
 
@@ -844,7 +889,9 @@ def test_parse_kst_export_filters_non_current_date_without_marking_unmatched(tmp
         encoding="utf-8-sig",
     )
 
-    result = parse_kst_export_file(export, {"kst": {"export_dir": str(tmp_path)}}, tmp_path, "15")
+    km_config = _kunming_niu_runtime_config()
+    km_config["kst"] = {"export_dir": str(tmp_path), "promotion_id_accounts": _kunming_niu_runtime_config()["kst"]["promotion_id_accounts"]}
+    result = parse_kst_export_file(export, km_config, tmp_path, "15")
 
     assert result["dialog_data"]["summary"]["raw_rows"] == 1
     assert result["dialog_data"]["summary"]["matched_rows"] == 0
@@ -865,7 +912,7 @@ def test_parse_kst_daily_file_filters_date_and_outputs_daily_counts(tmp_path):
         encoding="utf-8-sig",
     )
 
-    result = parse_kst_daily_file(export, {}, tmp_path, "2026-05-07")
+    result = parse_kst_daily_file(export, _kunming_niu_runtime_config(), tmp_path, "2026-05-07")
 
     assert result["daily_data"]["date"] == "2026-05-07"
     assert result["daily_data"]["source"] == "kst_daily_export"
@@ -896,7 +943,7 @@ def test_parse_kst_daily_file_skips_rows_without_visitor_messages(tmp_path):
         encoding="utf-8-sig",
     )
 
-    result = parse_kst_daily_file(export, {}, tmp_path, "2026-05-07")
+    result = parse_kst_daily_file(export, _kunming_niu_runtime_config(), tmp_path, "2026-05-07")
 
     assert result["daily_data"]["accounts"]["银康01"]["总对话"] == 1
     assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 1
@@ -1107,10 +1154,11 @@ def test_baidu_number_cleanup_and_report_validation():
         }
     }
 
-    assert validate_baidu_report(report) == []
+    km_accounts = list(_kunming_niu_runtime_config()["accounts"].keys())
+    assert validate_baidu_report(report, required_accounts=km_accounts) == []
 
     bad_report = {"accounts": {"银康01": {"展现": "x", "点击": 1, "消费": 1}}}
-    errors = validate_baidu_report(bad_report)
+    errors = validate_baidu_report(bad_report, required_accounts=km_accounts)
     assert any("账户数量不匹配" in error for error in errors)
     assert any("不是数字" in error for error in errors)
 
@@ -1533,7 +1581,8 @@ def test_validate_baidu_account_data_accepts_three_standard_accounts(tmp_path):
         encoding="utf-8",
     )
 
-    report = validate_baidu_account_data(source, output)
+    km_accounts = list(_kunming_niu_runtime_config()["accounts"].keys())
+    report = validate_baidu_account_data(source, output, expected_accounts=km_accounts)
 
     assert report["passed"] is True
     assert report["checks"]["exactly_three_standard_accounts"] is True
@@ -1615,7 +1664,8 @@ def test_merge_hourly_data_requires_three_accounts_and_strict_field_types():
         },
     }
 
-    merged = build_merged_hourly_data(baidu, kst, "15点")
+    km_accounts = list(_kunming_niu_runtime_config()["accounts"].keys())
+    merged = build_merged_hourly_data(baidu, kst, "15点", required_accounts=km_accounts)
 
     assert merged["date"] == "2026-05-07"
     assert merged["period"] == "15点"
@@ -1647,7 +1697,8 @@ def test_merge_daily_data_combines_baidu_and_kst_daily_fields():
         },
     }
 
-    merged = build_merged_daily_data(baidu, kst)
+    km_accounts = list(_kunming_niu_runtime_config()["accounts"].keys())
+    merged = build_merged_daily_data(baidu, kst, required_accounts=km_accounts)
 
     assert merged["date"] == "2026-05-07"
     assert merged["source"]["baidu"] == "reports/baidu_daily_data.json"
