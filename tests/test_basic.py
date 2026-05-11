@@ -3456,3 +3456,58 @@ def test_internal_build_includes_secrets_json():
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
     assert "secrets/secrets.json" in names
+
+
+def test_internal_build_validates_missing_profile(tmp_path):
+    """内部包缺少 profile 时校验失败。"""
+    from tools.build_release import _validate_internal_secrets
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
+        "baidu": {
+            "kunming_niu_baidu": {"username": "a", "password": "b"},
+            "nanjing_niu_baidu": {"username": "a", "password": "b"},
+        }
+    }, ensure_ascii=False), encoding="utf-8")
+
+    errors = _validate_internal_secrets(tmp_path)
+    assert len(errors) > 0
+    assert any("缺少百度凭据 profile" in e for e in errors)
+
+
+def test_internal_build_validates_empty_credentials(tmp_path):
+    """内部包 profile 账号或密码为空时校验失败。"""
+    from tools.build_release import _validate_internal_secrets
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
+        "baidu": {
+            "kunming_niu_baidu": {"username": "", "password": "b"},
+            "nanjing_niu_baidu": {"username": "a", "password": ""},
+            "ningbo_niu_baidu": {"username": "a", "password": "b"},
+            "changsha_niu_baidu": {"username": "a", "password": "b"},
+        }
+    }, ensure_ascii=False), encoding="utf-8")
+
+    errors = _validate_internal_secrets(tmp_path)
+    assert len(errors) > 0
+    assert any("未填写账号" in e for e in errors)
+    assert any("未填写密码" in e for e in errors)
+
+
+def test_internal_build_validates_all_complete(tmp_path):
+    """内部包四个 profile 完整时校验通过。"""
+    from tools.build_release import _validate_internal_secrets
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
+        "baidu": {
+            "kunming_niu_baidu": {"username": "a", "password": "b"},
+            "nanjing_niu_baidu": {"username": "a", "password": "b"},
+            "ningbo_niu_baidu": {"username": "a", "password": "b"},
+            "changsha_niu_baidu": {"username": "a", "password": "b"},
+        }
+    }, ensure_ascii=False), encoding="utf-8")
+
+    errors = _validate_internal_secrets(tmp_path)
+    assert errors == []
