@@ -1,0 +1,68 @@
+{
+  "project_id": "ningbo_niu",
+  "project_name": "宁波牛",
+  "excel": {
+    "path": "D:\\宁波牛\\竞价数据.xlsx",
+    "hourly_sheet": "时段数据",
+    "daily_sheet": "百度",
+    "engine": "openpyxl"
+  },
+  "kst": {
+    "export_dir": "D:\\商务通数据\\宁波牛",
+    "auto_pick_latest": true,
+    "max_file_age_hours": 2
+  },
+  "baidu": {
+    "credential_profile": "ningbo_niu_baidu",
+    "data_path": [
+      "首页",
+      "数据报告",
+      "数据概览",
+      "搜索推广"
+    ]
+  },
+  "accounts": [
+    {
+      "standard_name": "宁波博润1",
+      "baidu_names": ["宁波博润1"],
+      "excel_name": "宁波博润1",
+      "kst_ids": ["45144300"],
+      "kst_names": ["宁波博润1"]
+    },
+    {
+      "standard_name": "宁波博润2",
+      "baidu_names": ["宁波博润2"],
+      "excel_name": "宁波博润2",
+      "kst_ids": ["45164655"],
+      "kst_names": ["宁波博润2"]
+    },
+    {
+      "standard_name": "宁波博润12",
+      "baidu_names": ["宁波博润12"],
+      "excel_name": "宁波博润12",
+      "kst_ids": ["54467299"],
+      "kst_names": ["宁波博润12"]
+    }
+  ],
+  "hourly": {
+    "periods": ["11点", "15点", "18点"]
+  },
+  "daily": {
+    "write_fields": [
+      "展现",
+      "点击",
+      "消费",
+      "有效对话",
+      "无效对话",
+      "一般有效对话",
+      "有效转潜",
+      "总转潜"
+    ],
+    "do_not_write_fields": [
+      "总对话",
+      "预约",
+      "到诊",
+      "就诊"
+    ]
+  }
+}

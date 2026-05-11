@@ -1,4 +1,5 @@
 {
+  "is_template": true,
   "project_id": "demo_project",
   "project_name": "演示项目",
   "excel": {

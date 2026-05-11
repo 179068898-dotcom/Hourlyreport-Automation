@@ -174,16 +174,17 @@ def print_banner(project: dict[str, Any] | None = None,
         excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
     excel_path = excel.get("path") or (project or {}).get("excel_path", "")
 
+    sep = _bright("  " + "=" * (width - 4))
     _emit("")
-    _emit(_bright("  " + "=" * (width - 4)))
+    _emit(sep)
     _emit(_bright(f"   百度竞价日报 / 小时报自动化助手  v{ver}"))
-    _emit(_bright("  " + "=" * (width - 4)))
+    _emit(sep)
     if project:
-        _emit(f"   当前项目：{_cyan(project.get('project_name', ''))}")
+        _emit(f"   项目：{_cyan(project.get('project_name', ''))}")
         if excel_path:
-            _emit(f"   目标表格：{_dim(_truncate_excel_name(excel_path))}")
-    _emit(f"   详细日志：{_dim('logs/run.log')}")
-    _emit(_bright("  " + "=" * (width - 4)))
+            _emit(f"   Excel：{_dim(_truncate_excel_name(excel_path))}")
+    _emit(f"   日志：{_dim('logs/run.log')}")
+    _emit(sep)
     _emit("")
 
 
@@ -205,7 +206,7 @@ def print_main_menu(project: dict[str, Any] | None = None,
                 else:
                     daily_line = f"  2. 日报  {_green('[已完成]')}"
             else:
-                daily_line = f"  2. 日报  {_dim('[未完成]')}"
+                daily_line = f"  2. 日报  {_red('[未完成]')}"
         except Exception:
             pass
 
@@ -215,6 +216,7 @@ def print_main_menu(project: dict[str, Any] | None = None,
     _emit("  4. 项目信息")
     _emit("  5. 文件合格校验")
     _emit("  0. 退出")
+    _emit(_bright("  " + "=" * 58))
     _emit("")
 
 
@@ -242,7 +244,7 @@ def print_sub_menu_hourly(root: Path | None = None, project_id: str = "") -> Non
         elif done:
             status = _green("[已完成]")
         else:
-            status = _dim("[未完成]")
+            status = _red("[未完成]")
         _emit(f"  {idx}. {period}    {status}")
     _emit("  " + "-" * 40)
     _emit("  0. 返回")
@@ -308,13 +310,14 @@ def print_task_status_header(project: dict[str, Any], root: Path | None = None) 
     except Exception:
         return
 
-    _emit("  今日状态：")
+    _emit(_bright("  " + "=" * 58))
+    _emit("  今日状态")
     daily = st.get("daily", {})
     if daily.get("done"):
         dt = format_done_time(daily.get("last_success_time"))
-        daily_tag = f"{_green('已完成')} (完成于：{dt})" if dt else _green("已完成")
+        daily_tag = f"{_green('已完成')} 完成于 {dt}" if dt else _green("已完成")
     else:
-        daily_tag = _dim("未完成")
+        daily_tag = _red("未完成")
     _emit(f"    日报：{daily_tag}")
 
     hourly_parts = []
@@ -322,11 +325,12 @@ def print_task_status_header(project: dict[str, Any], root: Path | None = None) 
         h = st.get("hourly", {}).get(period, {})
         if h.get("done"):
             ht = format_done_time(h.get("last_success_time"))
-            tag = f"{_green('已完成')} (完成于：{ht})" if ht else _green("已完成")
+            tag = f"{_green('已完成')} {ht}" if ht else _green("已完成")
         else:
-            tag = _dim("未完成")
+            tag = _red("未完成")
         hourly_parts.append(f"{period} {tag}")
-    _emit(f"    小时报：{' / '.join(hourly_parts)}")
+    _emit(f"    小时报：{'  |  '.join(hourly_parts)}")
+    _emit(_bright("  " + "=" * 58))
     _emit("")
 
 
