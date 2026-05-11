@@ -124,6 +124,31 @@ def _truncate_excel_name(path: str) -> str:
     return Path(path).name
 
 
+# ── 时间格式化 ──────────────────────────────────────────────
+def format_done_time(value: str | None) -> str:
+    """从 last_success_time 提取 HH:mm 格式。
+
+    支持：2026-05-10 10:02:33 / 2026-05-10T10:02:33 / 10:02
+    异常或为空时返回空字符串。
+    """
+    if not value:
+        return ""
+    try:
+        if " " in value:
+            parts = value.split(" ")
+            if len(parts) >= 2 and ":" in parts[1]:
+                return parts[1][:5]
+        if "T" in value:
+            time_part = value.split("T")[1]
+            if ":" in time_part:
+                return time_part[:5]
+        if ":" in value and len(value) <= 5:
+            return value
+    except Exception:
+        pass
+    return ""
+
+
 # ── 屏幕控制 ──────────────────────────────────────────────
 def clear_screen() -> None:
     """清屏（跨平台）。"""
@@ -162,25 +187,146 @@ def print_banner(project: dict[str, Any] | None = None,
     _emit("")
 
 
-def print_main_menu(project: dict[str, Any] | None = None) -> None:
-    """打印主菜单。"""
+def print_main_menu(project: dict[str, Any] | None = None,
+                    root: Path | None = None) -> None:
+    """打印主菜单，日报行显示完成状态和时间。"""
+    from modules.task_status import is_daily_done, get_project_task_status
+
+    # 日报行
+    daily_line = "  2. 日报"
+    if root and project:
+        pid = project.get("project_id", "")
+        try:
+            if is_daily_done(root, pid):
+                st = get_project_task_status(root, pid)
+                time_str = format_done_time(st.get("daily", {}).get("last_success_time"))
+                if time_str:
+                    daily_line = f"  2. 日报  {_green('[已完成]')} (完成于：{time_str})"
+                else:
+                    daily_line = f"  2. 日报  {_green('[已完成]')}"
+            else:
+                daily_line = f"  2. 日报  {_dim('[未完成]')}"
+        except Exception:
+            pass
+
     _emit("  1. 小时报")
-    _emit("  2. 日报")
-    _emit("  3. 下一个项目")
+    _emit(daily_line)
+    _emit("  3. 项目列表")
     _emit("  4. 项目信息")
     _emit("  5. 文件合格校验")
     _emit("  0. 退出")
     _emit("")
 
 
-def print_sub_menu_hourly() -> None:
-    """打印小时报时段子菜单。"""
+def print_sub_menu_hourly(root: Path | None = None, project_id: str = "") -> None:
+    """打印小时报时段子菜单，含完成状态和时间。"""
+    from modules.task_status import get_project_task_status
+
     _emit("")
-    _emit("  请选择小时报时段：")
-    _emit("  1. 11点")
-    _emit("  2. 15点")
-    _emit("  3. 18点")
-    _emit("  0. 返回主菜单")
+    _emit(_bright("  小时报"))
+    _emit("  " + "-" * 40)
+    for idx, period in enumerate(["11点", "15点", "18点"], start=1):
+        done = False
+        time_str = ""
+        if root and project_id:
+            try:
+                st = get_project_task_status(root, project_id)
+                h = st.get("hourly", {}).get(period, {})
+                done = h.get("done", False)
+                if done:
+                    time_str = format_done_time(h.get("last_success_time"))
+            except Exception:
+                pass
+        if done and time_str:
+            status = f"{_green('[已完成]')} (完成于：{time_str})"
+        elif done:
+            status = _green("[已完成]")
+        else:
+            status = _dim("[未完成]")
+        _emit(f"  {idx}. {period}    {status}")
+    _emit("  " + "-" * 40)
+    _emit("  0. 返回")
+    _emit("")
+
+
+def print_project_list(projects: list[dict[str, str]],
+                       root: Path | None = None) -> None:
+    """打印项目列表供用户选择。"""
+    from modules.task_status import get_project_task_status
+
+    _emit("")
+    _emit(_bright("  项目列表"))
+    _emit("  " + "-" * 58)
+    if not projects:
+        _emit("  没有可用的项目。")
+        _emit("  " + "-" * 58)
+        _emit("  0. 返回")
+        _emit("")
+        return
+    for idx, proj in enumerate(projects, start=1):
+        pid = proj.get("project_id", "")
+        pname = proj.get("project_name", "")
+        status_str = ""
+        if root:
+            try:
+                st = get_project_task_status(root, pid)
+                # 日报
+                daily = st.get("daily", {})
+                if daily.get("done"):
+                    dt = format_done_time(daily.get("last_success_time"))
+                    daily_tag = f"{_green(dt)}" if dt else _green("已完成")
+                else:
+                    daily_tag = _dim("未完成")
+                # 小时报各时段
+                hourly_parts = []
+                for period in ["11点", "15点", "18点"]:
+                    h = st.get("hourly", {}).get(period, {})
+                    if h.get("done"):
+                        ht = format_done_time(h.get("last_success_time"))
+                        h_tag = f"{_green(ht)}" if ht else _green("已完成")
+                    else:
+                        h_tag = _dim("未完成")
+                    hourly_parts.append(f"[{period}: {h_tag}]")
+                status_str = f" [日报: {daily_tag}] " + " ".join(hourly_parts)
+            except Exception:
+                pass
+        _emit(f"  {idx}. {pname}{status_str}")
+    _emit("  " + "-" * 58)
+    _emit("  0. 返回")
+    _emit("")
+
+
+def print_task_status_header(project: dict[str, Any], root: Path | None = None) -> None:
+    """在主菜单顶部打印当前项目今日任务完成状态。"""
+    from modules.task_status import get_project_task_status
+
+    project_id = project.get("project_id", "")
+    if not project_id or not root:
+        return
+    try:
+        st = get_project_task_status(root, project_id)
+    except Exception:
+        return
+
+    _emit("  今日状态：")
+    daily = st.get("daily", {})
+    if daily.get("done"):
+        dt = format_done_time(daily.get("last_success_time"))
+        daily_tag = f"{_green('已完成')} (完成于：{dt})" if dt else _green("已完成")
+    else:
+        daily_tag = _dim("未完成")
+    _emit(f"    日报：{daily_tag}")
+
+    hourly_parts = []
+    for period in ["11点", "15点", "18点"]:
+        h = st.get("hourly", {}).get(period, {})
+        if h.get("done"):
+            ht = format_done_time(h.get("last_success_time"))
+            tag = f"{_green('已完成')} (完成于：{ht})" if ht else _green("已完成")
+        else:
+            tag = _dim("未完成")
+        hourly_parts.append(f"{period} {tag}")
+    _emit(f"    小时报：{' / '.join(hourly_parts)}")
     _emit("")
 
 
@@ -263,6 +409,8 @@ def print_confirm_panel(task_info: dict[str, Any]) -> None:
         lines.append(f"  商务通文件：{_truncate_excel_name(task_info['kst_file'])}")
         if task_info.get("kst_is_stale"):
             lines.append(f"    {_yellow('[注意] 快商通导出文件已超过 2 小时，请确认是否继续')}")
+    if task_info.get("already_done"):
+        lines.append(f"    {_yellow('[注意] 当前任务今天已成功写入过，仍可继续执行。')}")
     _emit("\n".join(lines))
     _emit("  " + "-" * 58)
     _emit("")
