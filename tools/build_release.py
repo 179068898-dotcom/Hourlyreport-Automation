@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 import zipfile
 from pathlib import Path
-
 
 DEFAULT_VERSION = "0.4.4"
 EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "dist"}
@@ -11,6 +12,13 @@ RUNTIME_KEEP_DIRS = {"reports", "logs", "backups", "kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak"}
 EXCLUDE_FILES = {"config.json", "credentials.local.json"}
 EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json"}
+
+REQUIRED_INTERNAL_PROFILES = [
+    "kunming_niu_baidu",
+    "nanjing_niu_baidu",
+    "ningbo_niu_baidu",
+    "changsha_niu_baidu",
+]
 
 
 def normalize_version(version: str | None) -> str:
@@ -51,6 +59,31 @@ def should_include_file(path: Path, internal: bool = False) -> bool:
     return True
 
 
+def _validate_internal_secrets(root: Path) -> list[str]:
+    """校验内部包所需的四个 profile 是否完整。返回错误列表。"""
+    secrets_path = root / "secrets" / "secrets.json"
+    errors: list[str] = []
+    if not secrets_path.exists():
+        errors.append("缺少 secrets/secrets.json")
+        return errors
+    try:
+        data = json.loads(secrets_path.read_text(encoding="utf-8"))
+    except Exception:
+        errors.append("secrets/secrets.json 无法解析")
+        return errors
+    baidu = data.get("baidu", {})
+    for profile in REQUIRED_INTERNAL_PROFILES:
+        item = baidu.get(profile)
+        if not isinstance(item, dict):
+            errors.append(f"缺少百度凭据 profile：{profile}")
+            continue
+        if not item.get("username", "").strip():
+            errors.append(f"未填写账号：{profile}")
+        if not item.get("password", "").strip():
+            errors.append(f"未填写密码：{profile}")
+    return errors
+
+
 def build_release(root: str | Path, version: str | None = None, internal: bool = False) -> Path:
     root_path = Path(root)
     dist_dir = root_path / "dist"
@@ -76,6 +109,14 @@ def main() -> None:
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
+
+    if args.internal:
+        errors = _validate_internal_secrets(root)
+        if errors:
+            for err in errors:
+                print(f"[失败] {err}")
+            sys.exit(1)
+
     release_path = build_release(root, version=args.version, internal=args.internal)
     size_mb = release_path.stat().st_size / 1024 / 1024
     pkg_type = "内部包" if args.internal else "普通包"
