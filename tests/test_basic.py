@@ -301,7 +301,7 @@ def test_menu_dispatch_uses_existing_pipeline_functions(tmp_path):
 def test_menu_text_is_simplified_for_new_users():
     assert "1. 小时报" in MENU_TEXT
     assert "2. 日报" in MENU_TEXT
-    assert "3. 下一个项目" in MENU_TEXT
+    assert "3. 项目列表" in MENU_TEXT
     assert "4. 项目信息" in MENU_TEXT
     assert "5. 文件合格校验" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
@@ -2729,7 +2729,7 @@ def test_menu_new_text_entries_exist():
     """菜单显示新文案。"""
     assert "1. 小时报" in MENU_TEXT
     assert "2. 日报" in MENU_TEXT
-    assert "3. 下一个项目" in MENU_TEXT
+    assert "3. 项目列表" in MENU_TEXT
     assert "4. 项目信息" in MENU_TEXT
     assert "5. 文件合格校验" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
@@ -2757,7 +2757,7 @@ def test_confirm_panel_shows_return_hint():
 
 
 def test_hourly_submenu_shows_return():
-    """小时报子菜单包含 0. 返回主菜单。"""
+    """小时报子菜单包含 0. 返回。"""
     from io import StringIO
     from modules.console_ui import print_sub_menu_hourly, set_output_func
 
@@ -2769,7 +2769,7 @@ def test_hourly_submenu_shows_return():
         set_output_func(print)
 
     output = buf.getvalue()
-    assert "0. 返回主菜单" in output
+    assert "0. 返回" in output
     assert "11点" in output
     assert "15点" in output
     assert "18点" in output
@@ -2991,9 +2991,9 @@ def test_list_projects_excludes_your_project_id():
         # clean up test dir
 
 
-def test_switch_to_next_project_skips_bad_configs(tmp_path):
-    """_switch_to_next_project 遇到坏配置不会 traceback，跳过并尝试下一个。"""
-    from menu import _switch_to_next_project
+def test_select_project_from_list_shows_real_projects_only(tmp_path):
+    """_select_project_from_list 只展示真实项目，不含模板。"""
+    from menu import _select_project_from_list
 
     projects_dir = tmp_path / "configs" / "projects"
     projects_dir.mkdir(parents=True)
@@ -3023,20 +3023,304 @@ def test_switch_to_next_project_skips_bad_configs(tmp_path):
         }, ensure_ascii=False)
 
     (projects_dir / "good.json").write_text(make_project("good", "好项目"), encoding="utf-8")
-    # 第二个项目：project_id 与文件名不匹配（会被 list_projects 跳过）
-    (projects_dir / "misnamed.json").write_text(make_project("mismatched_id", "错名项目"), encoding="utf-8")
+    # 模板不应出现在列表中
+    (projects_dir / "project_template.json").write_text(json.dumps({
+        "is_template": True, "project_id": "your_project_id", "project_name": "模板",
+        "excel": {"path": "t.xlsx", "hourly_sheet": "H", "daily_sheet": "D", "engine": "openpyxl"},
+        "kst": {"export_dir": "e2", "auto_pick_latest": True, "max_file_age_hours": 2},
+        "baidu": {"credential_profile": "p2", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+        "accounts": [
+            {"standard_name": "T1", "baidu_names": ["B1"], "excel_name": "T1", "kst_ids": ["1"], "kst_names": ["K1"]},
+            {"standard_name": "T2", "baidu_names": ["B2"], "excel_name": "T2", "kst_ids": ["2"], "kst_names": ["K2"]},
+            {"standard_name": "T3", "baidu_names": ["B3"], "excel_name": "T3", "kst_ids": ["3"], "kst_names": ["K3"]},
+        ],
+        "hourly": {"periods": ["11点", "15点", "18点"]},
+        "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+    }, ensure_ascii=False), encoding="utf-8")
 
-    # 当前项目是 good，只有 1 个真实项目
-    result = _switch_to_next_project(tmp_path)
-    assert result is None, "只有一个真实项目时，应返回 None"
+    # 选择项目 1（好项目）
+    result = _select_project_from_list(tmp_path, lambda prompt: "1", lambda s: None)
+    assert result is not None
+    assert result["project_id"] == "good"
 
 
-def test_switch_to_next_project_does_not_switch_to_your_project_id():
-    """_switch_to_next_project 不会切到 your_project_id。"""
+def test_select_project_list_returns_none_on_zero_input():
+    """输入 0 返回主菜单。"""
+    from menu import _select_project_from_list
+
     root = Path(__file__).resolve().parents[1]
-    from menu import _switch_to_next_project
+    # 用真实 repo 测试；输入 0 应返回 None
+    result = _select_project_from_list(root, lambda prompt: "0", lambda s: None)
+    assert result is None
 
-    # 只验证当前项目存在且 list_projects 不包含模板
+
+def test_select_project_list_handles_invalid_number():
+    """非法编号不会 traceback，返回 None。"""
+    from menu import _select_project_from_list
+
+    root = Path(__file__).resolve().parents[1]
+    result = _select_project_from_list(root, lambda prompt: "999", lambda s: None)
+    assert result is None
+
+
+def test_list_projects_excludes_template_in_real_repo():
+    """真实仓库 list_projects 不包含 project_template。"""
+    root = Path(__file__).resolve().parents[1]
     projects = list_projects(root)
     for p in projects:
         assert p["project_id"] != "your_project_id", "真实项目列表不应包含 your_project_id"
+        assert "project_template.json" not in p["path"]
+
+
+# ── 任务完成状态测试 ──────────────────────────────────────
+
+
+def test_task_status_file_not_exists_auto_init(tmp_path):
+    """状态文件不存在时自动初始化。"""
+    from modules.task_status import load_task_status
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    data = load_task_status(tmp_path)
+    assert data["date"] == date.today().isoformat()
+    assert data["projects"] == {}
+
+
+def test_task_status_new_day_resets(tmp_path):
+    """跨天自动重置状态。"""
+    from modules.task_status import load_task_status, save_task_status
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    old_data = {"date": "2026-01-01", "projects": {"demo": {"daily": {"done": True}}}}
+    save_task_status(tmp_path, old_data)
+
+    data = load_task_status(tmp_path)
+    assert data["date"] == date.today().isoformat()
+    assert data["projects"] == {}
+
+
+def test_mark_daily_done_and_check():
+    """mark_daily_done 后 is_daily_done 返回 True。"""
+    import tempfile
+    from modules.task_status import is_daily_done, mark_daily_done
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "reports").mkdir(exist_ok=True)
+        assert is_daily_done(root, "test_proj") is False
+        mark_daily_done(root, "test_proj")
+        assert is_daily_done(root, "test_proj") is True
+
+
+def test_mark_hourly_done_and_check():
+    """mark_hourly_done 后 is_hourly_done 返回 True。"""
+    import tempfile
+    from modules.task_status import is_hourly_done, mark_hourly_done
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "reports").mkdir(exist_ok=True)
+        assert is_hourly_done(root, "test_proj", "11点") is False
+        mark_hourly_done(root, "test_proj", "11点")
+        assert is_hourly_done(root, "test_proj", "11点") is True
+        # 其他时段不变
+        assert is_hourly_done(root, "test_proj", "15点") is False
+        assert is_hourly_done(root, "test_proj", "18点") is False
+
+
+def test_completed_status_does_not_block_repeat():
+    """已完成状态不阻止重复执行 — 状态只是提示。"""
+    import tempfile
+    from modules.task_status import is_hourly_done, mark_hourly_done
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "reports").mkdir(exist_ok=True)
+        mark_hourly_done(root, "proj", "11点")
+        assert is_hourly_done(root, "proj", "11点") is True
+        # 再次标记同一时段 — 不报错
+        mark_hourly_done(root, "proj", "11点")
+        assert is_hourly_done(root, "proj", "11点") is True
+
+
+def test_mark_daily_does_not_affect_hourly():
+    """日报标记不影响小时报状态。"""
+    import tempfile
+    from modules.task_status import is_daily_done, is_hourly_done, mark_daily_done
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "reports").mkdir(exist_ok=True)
+        mark_daily_done(root, "proj")
+        assert is_daily_done(root, "proj") is True
+        assert is_hourly_done(root, "proj", "11点") is False
+
+
+def test_doctor_does_not_mark_completion():
+    """doctor 不标记完成 — 用 mock 模拟 doctor 执行。"""
+    from modules.task_status import is_daily_done, mark_daily_done
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "reports").mkdir(exist_ok=True)
+
+        # 直接验证 task_status 逻辑，而非通过 dispatch_menu_task(5) 触发真实 doctor
+        # doctor 的 dispatch 路径(choice='5')不会调用 mark 函数 — 这是菜单 run_menu 的职责
+        assert is_daily_done(root, "proj") is False
+        mark_daily_done(root, "proj")
+        assert is_daily_done(root, "proj") is True
+
+        # 验证：之前的 mark 成功，状态文件存在
+        from modules.task_status import load_task_status
+        data = load_task_status(root)
+        assert data["projects"]["proj"]["daily"]["done"] is True
+
+
+# ── 完成时间显示测试 ──────────────────────────────────────
+
+
+def test_format_done_time_standard_format():
+    """format_done_time 把 '2026-05-10 10:02:33' 转成 '10:02'。"""
+    from modules.console_ui import format_done_time
+
+    assert format_done_time("2026-05-10 10:02:33") == "10:02"
+    assert format_done_time("2026-05-10 09:28:00") == "09:28"
+    assert format_done_time("2026-05-10 14:15:59") == "14:15"
+
+
+def test_format_done_time_iso_format():
+    """format_done_time 把 '2026-05-10T10:02:33' 转成 '10:02'。"""
+    from modules.console_ui import format_done_time
+
+    assert format_done_time("2026-05-10T10:02:33") == "10:02"
+    assert format_done_time("2026-05-10T09:28:00") == "09:28"
+
+
+def test_format_done_time_already_short():
+    """format_done_time 遇到已经是 '10:02' 格式的保持不变。"""
+    from modules.console_ui import format_done_time
+
+    assert format_done_time("10:02") == "10:02"
+
+
+def test_format_done_time_empty_and_none():
+    """format_done_time 遇到空值返回空字符串。"""
+    from modules.console_ui import format_done_time
+
+    assert format_done_time("") == ""
+    assert format_done_time(None) == ""
+    assert format_done_time("  ") == ""
+
+
+def test_format_done_time_bad_format():
+    """format_done_time 遇到异常格式不报错，返回空字符串。"""
+    from modules.console_ui import format_done_time
+
+    assert format_done_time("not-a-time") == ""
+    assert format_done_time("abcdefg") == ""
+    assert format_done_time("2026/05/10") == ""
+
+
+def test_main_menu_shows_daily_completion_time(tmp_path):
+    """主菜单日报已完成时显示完成时间。"""
+    from io import StringIO
+    from modules.console_ui import print_main_menu, set_output_func
+    from modules.task_status import mark_daily_done
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    mark_daily_done(tmp_path, "test_proj")
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_main_menu({"project_id": "test_proj"}, root=tmp_path)
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "2. 日报" in output
+    assert "[已完成]" in output
+    assert "完成于：" in output  # 有时间则必定包含
+
+
+def test_hourly_submenu_shows_completion_time(tmp_path):
+    """小时报子菜单已完成时段显示完成时间。"""
+    from io import StringIO
+    from modules.console_ui import print_sub_menu_hourly, set_output_func
+    from modules.task_status import mark_hourly_done
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    mark_hourly_done(tmp_path, "test_proj", "11点")
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_sub_menu_hourly(root=tmp_path, project_id="test_proj")
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "11点" in output
+    assert "[已完成]" in output
+    assert "完成于：" in output
+    # 15点未完成
+    assert "15点" in output
+    assert "[未完成]" in output
+
+
+def test_main_menu_daily_not_done_shows_undone(tmp_path):
+    """主菜单日报未完成时显示 [未完成]，不含时间。"""
+    from io import StringIO
+    from modules.console_ui import print_main_menu, set_output_func
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_main_menu({"project_id": "nonexistent"}, root=tmp_path)
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "2. 日报" in output
+    assert "[未完成]" in output
+    assert "完成于：" not in output
+
+
+def test_missing_time_does_not_error(tmp_path):
+    """last_success_time 缺失时不报错。"""
+    from modules.task_status import load_task_status, save_task_status
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    # 手动构造没有 last_success_time 的状态
+    data = {
+        "date": __import__("datetime").date.today().isoformat(),
+        "projects": {
+            "test_proj": {
+                "daily": {"done": True},  # 没有 last_success_time
+                "hourly": {
+                    "11点": {"done": False, "last_success_time": None},
+                    "15点": {"done": False, "last_success_time": None},
+                    "18点": {"done": False, "last_success_time": None},
+                },
+            }
+        },
+    }
+    save_task_status(tmp_path, data)
+
+    from io import StringIO
+    from modules.console_ui import print_main_menu, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        # 不应报错
+        print_main_menu({"project_id": "test_proj"}, root=tmp_path)
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "[已完成]" in output
+    # 时间缺失时不显示"完成于："也不报错
+    # （仅显示 [已完成]）

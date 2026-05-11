@@ -40,7 +40,7 @@ ROOT = Path(__file__).resolve().parent
 MENU_TEXT = """
 1. 小时报
 2. 日报
-3. 下一个项目
+3. 项目列表
 4. 项目信息
 5. 文件合格校验
 0. 退出
@@ -219,39 +219,39 @@ def _check_chrome_debug(root: Path, config: dict[str, Any], output_func: Callabl
         return False
 
 
-def _select_hourly_period(input_func: Callable[[str], str], output_func: Callable[[str], None]) -> str | None:
-    print_sub_menu_hourly()
-    answer = input_func("  请选择小时报时段：").strip()
+def _select_hourly_period(root: Path, project_id: str, input_func: Callable[[str], str], output_func: Callable[[str], None]) -> str | None:
+    print_sub_menu_hourly(root=root, project_id=project_id)
+    answer = input_func("  请选择时段：").strip()
     return {"1": "11点", "2": "15点", "3": "18点"}.get(answer)
 
 
-def _switch_to_next_project(root: Path) -> dict[str, Any] | None:
-    """切换到下一个可用项目（循环）。
+def _select_project_from_list(root: Path, input_func: Callable[[str], str], output_func: Callable[[str], None]) -> dict[str, Any] | None:
+    """展示项目列表，用户按编号选择后切换。"""
+    from modules.console_ui import print_project_list, print_error as cui_error
 
-    只遍历真实项目，跳过无法加载的配置。没有其他项目时返回 None。
-    """
     projects = list_projects(root)
-    if len(projects) <= 1:
+    print_project_list(projects, root=root)
+
+    if not projects:
+        output_func("")
+        output_func("  按 Enter 继续...")
+        input_func("")
         return None
-    current = get_current_project(root)
-    current_id = current.get("project_id", "")
 
-    # 找到当前项目在列表中的位置
-    start = 0
-    for i, proj in enumerate(projects):
-        if proj["project_id"] == current_id:
-            start = i
-            break
+    answer = input_func("  请输入项目编号：").strip()
+    if answer == "0":
+        return None
 
-    # 从下一个位置开始尝试切换，跳过加载失败的项目
-    for offset in range(1, len(projects) + 1):
-        idx = (start + offset) % len(projects)
-        next_id = projects[idx]["project_id"]
-        try:
-            return set_current_project(root, next_id)
-        except Exception:
-            continue
+    try:
+        idx = int(answer) - 1
+        if 0 <= idx < len(projects):
+            project_id = projects[idx]["project_id"]
+            return set_current_project(root, project_id)
+    except (ValueError, Exception):
+        pass
 
+    cui_error("请输入正确的项目编号")
+    input_func("  按 Enter 继续...")
     return None
 
 
@@ -278,12 +278,14 @@ def run_menu(
         excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
         excel_path = excel.get("path") or project.get("excel_path", "")
 
-        # 简洁顶部状态行
+        # 简洁顶部状态行 + 今日任务完成状态
         output_func("")
         output_func(f"  项目：{project.get('project_name', '')}  |  Excel：{Path(excel_path).name if excel_path else '未配置'}")
         output_func("")
+        from modules.console_ui import print_task_status_header
+        print_task_status_header(project, root=root)
 
-        print_main_menu(project)
+        print_main_menu(project, root=root)
         choice = input_func("  请输入选项：").strip()
 
         if choice == "0":
@@ -291,13 +293,11 @@ def run_menu(
             return
 
         if choice == "3":
-            # 下一个项目（循环切换）
-            switched = _switch_to_next_project(root)
+            # 项目列表
+            switched = _select_project_from_list(root, input_func, output_func)
             if switched:
                 project = switched
                 print_success(f"已切换到：{switched['project_name']}")
-            else:
-                print_warning("当前没有可切换的其他项目")
             input_func("  按 Enter 继续...")
             continue
 
@@ -324,7 +324,7 @@ def run_menu(
         dispatch_choice = choice
         if choice == "1":
             # 小时报 → 选择时段
-            period = _select_hourly_period(input_func, output_func)
+            period = _select_hourly_period(root, project.get("project_id", ""), input_func, output_func)
             if not period:
                 output_func("  已返回主菜单。")
                 continue
@@ -333,8 +333,16 @@ def run_menu(
         meta = _task_meta(dispatch_choice, project)
         latest = _latest_kst_export(root, project)
 
-        # 使用 console_ui 确认面板
+        # 检查是否今天已完成
+        from modules.task_status import is_daily_done, is_hourly_done
         from modules.console_ui import print_confirm_panel
+        project_id = project.get("project_id", "")
+        already_done = False
+        if meta.get("period"):
+            already_done = is_hourly_done(root, project_id, meta["period"])
+        else:
+            already_done = is_daily_done(root, project_id)
+
         excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
 
         print_confirm_panel({
@@ -345,6 +353,7 @@ def run_menu(
             "sheet": meta.get("sheet"),
             "excel_path": excel.get("path") or project.get("excel_path", ""),
             "kst_file": str(latest) if latest else "",
+            "already_done": already_done,
         })
 
         answer = input_func("  > ").strip()
@@ -368,6 +377,18 @@ def run_menu(
         if isinstance(result, dict) and "passed" in result:
             if result.get("passed"):
                 print_final_success("任务完成")
+
+                # 标记完成状态
+                w_summary = result.get("write_summary", {})
+                verified = w_summary.get("verification_passed", False)
+                write_count = w_summary.get("write_count", 0)
+                if verified and write_count > 0:
+                    from modules.task_status import mark_daily_done, mark_hourly_done
+                    if meta.get("period"):
+                        mark_hourly_done(root, project_id, meta["period"])
+                    else:
+                        mark_daily_done(root, project_id)
+                    print_success("已标记为完成")
 
                 # 写入成功后自动打开 Excel
                 from modules.console_ui import try_open_excel, print_auto_open_result, verbose_print
