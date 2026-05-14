@@ -1,13 +1,15 @@
 """百度登录状态守卫。
 
 执行日报 / 小时报百度抓数前，确认当前项目 credential_profile
-与最近成功登录的 profile 是否一致。不一致时自动尝试退出并重新登录。
+与最近成功登录的 profile 是否一致。不一致时先退出验证再重新登录。
+
+退出动作和退出结果验证分离：只有验证退出成功才能继续登录。
 """
 
 from __future__ import annotations
 
 import json
-import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -33,7 +35,7 @@ def load_browser_login_state(root: str | Path) -> dict[str, Any]:
 
 
 def save_browser_login_state(root: str | Path, state: dict[str, Any]) -> None:
-    """保存状态文件。注意：不要包含 username/password。"""
+    """保存状态文件。自动剔除 username/password。"""
     path = _state_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     clean = {
@@ -82,6 +84,68 @@ def get_current_project_credential_profile(config: dict[str, Any]) -> str:
     return str(baidu.get("credential_project") or baidu.get("credential_profile", ""))
 
 
+# ── 百度登录状态检测 ──────────────────────────────────────
+
+def is_baidu_logged_in(page) -> bool:
+    """判断当前页面是否显示已登录状态。
+
+    返回 True 表示页面看起来已登录（不能可靠断定具体账号）。
+    """
+    if page is None:
+        return False
+    try:
+        from modules.baidu_detector import classify_baidu_page
+        text = _safe_text(page)
+        classification = classify_baidu_page(page.url, text)
+        return classification.get("login_status") != "not_logged_in"
+    except Exception:
+        return True  # 不确定时保守假设已登录
+
+
+def is_baidu_logged_out_or_login_page(page) -> bool:
+    """判断当前页面是否已进入登录页或未登录状态。"""
+    if page is None:
+        return True  # 没有页面视为安全
+    try:
+        from modules.baidu_detector import classify_baidu_page
+        text = _safe_text(page)
+        classification = classify_baidu_page(page.url, text)
+        if classification.get("login_status") == "not_logged_in":
+            return True
+        # 辅助判断：页面文本或 URL 包含登录特征
+        if "login" in (page.url or "").lower():
+            return True
+        if "登录" in (text or ""):
+            # 检查是否存在账号/密码输入框
+            try:
+                pw = page.locator("input[type='password']").first
+                if pw.count() > 0:
+                    return True
+            except Exception:
+                pass
+            try:
+                account = page.locator("#uc-common-account, input[name='username'], input[name='loginName']").first
+                if account.count() > 0:
+                    return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return False
+
+
+def wait_until_logged_out(page, timeout_ms: int = 5000) -> bool:
+    """等待页面变为未登录状态。返回 True/False，不抛 traceback。"""
+    if page is None:
+        return True
+    deadline = time.time() + timeout_ms / 1000.0
+    while time.time() < deadline:
+        if is_baidu_logged_out_or_login_page(page):
+            return True
+        page.wait_for_timeout(500)
+    return False
+
+
 # ── 百度退出登录 ──────────────────────────────────────────
 
 LOGOUT_SELECTORS = [
@@ -106,44 +170,49 @@ LOGOUT_SELECTORS = [
 LOGOUT_TEXT_CANDIDATES = ["退出", "退出登录", "安全退出", "注销", "登出"]
 
 
-def logout_baidu_account(page) -> dict[str, Any]:
-    """尝试从当前页面退出百度账号。
-
-    遍历常见退出入口，点击第一个可用的。
-    成功返回 {"success": True, "message": "..."}
-    失败返回 {"success": False, "message": "..."}
-    """
-    if page is None:
-        return {"success": False, "message": "page 对象为空"}
-
-    try:
-        visible_text = _safe_text(page)
-    except Exception:
-        visible_text = ""
-
-    # 1. 尝试按选择器点击
+def _try_click_logout(page) -> bool:
+    """尝试点击退出入口，返回是否点到了东西。"""
     for selector in LOGOUT_SELECTORS:
         try:
             el = page.locator(selector).first
             if el.count() > 0 and el.is_visible():
                 el.click(timeout=3000)
-                page.wait_for_timeout(2000)
-                return {"success": True, "message": f"已点击退出入口：{selector}"}
+                return True
         except Exception:
             continue
-
-    # 2. 文本兜底 — 找包含退出文字的链接
     for label in LOGOUT_TEXT_CANDIDATES:
         try:
             el = page.get_by_text(label, exact=False).first
             if el.count() > 0 and el.is_visible():
                 el.click(timeout=3000)
-                page.wait_for_timeout(2000)
-                return {"success": True, "message": f"已点击退出文本：{label}"}
+                return True
         except Exception:
             continue
+    return False
 
-    return {"success": False, "message": "未找到退出登录入口，请手动退出当前百度账号"}
+
+def logout_baidu_account(page) -> dict[str, Any]:
+    """尝试退出百度账号并验证退出结果。
+
+    1. 点击退出入口
+    2. 等待页面变为未登录状态
+    3. 验证成功才返回 success=True
+
+    成功 {"success": True, "message": "..."}
+    失败 {"success": False, "message": "..."}
+    """
+    if page is None:
+        return {"success": False, "message": "page 对象为空"}
+
+    clicked = _try_click_logout(page)
+    if not clicked:
+        return {"success": False, "message": "未找到退出登录入口，请手动退出当前百度账号"}
+
+    # 等待退出生效
+    verified = wait_until_logged_out(page, timeout_ms=5000)
+    if verified:
+        return {"success": True, "message": "已退出百度账号"}
+    return {"success": False, "message": "点击退出后仍未确认退出成功，请手动退出当前百度账号"}
 
 
 # ── Profile 一致性守卫 ────────────────────────────────────
@@ -188,15 +257,29 @@ def ensure_baidu_profile_session(
         output_func("  [注意] 当前浏览器可能仍登录其他项目账号，正在切换到当前项目账号")
         logger.info("profile 不一致：上次=%s 当前=%s，尝试退出重登", last_profile, profile)
 
-    # 尝试自动退出
+    # 退出并验证
     logout_result = logout_baidu_account(page)
-    if not logout_result.get("success"):
+    if logout_result.get("success"):
+        verified_logged_out = True
+    else:
+        # 自动退出失败，提示手动退出
         output_func(f"    {logout_result.get('message', '')}")
         output_func("  请在 Chrome 中手动退出当前百度账号后按回车继续，或输入 0 返回。")
         answer = input_func("  > ").strip()
         if answer == "0":
             logger.info("用户取消百度账号切换")
             return False
+        # 用户按回车 → 验证是否已手动退出
+        output_func("  正在确认是否已退出...")
+        verified_logged_out = wait_until_logged_out(page, timeout_ms=10000)
+        if not verified_logged_out:
+            output_func("  [注意] 无法确认是否已退出百度账号，请确认退出后重新运行。")
+            return False
+
+    # 确认已退出或已进入登录页，才调用登录
+    if not verified_logged_out:
+        output_func("  [注意] 无法确认是否已退出百度账号，请确认退出后重新运行。")
+        return False
 
     # 用当前项目 profile 重新登录
     try:
@@ -209,7 +292,7 @@ def ensure_baidu_profile_session(
         logger.error("百度重新登录异常：%s", exc)
         return False
 
-    # 标记成功
+    # 只有登录真正成功后才写入状态
     mark_browser_login_success(
         root,
         credential_profile=profile,
@@ -218,7 +301,7 @@ def ensure_baidu_profile_session(
         task=task,
         url=_safe_url(page),
     )
-    output_func(f"  [通过] 已切换到当前项目百度账号")
+    output_func("  [通过] 已切换到当前项目百度账号")
     return True
 
 
