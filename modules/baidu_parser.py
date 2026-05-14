@@ -111,9 +111,28 @@ def extract_baidu_rows_from_visible_text(text: str) -> list[dict[str, Any]]:
     return rows
 
 
+def _parse_baidu_metrics(row: dict[str, Any]) -> dict[str, int | float | None]:
+    """从解析行中提取展现/点击/消费三项指标。"""
+    metrics: dict[str, int | float | None] = {}
+    for field, aliases in FIELD_ALIASES.items():
+        metrics[field] = _parse_number(_pick_value(row, aliases))
+    return metrics
+
+
+def _is_zero_baidu_metrics(metrics: dict[str, int | float | None]) -> bool:
+    """展现=0 且 点击=0 且 消费=0。"""
+    return (
+        (metrics.get("展现") or 0) == 0
+        and (metrics.get("点击") or 0) == 0
+        and (metrics.get("消费") or 0) == 0
+    )
+
+
 def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "accounts": {},
+        "unknown_accounts": [],
+        "ignored_unknown_accounts": [],
         "exceptions": [],
         "errors": [],
     }
@@ -123,7 +142,24 @@ def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dic
         raw_account = _pick_value(row, ACCOUNT_KEYS)
         standard_account = _map_account(raw_account, account_map)
         if not standard_account:
-            result["exceptions"].append({"row_index": idx, "reason": "无法映射账户", "row": row})
+            metrics = _parse_baidu_metrics(row)
+            account_name = str(raw_account) if raw_account else f"未知账户#{idx}"
+            if _is_zero_baidu_metrics(metrics):
+                result["ignored_unknown_accounts"].append({
+                    "account_name": account_name,
+                    "展现": metrics.get("展现", 0) or 0,
+                    "点击": metrics.get("点击", 0) or 0,
+                    "消费": metrics.get("消费", 0) or 0,
+                    "reason": "未知账户但三项数据均为 0，已忽略",
+                })
+            else:
+                result["unknown_accounts"].append({
+                    "account_name": account_name,
+                    "展现": metrics.get("展现", 0) or 0,
+                    "点击": metrics.get("点击", 0) or 0,
+                    "消费": metrics.get("消费", 0) or 0,
+                    "reason": "百度后台抓到该账户，但当前项目配置 accounts 中未配置",
+                })
             continue
         parsed_row: dict[str, Any] = {"source_account": raw_account}
         row_errors = []

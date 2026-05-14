@@ -1163,6 +1163,154 @@ def test_baidu_number_cleanup_and_report_validation():
     assert any("不是数字" in error for error in errors)
 
 
+# ── baidu_parser 未知账户测试 ─────────────────────────────
+
+
+def test_unknown_account_all_zero_goes_to_ignored():
+    """未知账户 展现=0、点击=0、消费=0 → ignored_unknown_accounts。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "未知零账户", "展现": "0", "点击": "0", "消费": "0"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert "银康01" in parsed["accounts"]
+    assert len(parsed["unknown_accounts"]) == 0
+    assert len(parsed["ignored_unknown_accounts"]) == 1
+    assert parsed["ignored_unknown_accounts"][0]["account_name"] == "未知零账户"
+    assert parsed["ignored_unknown_accounts"][0]["展现"] == 0
+    assert "已忽略" in parsed["ignored_unknown_accounts"][0]["reason"]
+
+
+def test_unknown_account_with_impressions_goes_to_unknown():
+    """未知账户 展现>0 → unknown_accounts。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "未知展现", "展现": "200", "点击": "0", "消费": "0"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(parsed["unknown_accounts"]) == 1
+    assert parsed["unknown_accounts"][0]["account_name"] == "未知展现"
+    assert parsed["unknown_accounts"][0]["展现"] == 200
+    assert parsed["unknown_accounts"][0]["点击"] == 0
+    assert len(parsed["ignored_unknown_accounts"]) == 0
+    assert "未配置" in parsed["unknown_accounts"][0]["reason"]
+
+
+def test_unknown_account_with_clicks_goes_to_unknown():
+    """未知账户 点击>0 → unknown_accounts。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "未知点击", "展现": "0", "点击": "5", "消费": "0"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(parsed["unknown_accounts"]) == 1
+    assert parsed["unknown_accounts"][0]["account_name"] == "未知点击"
+    assert parsed["unknown_accounts"][0]["点击"] == 5
+
+
+def test_unknown_account_with_cost_goes_to_unknown():
+    """未知账户 消费>0 → unknown_accounts。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "未知消费", "展现": "0", "点击": "0", "消费": "10.5"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(parsed["unknown_accounts"]) == 1
+    assert parsed["unknown_accounts"][0]["account_name"] == "未知消费"
+    assert parsed["unknown_accounts"][0]["消费"] == 10.5
+
+
+def test_known_accounts_still_in_accounts():
+    """已配置账户仍然正常进入 accounts。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+            "银康银屑02": {"baidu_name": "银康银屑02"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "银康银屑02", "展现": "200", "点击": "20", "消费": "30"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(parsed["accounts"]) == 2
+    assert parsed["accounts"]["银康01"]["展现"] == 100
+    assert parsed["accounts"]["银康银屑02"]["展现"] == 200
+    assert len(parsed["unknown_accounts"]) == 0
+    assert len(parsed["ignored_unknown_accounts"]) == 0
+
+
+def test_unknown_accounts_do_not_affect_known_parsing():
+    """unknown/ignored 不影响已配置账户解析。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "未知A", "展现": "999", "点击": "99", "消费": "99"},
+        {"账户": "未知B", "展现": "0", "点击": "0", "消费": "0"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(parsed["accounts"]) == 1
+    assert parsed["accounts"]["银康01"]["展现"] == 100
+    assert len(parsed["unknown_accounts"]) == 1
+    assert len(parsed["ignored_unknown_accounts"]) == 1
+    assert parsed["unknown_accounts"][0]["展现"] == 999
+    assert parsed["ignored_unknown_accounts"][0]["展现"] == 0
+
+
+def test_unknown_accounts_not_in_errors():
+    """未知账户不进入 errors。"""
+    config = {
+        "accounts": {
+            "银康01": {"baidu_name": "银康01"},
+        }
+    }
+    rows = [
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+        {"账户": "未知有数据", "展现": "100", "点击": "10", "消费": "50"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(parsed["unknown_accounts"]) == 1
+    assert not any("未知" in e for e in parsed["errors"]), "未知账户不应进入 errors"
+
+
 def test_extract_baidu_rows_from_visible_text_reports_missing_click_column():
     text = """
 详细数据
