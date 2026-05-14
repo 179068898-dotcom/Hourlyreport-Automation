@@ -2,7 +2,7 @@
   "project_id": "nanjing_niu",
   "project_name": "南京牛",
   "excel": {
-    "path": "D:\\南京牛\\竞价数据.xlsx",
+    "path": "D:\\Seafile\\【竞价】\\【❤南京牛】\\【2026年】【南京牛】竞价数据\\【南京华厦yxb】2026竞价数据.xlsx",
     "hourly_sheet": "时段数据",
     "daily_sheet": "百度",
     "engine": "openpyxl"

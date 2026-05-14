@@ -4,6 +4,7 @@ from typing import Any
 
 from modules.text_normalizer import normalize_text
 from modules.validators import get_required_accounts, validate_baidu_report
+import re
 
 
 ACCOUNT_KEYS = ["账户", "账户名称", "推广账户", "账户名"]
@@ -77,9 +78,10 @@ def _map_account(raw_account: Any, account_map: dict[str, str]) -> str | None:
 
 def extract_baidu_rows_from_visible_text(text: str) -> list[dict[str, Any]]:
     lines = [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
-    if "总计-3" not in lines:
+    total_match = [l for l in lines if re.match(r'^总计-\d+$', l)]
+    if not total_match:
         return []
-    total_index = lines.index("总计-3")
+    total_index = lines.index(total_match[0])
     header_start = None
     for idx in range(total_index - 1, -1, -1):
         if normalize_text(lines[idx]) == "账户":
