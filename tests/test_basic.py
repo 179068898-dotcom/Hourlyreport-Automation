@@ -4362,3 +4362,290 @@ def test_verbose_shows_report_path(capsys):
     captured = capsys.readouterr()
     assert "unknown_baidu_accounts.json" in captured.out
     set_verbose(False)
+
+
+# ── 百度入口页 + 用户名识别测试 ──────────────────────────
+
+
+def test_ensure_baidu_entry_page_navigates():
+    """ensure_baidu_entry_page 会调用 page.goto。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_entry_page
+
+    fake_page = MagicMock()
+    fake_page.url = "about:blank"
+    result = ensure_baidu_entry_page(fake_page)
+    assert result["success"] is True
+    fake_page.goto.assert_called_once()
+
+
+def test_ensure_baidu_entry_page_returns_error_on_exception(monkeypatch):
+    """导航失败时返回 success=False，不 traceback。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_entry_page
+
+    fake_page = MagicMock()
+    fake_page.goto.side_effect = Exception("连接超时")
+    result = ensure_baidu_entry_page(fake_page)
+    assert result["success"] is False
+    assert "连接超时" in result["message"]
+
+
+def test_is_current_user_expected_true_when_usernames_match(monkeypatch):
+    """detect 和 expect 一致时 is_current_baidu_user_expected 返回 True。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import is_current_baidu_user_expected
+
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username",
+                        lambda root, config: "test_user")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username",
+                        lambda page: "test_user")
+
+    assert is_current_baidu_user_expected(MagicMock(), None, {}) is True
+
+
+def test_is_current_user_expected_false_when_usernames_differ(monkeypatch):
+    """detect 和 expect 不一致时返回 False。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import is_current_baidu_user_expected
+
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username",
+                        lambda root, config: "user_a")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username",
+                        lambda page: "user_b")
+
+    assert is_current_baidu_user_expected(MagicMock(), None, {}) is False
+
+
+def test_is_current_user_expected_false_when_expected_none(monkeypatch):
+    """expected 为 None 时返回 False。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import is_current_baidu_user_expected
+
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username",
+                        lambda root, config: None)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username",
+                        lambda page: "someone")
+
+    assert is_current_baidu_user_expected(MagicMock(), None, {}) is False
+
+
+def test_logged_in_expected_user_skips_logout(tmp_path, monkeypatch):
+    """用户已登录当前项目账号时，不调用 logout。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session, mark_browser_login_success
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    # 预先写入 last_profile 不同，制造"profile 不一致"的前提
+    # 但最终因为用户名匹配，应走分支 A 直接通过
+    config = {
+        "baidu": {"credential_profile": "kunming_niu_baidu"},
+        "project_id": "kunming_niu", "project_name": "昆明牛",
+    }
+
+    fake_page = MagicMock()
+    fake_page.url = "https://www2.baidu.com/"
+    fake_page.locator("body").inner_text.return_value = "欢迎，BDCC-昆明牛测试账号"
+    fake_page.goto.return_value = None
+
+    logger = logging.getLogger("test")
+    logout_calls = []
+    login_calls = []
+
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username",
+                        lambda root, config: "BDCC-昆明牛测试账号")
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username",
+                        lambda page: "BDCC-昆明牛测试账号")
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed",
+                        lambda page, root, config, logger: login_calls.append(1) or True)
+
+    result = ensure_baidu_profile_session(
+        tmp_path, config, fake_page, logger,
+        input_func=lambda _: "", output_func=lambda _: None,
+    )
+    assert result is True, "用户名匹配时应直接通过"
+    assert len(logout_calls) == 0, "用户名匹配时不应调用 logout"
+
+
+def test_wrong_username_triggers_logout(tmp_path, monkeypatch):
+    """页面显示其他账号时触发 logout + login。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {
+        "baidu": {"credential_profile": "kunming_niu_baidu"},
+        "project_id": "kunming_niu", "project_name": "昆明牛",
+    }
+
+    fake_page = MagicMock()
+    fake_page.url = "https://www2.baidu.com/"
+    fake_page.locator("body").inner_text.return_value = "欢迎，BDCC-其他项目账号"
+    fake_page.goto.return_value = None
+
+    logger = logging.getLogger("test")
+    logout_calls = []
+    login_calls = []
+
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username",
+                        lambda root, config: "BDCC-昆明牛测试账号")
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username",
+                        lambda page: "BDCC-其他项目账号")
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True, "message": "ok"})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed",
+                        lambda page, root, config, logger: login_calls.append(1) or True)
+
+    result = ensure_baidu_profile_session(
+        tmp_path, config, fake_page, logger,
+        input_func=lambda _: "", output_func=lambda _: None,
+    )
+    assert result is True
+    assert len(logout_calls) >= 1, "用户名不匹配时应调用 logout"
+    assert len(login_calls) >= 1, "应调用 login"
+
+
+def test_unrecognized_user_last_profile_match_no_logout(tmp_path, monkeypatch):
+    """无法识别用户名但 last_profile 一致时，不强制退出。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session, mark_browser_login_success
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    mark_browser_login_success(tmp_path, "kunming_niu_baidu", project_id="kunming_niu")
+
+    config = {
+        "baidu": {"credential_profile": "kunming_niu_baidu"},
+        "project_id": "kunming_niu", "project_name": "昆明牛",
+    }
+
+    fake_page = MagicMock()
+    fake_page.url = "https://www2.baidu.com/"
+    fake_page.locator("body").inner_text.return_value = "百度推广 首页 数据报告"
+    fake_page.goto.return_value = None
+
+    logger = logging.getLogger("test")
+    logout_calls = []
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda page: None)
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda root, config: None)
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True})
+
+    result = ensure_baidu_profile_session(
+        tmp_path, config, fake_page, logger,
+        input_func=lambda _: "", output_func=lambda _: None,
+    )
+    assert result is True
+    assert len(logout_calls) == 0, "last_profile 一致且无法识别用户名时不应强制退出"
+
+
+def test_username_mismatch_forces_logout_even_if_last_profile_matches(tmp_path, monkeypatch):
+    """detected_user != expected_user 时，即使 last_profile == profile，也必须退出重登。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session, mark_browser_login_success
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    # last_profile 已设为当前 profile
+    mark_browser_login_success(tmp_path, "kunming_niu_baidu", project_id="kunming_niu")
+
+    config = {
+        "baidu": {"credential_profile": "kunming_niu_baidu"},
+        "project_id": "kunming_niu", "project_name": "昆明牛",
+    }
+    fake_page = MagicMock()
+    fake_page.url = "https://www2.baidu.com/"
+    fake_page.goto.return_value = None
+    fake_page.locator("body").inner_text.return_value = "欢迎，other_user"
+    logger = logging.getLogger("test")
+
+    logout_calls = []
+    login_calls = []
+
+    # entry page 成功
+    monkeypatch.setattr("modules.baidu_session.ensure_baidu_entry_page",
+                        lambda page: {"success": True})
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username",
+                        lambda root, config: "expected_user")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username",
+                        lambda page: "other_user")
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True, "message": "ok"})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed",
+                        lambda page, root, config, logger: login_calls.append(1) or True)
+
+    result = ensure_baidu_profile_session(
+        tmp_path, config, fake_page, logger,
+        input_func=lambda _: "", output_func=lambda _: None,
+    )
+    assert result is True
+    assert len(logout_calls) >= 1, (
+        "detected_user != expected_user 时，即使 last_profile 一致也必须退出"
+    )
+    assert len(login_calls) >= 1, "退出后应重新登录"
+
+
+def test_entry_page_failure_returns_false_without_logout(tmp_path, monkeypatch):
+    """入口页导航失败时返回 False，不调用 logout/login，不写 login_state。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session, load_browser_login_state
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    state_path = tmp_path / "reports" / "browser_login_state.json"
+
+    config = {
+        "baidu": {"credential_profile": "kunming_niu_baidu"},
+        "project_id": "kunming_niu",
+    }
+    fake_page = MagicMock()
+    logger = logging.getLogger("test")
+
+    logout_calls = []
+    login_calls = []
+
+    monkeypatch.setattr("modules.baidu_session.ensure_baidu_entry_page",
+                        lambda page: {"success": False, "message": "连接超时"})
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed",
+                        lambda page, root, config, logger: login_calls.append(1) or True)
+
+    result = ensure_baidu_profile_session(
+        tmp_path, config, fake_page, logger,
+        input_func=lambda _: "", output_func=lambda _: None,
+    )
+    assert result is False, "入口页导航失败应返回 False"
+    assert len(logout_calls) == 0, "不应调用 logout"
+    assert len(login_calls) == 0, "不应调用 login"
+    # 不应写入 login_state
+    state = load_browser_login_state(tmp_path)
+    assert state.get("last_profile") is None, "入口页失败不应写 login_state"
+
+
+def test_parse_kst_export_default_output_no_report_path(capsys):
+    """parse-kst-export 模式默认不输出 reports 路径。"""
+    # 只验证 main.py 源码中对应模式不使用 print_success 包裹长路径
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "main.py").read_text(encoding="utf-8")
+    # 确认 parse-kst-export 模式已改用"商务通数据解析完成"而非路径
+    assert "商务通数据解析完成" in source
+    # confirm old path output no longer present
+    assert 'print_success(f"快商通导出解析完成：{result' not in source
+
+
+def test_parse_kst_daily_default_output_no_report_path(capsys):
+    """parse-kst-daily 模式默认不输出 reports 路径。"""
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "main.py").read_text(encoding="utf-8")
+    assert "商务通日报数据解析完成" in source
+    assert 'print_success(f"商务通日报导出解析完成：{result' not in source

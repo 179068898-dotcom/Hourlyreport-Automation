@@ -251,9 +251,11 @@ def main() -> None:
             "通过" if result["parse_report"].get("passed") else "失败",
         )
         if result["parse_report"].get("passed"):
-            print_success(f"快商通导出解析完成：{result['outputs']['dialog_data']}")
+            print_success("商务通数据解析完成")
+            verbose_print(f"报告：{result['outputs']['dialog_data']}")
         else:
-            print_error(f"快商通导出解析失败，已输出报告：{result['outputs']['parse_report']}")
+            print_error("商务通数据解析失败")
+            verbose_print(f"报告：{result['outputs']['parse_report']}")
         return
     if args.mode == "parse-kst-daily":
         export_file = Path(args.file) if args.file else find_latest_kst_export(ROOT, config)
@@ -273,9 +275,11 @@ def main() -> None:
             "通过" if result["parse_report"].get("passed") else "失败",
         )
         if result["parse_report"].get("passed"):
-            print_success(f"商务通日报导出解析完成：{result['outputs']['daily_data']}")
+            print_success("商务通日报数据解析完成")
+            verbose_print(f"报告：{result['outputs']['daily_data']}")
         else:
-            print_error(f"商务通日报导出解析失败，已输出报告：{result['outputs']['parse_report']}")
+            print_error("商务通日报数据解析失败")
+            verbose_print(f"报告：{result['outputs']['parse_report']}")
         return
     if args.mode == "merge-data":
         result = merge_data_files(config=config, root=ROOT, logger=logger, period=args.period)
