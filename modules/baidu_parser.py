@@ -120,12 +120,20 @@ def _parse_baidu_metrics(row: dict[str, Any]) -> dict[str, int | float | None]:
 
 
 def _is_zero_baidu_metrics(metrics: dict[str, int | float | None]) -> bool:
-    """展现=0 且 点击=0 且 消费=0。"""
-    return (
-        (metrics.get("展现") or 0) == 0
-        and (metrics.get("点击") or 0) == 0
-        and (metrics.get("消费") or 0) == 0
-    )
+    """展现=0 且 点击=0 且 消费=0。
+
+    三个字段都必须存在、为数字、且等于 0 才返回 True。
+    任一字段缺失/None/非数字 → False。
+    """
+    for field in ("展现", "点击", "消费"):
+        value = metrics.get(field)
+        if value is None:
+            return False
+        if not isinstance(value, int | float):
+            return False
+        if value != 0:
+            return False
+    return True
 
 
 def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
