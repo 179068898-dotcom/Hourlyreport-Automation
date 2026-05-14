@@ -3511,3 +3511,42 @@ def test_internal_build_validates_all_complete(tmp_path):
 
     errors = _validate_internal_secrets(tmp_path)
     assert errors == []
+
+
+# ── 夏思道说明文件测试 ────────────────────────────────────
+
+
+def test_xia_sidao_readme_exists():
+    """xia_sidao使用说明.md 存在。"""
+    root = Path(__file__).resolve().parents[1]
+    path = root / "xia_sidao使用说明.md"
+    assert path.exists(), "xia_sidao使用说明.md 不存在"
+    content = path.read_text(encoding="utf-8")
+    assert "执行命令" in content
+    assert "run_menu.bat" in content
+    assert "参数表" in content
+    assert "验证标准" in content
+    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛"]:
+        assert name in content, f"缺少项目：{name}"
+
+
+def test_regular_build_includes_xia_sidao_readme():
+    """普通包包含 xia_sidao使用说明.md。"""
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="0.4.16")
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "xia_sidao使用说明.md" in names
+
+
+def test_internal_build_includes_xia_sidao_readme():
+    """内部包包含 xia_sidao使用说明.md。"""
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="0.4.16", internal=True)
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "xia_sidao使用说明.md" in names
