@@ -11,7 +11,7 @@ EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".
 RUNTIME_KEEP_DIRS = {"reports", "logs", "backups", "kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak"}
 EXCLUDE_FILES = {"config.json", "credentials.local.json"}
-EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json"}
+EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json", "unknown_baidu_accounts.json"}
 
 REQUIRED_INTERNAL_PROFILES = [
     "kunming_niu_baidu",

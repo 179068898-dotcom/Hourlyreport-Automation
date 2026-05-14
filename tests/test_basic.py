@@ -4073,3 +4073,97 @@ def test_hourly_calls_ensure_session(monkeypatch):
     root = Path(__file__).resolve().parents[1]
     source = (root / "modules" / "baidu_overview.py").read_text(encoding="utf-8")
     assert "ensure_baidu_profile_session" in source, "baidu_overview.py 应调用 ensure_baidu_profile_session"
+
+
+# ── 未知百度账户报告测试 ──────────────────────────────────
+
+
+def test_build_unknown_report_structure():
+    """build_unknown_baidu_accounts_report 生成完整结构。"""
+    from modules.baidu_unknown_accounts import build_unknown_baidu_accounts_report
+
+    config = {"project_id": "kunming_niu", "project_name": "昆明牛"}
+    parsed = {
+        "unknown_accounts": [
+            {"account_name": "未知A", "展现": 100, "点击": 10, "消费": 50.5,
+             "reason": "百度后台抓到该账户，但当前项目配置 accounts 中未配置"},
+        ]
+    }
+
+    report = build_unknown_baidu_accounts_report(
+        config, parsed, task="hourly", date="2026-05-14", period="15点",
+    )
+
+    assert report["date"] == "2026-05-14"
+    assert report["task"] == "hourly"
+    assert report["period"] == "15点"
+    assert report["project_id"] == "kunming_niu"
+    assert report["project_name"] == "昆明牛"
+    assert len(report["unknown_accounts"]) == 1
+    assert report["unknown_accounts"][0]["account_name"] == "未知A"
+    assert "suggestion" in report["unknown_accounts"][0]
+
+
+def test_write_unknown_report_when_empty(tmp_path):
+    """unknown_accounts 为空时不写文件。"""
+    from modules.baidu_unknown_accounts import write_unknown_baidu_accounts_report
+
+    report = {"unknown_accounts": []}
+    result = write_unknown_baidu_accounts_report(tmp_path, report)
+    assert result is None
+
+
+def test_write_unknown_report_when_non_empty(tmp_path):
+    """unknown_accounts 非空时写入文件。"""
+    from modules.baidu_unknown_accounts import write_unknown_baidu_accounts_report
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    report = {
+        "unknown_accounts": [
+            {"account_name": "未知A", "展现": 100, "点击": 10, "消费": 50},
+        ]
+    }
+    result = write_unknown_baidu_accounts_report(tmp_path, report)
+    assert result is not None
+    assert (tmp_path / "reports" / "unknown_baidu_accounts.json").exists()
+
+
+def test_build_unknown_report_includes_suggestion():
+    """unknown report 每项包含 suggestion 字段。"""
+    from modules.baidu_unknown_accounts import build_unknown_baidu_accounts_report
+
+    config = {"project_id": "test_proj"}
+    parsed = {"unknown_accounts": [{"account_name": "X", "展现": 1, "点击": 0, "消费": 0}]}
+
+    report = build_unknown_baidu_accounts_report(config, parsed, task="daily")
+    assert "suggestion" in report["unknown_accounts"][0]
+    assert "configs/projects" in report["unknown_accounts"][0]["suggestion"]
+
+
+def test_auto_report_includes_unknown_accounts():
+    """baidu_auto.py 报告结构包含 unknown_accounts 和 ignored_unknown_accounts。"""
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "modules" / "baidu_auto.py").read_text(encoding="utf-8")
+    assert '"unknown_accounts"' in source
+    assert '"ignored_unknown_accounts"' in source
+    assert "unknown_baidu_accounts_report" in source
+
+
+def test_daily_report_includes_unknown_accounts():
+    """baidu_daily.py 报告结构包含 unknown_accounts 和 ignored_unknown_accounts。"""
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "modules" / "baidu_daily.py").read_text(encoding="utf-8")
+    assert '"unknown_accounts"' in source
+    assert '"ignored_unknown_accounts"' in source
+    assert "unknown_baidu_accounts_report" in source
+
+
+def test_build_release_excludes_unknown_accounts_json():
+    """build_release 不包含 reports/unknown_baidu_accounts.json。"""
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="0.4.17")
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "reports/unknown_baidu_accounts.json" not in names

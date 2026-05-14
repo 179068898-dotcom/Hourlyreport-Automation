@@ -42,6 +42,8 @@ def build_baidu_auto_report_from_visible_text(
         "parse_source": "visible_text",
         "text_table_row_count": len(rows),
         "accounts": parsed.get("accounts", {}),
+        "unknown_accounts": parsed.get("unknown_accounts", []),
+        "ignored_unknown_accounts": parsed.get("ignored_unknown_accounts", []),
         "exceptions": parsed.get("exceptions", []),
         "errors": parsed.get("errors", []),
         "self_check": {
@@ -128,6 +130,17 @@ def fetch_baidu_auto(
     }
     if candidate_path.exists() and report.get("errors"):
         report["exceptions"].append({"type": "table_candidates", "path": str(candidate_path)})
+
+    # 写入未知百度账户报告
+    from modules.baidu_unknown_accounts import build_unknown_baidu_accounts_report, write_unknown_baidu_accounts_report
+    unknown_report = build_unknown_baidu_accounts_report(
+        config, report, task="hourly",
+        date=report.get("date"), period=report.get("period"),
+    )
+    unknown_path = write_unknown_baidu_accounts_report(root, unknown_report)
+    if unknown_path:
+        report["unknown_accounts_report"] = unknown_path
+
     _write_json(output_path, report)
     validate_report = validate_baidu_account_data(output_path, validate_path, get_required_accounts(config))
     logger.info(
