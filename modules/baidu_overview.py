@@ -431,6 +431,13 @@ def baidu_open_overview(
             classification = classify_baidu_page(page.url, visible_text)
             report["login_status"] = classification["login_status"]
 
+        # 百度登录状态守卫：确保当前浏览器登录的是本项目账号
+        from modules.baidu_session import ensure_baidu_profile_session
+        if not ensure_baidu_profile_session(root, config, page, logger, task="fetch-baidu-auto",
+                                            input_func=input_func):
+            report["errors"].append("百度账号切换未完成或用户取消")
+            return finish(page)
+
         if is_search_promotion_overview(classification):
             visible_text = _refresh_report_and_wait_for_data(page, config, logger)
             classification = classify_baidu_page(page.url, visible_text)

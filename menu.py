@@ -363,20 +363,9 @@ def run_menu(
 
         config = build_runtime_config(project, base_config)
 
-        # 检查浏览器登录状态是否需要切换账号
-        profile = project.get("baidu", {}).get("credential_profile", "")
-        if profile:
-            from modules.browser_login_state import check_profile_match, save_login_state
-            matched, last_profile = check_profile_match(root, profile)
-            if not matched:
-                print_warning("当前浏览器可能仍登录其他项目账号，正在切换到当前项目账号")
-                if last_profile:
-                    output_func(f"  上次登录：{last_profile}")
-                output_func(f"  当前项目：{profile}")
-                output_func("  请在 Chrome 中手动退出当前百度账号后按回车继续，或直接按回车跳过。")
-                input_func("  > ")
-            # 执行后记录本次 profile
-            save_login_state(root, profile)
+        # 百度登录状态守卫：现在由 baidu_session.ensure_baidu_profile_session
+        # 在 fetch_baidu_auto / fetch_baidu_daily 内部处理，
+        # 菜单层不再提前写入 login_state。
 
         if not _check_chrome_debug(root, config, output_func):
             print_warning("Chrome 调试端口未就绪，将跳过百度抓数，仅执行后续步骤（如有快商通文件仍可解析写入）。")

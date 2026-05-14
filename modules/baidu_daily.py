@@ -249,6 +249,15 @@ def fetch_baidu_daily(
             return report
         page.bring_to_front()
         _goto_report_page(page, logger)
+
+        # 百度登录状态守卫：确保当前浏览器登录的是本项目账号
+        from modules.baidu_session import ensure_baidu_profile_session
+        if not ensure_baidu_profile_session(root, config, page, logger, task="run-daily"):
+            report["errors"].append("百度账号切换未完成或用户取消")
+            report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            _write_json(output_path, report)
+            return report
+
         visible_text = _read_page_text(page)
         if "login" in page.url or "cas.baidu.com" in page.url or "qingge.baidu.com" in page.url:
             if not _auto_login_if_needed(page, root, config, logger):
