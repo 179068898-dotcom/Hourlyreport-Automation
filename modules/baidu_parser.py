@@ -119,6 +119,11 @@ def _parse_baidu_metrics(row: dict[str, Any]) -> dict[str, int | float | None]:
     return metrics
 
 
+def is_baidu_total_row(account_name: Any) -> bool:
+    """判断是否是百度表格汇总行（总计-N）。"""
+    return bool(account_name and re.match(r'^总计-\d+$', str(account_name)))
+
+
 def _is_zero_baidu_metrics(metrics: dict[str, int | float | None]) -> bool:
     """展现=0 且 点击=0 且 消费=0。
 
@@ -148,6 +153,9 @@ def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dic
 
     for idx, row in enumerate(rows, start=1):
         raw_account = _pick_value(row, ACCOUNT_KEYS)
+        # 跳过汇总行
+        if is_baidu_total_row(raw_account):
+            continue
         standard_account = _map_account(raw_account, account_map)
         if not standard_account:
             metrics = _parse_baidu_metrics(row)

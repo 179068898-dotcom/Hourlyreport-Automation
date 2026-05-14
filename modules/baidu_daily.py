@@ -178,8 +178,9 @@ def _wait_report_data_without_refresh(page, config: dict[str, Any], logger) -> s
     return last_text
 
 
-def _ensure_search_promotion_before_daily_date(page, config: dict[str, Any], logger) -> tuple[bool, str]:
-    _goto_report_page(page, logger)
+def _ensure_search_promotion_before_daily_date(page, config: dict[str, Any], logger, root=None) -> tuple[bool, str]:
+    if not _goto_report_page(page, logger, root=root, config=config):
+        return False, ""
     visible_text = _read_page_text(page)
     classification = classify_baidu_page(page.url, visible_text)
     if is_search_promotion_overview(classification):
@@ -250,7 +251,11 @@ def fetch_baidu_daily(
             _write_json(output_path, report)
             return report
         page.bring_to_front()
-        _goto_report_page(page, logger)
+        if not _goto_report_page(page, logger, root=root, config=config):
+            report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
+            report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            _write_json(output_path, report)
+            return report
 
         # 百度登录状态守卫：确保当前浏览器登录的是本项目账号
         from modules.baidu_session import ensure_baidu_profile_session
@@ -268,11 +273,19 @@ def fetch_baidu_daily(
                 report["finished_at"] = datetime.now().isoformat(timespec="seconds")
                 _write_json(output_path, report)
                 return report
-            _goto_report_page(page, logger)
+            if not _goto_report_page(page, logger, root=root, config=config):
+                report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
+                report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+                _write_json(output_path, report)
+                return report
 
         if not page.url.rstrip("/").startswith(CC_REPORT_URL):
-            _goto_report_page(page, logger)
-        ready_for_date, visible_text = _ensure_search_promotion_before_daily_date(page, config, logger)
+            if not _goto_report_page(page, logger, root=root, config=config):
+                report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
+                report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+                _write_json(output_path, report)
+                return report
+        ready_for_date, visible_text = _ensure_search_promotion_before_daily_date(page, config, logger, root=root)
         if not ready_for_date:
             report["errors"].append("百度日报未能进入搜索推广数据页，已中断日期筛选和抓数")
             _write_text(text_path, visible_text)

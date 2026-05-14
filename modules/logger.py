@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from pathlib import Path
 
 
@@ -24,7 +25,13 @@ def setup_logger(log_path: Path) -> logging.Logger:
     stream_handler.setLevel(logging.WARNING)
     logger.addHandler(stream_handler)
 
-    # 抑制 openpyxl 默认样式 warning
+    # 抑制 openpyxl 日志
     logging.getLogger("openpyxl").setLevel(logging.ERROR)
+
+    # 抑制 openpyxl 默认样式 warning（warnings 模块层面）
+    warnings.filterwarnings(
+        "ignore",
+        message="Workbook contains no default style, apply openpyxl's default",
+    )
 
     return logger

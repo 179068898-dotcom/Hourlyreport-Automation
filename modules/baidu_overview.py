@@ -307,12 +307,53 @@ def _select_backend_page(context, current_page, logger):
     return current_page
 
 
-def _goto_report_page(page, logger) -> None:
-    if page.url.rstrip("/").startswith(CC_REPORT_URL):
-        return
-    logger.info("直接打开百度数据报告页：%s", CC_REPORT_URL)
-    page.goto(CC_REPORT_URL, wait_until="domcontentloaded", timeout=60000)
-    _safe_wait_after_click(page, logger)
+def _goto_report_page(page, logger, root=None, config=None) -> bool:
+    """打开百度数据报告页。noauth 时触发重登重试一次。
+
+    report URL 下也可能展示 noauth，必须先检查再决定是否返回。
+    """
+    already_there = page.url.rstrip("/").startswith(CC_REPORT_URL)
+    if already_there:
+        # report URL 下也可能是 noauth → 先检查
+        from modules.baidu_session import is_baidu_noauth_page
+        if not is_baidu_noauth_page(page):
+            return True
+
+    if not already_there:
+        logger.info("直接打开百度数据报告页：%s", CC_REPORT_URL)
+        goto_ok = True
+        try:
+            page.goto(CC_REPORT_URL, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            logger.error("进入百度报告页异常")
+            goto_ok = False
+        _safe_wait_after_click(page, logger)
+    else:
+        goto_ok = False  # 已在 report URL 但是 noauth
+
+    from modules.baidu_session import is_baidu_noauth_page, force_relogin_current_project
+
+    # noauth 处理：当前账号无权限 → 重登后重试一次
+    if is_baidu_noauth_page(page) and root is not None and config is not None:
+        logger.info("检测到 noauth 页，触发强制重登")
+        if force_relogin_current_project(root, config, page, logger):
+            try:
+                page.goto(CC_REPORT_URL, wait_until="domcontentloaded", timeout=60000)
+                _safe_wait_after_click(page, logger)
+                if is_baidu_noauth_page(page):
+                    logger.error("重登后仍为 noauth 页")
+                    return False
+                return True
+            except Exception:
+                logger.error("重登后进入报告页异常")
+                return False
+        return False
+
+    # 非 noauth 但 goto 失败 → 不能静默通过
+    if not goto_ok and not already_there:
+        return False
+
+    return False  # already_there + noauth + no root/config to handle
 
 
 def _refresh_report_and_wait_for_data(page, config: dict[str, Any], logger) -> str:
@@ -446,7 +487,9 @@ def baidu_open_overview(
             report["final_page_type"] = classification["page_type"]
             return finish(page)
 
-        _goto_report_page(page, logger)
+        if not _goto_report_page(page, logger, root=root, config=config):
+            report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
+            return finish(page)
         report["clicked_steps"].append({"step": "打开数据报告页", "clicked_text": CC_REPORT_URL})
         visible_text = _refresh_report_and_wait_for_data(page, config, logger)
         classification = classify_baidu_page(page.url, visible_text)
@@ -455,7 +498,9 @@ def baidu_open_overview(
             if not _auto_login_if_needed(page, root, config, logger):
                 report["errors"].append(build_login_failure_message(config))
                 return finish(page)
-            _goto_report_page(page, logger)
+            if not _goto_report_page(page, logger, root=root, config=config):
+                report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
+                return finish(page)
             visible_text = _refresh_report_and_wait_for_data(page, config, logger)
             classification = classify_baidu_page(page.url, visible_text)
             report["login_status"] = classification["login_status"]

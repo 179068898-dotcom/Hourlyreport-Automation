@@ -277,6 +277,62 @@ def _do_login_flow(root, config, page, logger, project_id, project_name, task, o
     return True
 
 
+# ── noauth 检测 ───────────────────────────────────────────
+
+def is_baidu_noauth_page(page) -> bool:
+    """判断当前页面是否是百度无权限页。"""
+    if page is None:
+        return False
+    try:
+        url = page.url or ""
+        if "noauth" in url.lower():
+            return True
+        text = _safe_text(page)
+        if any(kw in text for kw in ["无权限", "暂无权限", "没有权限", "noauth"]):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+# ── 强制退出重登（noauth 用） ─────────────────────────────
+
+def force_relogin_current_project(
+    root: Path, config: dict[str, Any], page, logger,
+    task: str | None = None,
+    input_func: Any = None, output_func: Any = None,
+) -> bool:
+    """不考虑 browser_login_state，直接退出当前账号并登录当前项目。
+
+    用于 noauth / 明确账号不匹配场景。
+    """
+    import builtins
+    if input_func is None:
+        input_func = builtins.input
+    if output_func is None:
+        output_func = builtins.print
+
+    profile = get_current_project_credential_profile(config)
+    if not profile:
+        return False
+
+    project_id = config.get("project_id", "")
+    project_name = config.get("project_name", "")
+
+    output_func("  [注意] 当前百度账号无当前项目权限，正在重新登录当前项目账号")
+    logger.info("noauth 场景触发强制重登")
+
+    if not _do_logout_flow(page, output_func, input_func, logger):
+        return False
+
+    if _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func):
+        output_func("  [通过] 百度账号已切换，重新进入报告页")
+        return True
+
+    output_func("  [失败] 当前百度账号可能无项目报告权限，请检查项目配置或百度账号权限")
+    return False
+
+
 # ── Profile 一致性守卫（主入口） ──────────────────────────
 
 def ensure_baidu_profile_session(

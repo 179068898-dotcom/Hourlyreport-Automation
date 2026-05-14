@@ -4649,3 +4649,155 @@ def test_parse_kst_daily_default_output_no_report_path(capsys):
     source = (root / "main.py").read_text(encoding="utf-8")
     assert "商务通日报数据解析完成" in source
     assert 'print_success(f"商务通日报导出解析完成：{result' not in source
+
+
+# ── 总计-N + openpyxl + noauth 热修测试 ───────────────────
+
+
+def test_total_row_not_in_unknown_accounts():
+    """总计-3 不进入 unknown_accounts。"""
+    config = {"accounts": {"银康01": {"baidu_name": "银康01"}}}
+    rows = [
+        {"账户": "总计-3", "展现": "2795", "点击": "239", "消费": "1235.5"},
+        {"账户": "银康01", "展现": "100", "点击": "10", "消费": "50"},
+    ]
+    parsed = parse_baidu_table(rows, config)
+    assert len(parsed["unknown_accounts"]) == 0
+    assert len(parsed["ignored_unknown_accounts"]) == 0
+    assert "银康01" in parsed["accounts"]
+
+
+def test_total_row_variants_skipped():
+    """总计-4 / 总计-5 等变体也被跳过。"""
+    from modules.baidu_parser import is_baidu_total_row
+    assert is_baidu_total_row("总计-3") is True
+    assert is_baidu_total_row("总计-99") is True
+    assert is_baidu_total_row("银康01") is False
+    assert is_baidu_total_row("") is False
+    assert is_baidu_total_row(None) is False
+
+
+def test_total_row_extraction_still_works():
+    """总计-N 仍可用于 visible_text 定位表格。"""
+    text = """
+账户
+账户ID
+展现
+点击
+消费
+总计-3
+银康01
+72828178
+100
+10
+50
+"""
+    rows = extract_baidu_rows_from_visible_text(text)
+    assert len(rows) >= 1
+
+
+def test_is_baidu_noauth_page_detects_noauth():
+    """is_baidu_noauth_page 能检测 noauth URL。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import is_baidu_noauth_page
+
+    fake_page = MagicMock()
+    fake_page.url = "https://www2.baidu.com/noauth.html"
+    assert is_baidu_noauth_page(fake_page) is True
+
+    fake_page.url = "https://cc.baidu.com/report"
+    assert is_baidu_noauth_page(fake_page) is False
+
+
+def test_force_relogin_triggers_logout_and_login(tmp_path, monkeypatch):
+    """force_relogin_current_project 触发退出+登录。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import force_relogin_current_project
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {
+        "baidu": {"credential_profile": "kunming_niu_baidu"},
+        "project_id": "kunming_niu", "project_name": "昆明牛",
+    }
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    logger = logging.getLogger("test")
+
+    logout_calls = []
+    login_calls = []
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed",
+                        lambda page, root, config, logger: login_calls.append(1) or True)
+
+    result = force_relogin_current_project(
+        tmp_path, config, fake_page, logger,
+        input_func=lambda _: "", output_func=lambda _: None,
+    )
+    assert result is True
+    assert len(logout_calls) >= 1
+    assert len(login_calls) >= 1
+
+
+def test_goto_report_noauth_on_report_url_triggers_relogin(monkeypatch):
+    """report URL 下检测到 noauth → 触发退出重登，重试成功。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_overview import _goto_report_page
+    import logging
+    logger = logging.getLogger("test")
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    fake_page.locator("body").inner_text.return_value = "无权限"
+
+    logout_calls = []
+    # 模拟：第一次检测到 noauth（重登前），重登+goto 后不再 noauth
+    noauth_responses = [True, True, False]
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page",
+                        lambda page: noauth_responses.pop(0) if noauth_responses else False)
+    monkeypatch.setattr("modules.baidu_session.force_relogin_current_project",
+                        lambda root, config, page, logger, **kw: (logout_calls.append(1) or True))
+
+    result = _goto_report_page(fake_page, logger, root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
+    assert result is True, "重登成功应返回 True"
+    assert len(logout_calls) >= 1, "应触发退出重登"
+
+
+def test_goto_report_noauth_still_fails_after_relogin(monkeypatch):
+    """report URL 下 noauth 重登后仍 noauth → 返回 False。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_overview import _goto_report_page
+    import logging
+    logger = logging.getLogger("test")
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    fake_page.locator("body").inner_text.return_value = "无权限"
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.force_relogin_current_project",
+                        lambda root, config, page, logger, **kw: True)
+
+    result = _goto_report_page(fake_page, logger, root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
+    assert result is False, "重登后仍 noauth 应返回 False"
+
+
+def test_logger_error_no_playwright_call_log(capsys):
+    """默认终端不输出 Playwright call log。"""
+    import logging
+    logger = logging.getLogger("test_plog")
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    import sys
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.WARNING)
+    logger.addHandler(handler)
+
+    logger.error("进入百度报告页异常")
+    captured = capsys.readouterr()
+    assert "Call log:" not in captured.err, "默认不应有 Playwright call log"
+    assert "navigating to" not in captured.err
+
+    logger.handlers.clear()
