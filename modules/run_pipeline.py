@@ -239,6 +239,11 @@ def run_half_auto_pipeline(
     report["baidu_source_ok"] = True
     report["date"] = baidu_report.get("date")
     print_step_success("百度搜索推广数据已读取")
+
+    # 未知百度账户提醒
+    from modules.baidu_unknown_accounts import print_unknown_baidu_accounts_notice
+    print_unknown_baidu_accounts_notice(baidu_report)
+
     logger.info("一键流步骤完成：fetch-baidu-auto")
 
     print_step(2, 4, "解析快商通导出文件")
@@ -421,6 +426,11 @@ def run_daily_pipeline(
     report["baidu_source_ok"] = True
     report["date"] = baidu_report.get("date") or daily_date
     print_step_success("百度日报数据已读取")
+
+    # 未知百度账户提醒
+    from modules.baidu_unknown_accounts import print_unknown_baidu_accounts_notice
+    print_unknown_baidu_accounts_notice(baidu_report)
+
     logger.info("日报一键流步骤完成：fetch-baidu-daily")
 
     print_step(2, 4, "解析商务通日报导出文件")

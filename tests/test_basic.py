@@ -4167,3 +4167,128 @@ def test_build_release_excludes_unknown_accounts_json():
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
     assert "reports/unknown_baidu_accounts.json" not in names
+
+
+# ── 未知账户终端提醒测试 ──────────────────────────────────
+
+
+def test_has_unknown_accounts_detects_presence():
+    """has_unknown_baidu_accounts 正确判断未知账户有无。"""
+    from modules.baidu_unknown_accounts import has_unknown_baidu_accounts
+
+    assert has_unknown_baidu_accounts({"unknown_accounts": [{"account_name": "X"}]}) is True
+    assert has_unknown_baidu_accounts({"unknown_accounts": []}) is False
+    assert has_unknown_baidu_accounts({}) is False
+
+
+def test_format_notice_includes_metrics():
+    """提醒行包含账户名、展现、点击、消费。"""
+    from modules.baidu_unknown_accounts import format_unknown_baidu_accounts_notice
+
+    report = {
+        "unknown_accounts": [
+            {"account_name": "未知A", "展现": 100, "点击": 10, "消费": 50.5},
+        ]
+    }
+    lines = format_unknown_baidu_accounts_notice(report)
+    text = " ".join(lines)
+    assert "未知A" in text
+    assert "100" in text
+    assert "10" in text
+    assert "50.5" in text
+    assert "已单独隔离" in text
+    assert "不影响本次写入" in text
+
+
+def test_format_notice_no_report_path():
+    """默认提醒不包含 unknown_baidu_accounts.json 路径。"""
+    from modules.baidu_unknown_accounts import format_unknown_baidu_accounts_notice
+
+    report = {
+        "unknown_accounts": [{"account_name": "X", "展现": 1, "点击": 0, "消费": 0}],
+        "unknown_accounts_report": "reports/unknown_baidu_accounts.json",
+    }
+    lines = format_unknown_baidu_accounts_notice(report)
+    text = " ".join(lines)
+    assert "unknown_baidu_accounts.json" not in text
+
+
+def test_format_notice_empty_returns_empty():
+    """unknown_accounts 为空时 format_notice 返回空列表。"""
+    from modules.baidu_unknown_accounts import format_unknown_baidu_accounts_notice
+
+    assert format_unknown_baidu_accounts_notice({"unknown_accounts": []}) == []
+
+
+def test_ignored_unknown_does_not_trigger_notice():
+    """ignored_unknown_accounts 非空但 unknown_accounts 为空时不触发提醒。"""
+    from modules.baidu_unknown_accounts import has_unknown_baidu_accounts, format_unknown_baidu_accounts_notice
+
+    report = {
+        "unknown_accounts": [],
+        "ignored_unknown_accounts": [{"account_name": "零账户", "展现": 0, "点击": 0, "消费": 0}],
+    }
+    assert has_unknown_baidu_accounts(report) is False
+    assert format_unknown_baidu_accounts_notice(report) == []
+
+
+def test_run_pipeline_continues_after_unknown_notice(tmp_path):
+    """未知账户提醒不阻断 pipeline 后续步骤。"""
+    import logging
+
+    kst_file = tmp_path / "kst.xlsx"
+    kst_file.write_text("placeholder", encoding="utf-8")
+    excel_file = tmp_path / "target.xlsx"
+    excel_file.write_text("placeholder", encoding="utf-8")
+
+    def ok_baidu(**kwargs):
+        return {
+            "date": "2026-05-07", "period": "15",
+            "accounts": {
+                "银康01": {"展现": 1, "点击": 1, "消费": 1.0},
+                "银康银屑02": {"展现": 2, "点击": 2, "消费": 2.0},
+                "银康03": {"展现": 3, "点击": 3, "消费": 3.0},
+            },
+            "unknown_accounts": [{"account_name": "未知A", "展现": 100, "点击": 10, "消费": 50}],
+            "errors": [],
+        }
+
+    def ok_kst(export_file, config, root, period):
+        return {"parse_report": {"passed": True, "errors": []}, "outputs": {}}
+
+    def ok_merge(**kwargs):
+        return {"merged": {"date": "2026-05-07", "period": "15点"}, "validate_report": {"passed": True, "errors": []}, "outputs": {}}
+
+    def ok_write(**kwargs):
+        return {
+            "date": "2026-05-07", "period": "15点", "excel_path": str(excel_file),
+            "writes": [{"cell": "P5"}], "self_check": {"verification_passed": True}, "errors": [],
+        }
+
+    report = run_half_auto_pipeline(
+        config={"excel_path": str(excel_file)},
+        root=tmp_path, logger=logging.getLogger("test"),
+        period="15点", kst_file=kst_file, assume_yes=True,
+        fetch_baidu_func=ok_baidu, parse_kst_func=ok_kst,
+        merge_func=ok_merge, write_func=ok_write,
+    )
+    # pipeline 应成功完成，不因未知账户中断
+    assert report["passed"] is True
+    assert report["failed_step"] is None
+
+
+def test_verbose_shows_report_path(capsys):
+    """verbose 模式显示 unknown_baidu_accounts.json 路径。"""
+    from modules.baidu_unknown_accounts import print_unknown_baidu_accounts_notice
+    from modules.console_ui import set_verbose
+
+    set_verbose(True)
+    report = {
+        "unknown_accounts": [{"account_name": "X", "展现": 1, "点击": 0, "消费": 0}],
+        "unknown_accounts_report": "reports/unknown_baidu_accounts.json",
+    }
+    print_unknown_baidu_accounts_notice(report)
+
+    captured = capsys.readouterr()
+    assert "unknown_baidu_accounts.json" in captured.out
+    set_verbose(False)

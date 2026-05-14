@@ -3,7 +3,7 @@
 负责把 parse_baidu_table 返回的 unknown_accounts 结构化保存到
 reports/unknown_baidu_accounts.json。
 
-本模块只写文件，不打印终端提醒。
+同时提供终端简洁提醒函数，不阻断主流程。
 """
 
 from __future__ import annotations
@@ -63,3 +63,44 @@ def write_unknown_baidu_accounts_report(root: str | Path, report: dict[str, Any]
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(out_path)
+
+
+# ── 终端提醒 ──────────────────────────────────────────────
+
+def has_unknown_baidu_accounts(baidu_report: dict[str, Any]) -> bool:
+    """百度报告中是否存在有数据的未知账户。"""
+    unknown = baidu_report.get("unknown_accounts", []) or []
+    return len(unknown) > 0
+
+
+def format_unknown_baidu_accounts_notice(baidu_report: dict[str, Any]) -> list[str]:
+    """生成终端简洁提醒行列表。"""
+    unknown = baidu_report.get("unknown_accounts", []) or []
+    if not unknown:
+        return []
+
+    lines = ["发现未配置百度账户，已单独隔离，不影响本次写入"]
+    for item in unknown:
+        name = item.get("account_name", "?")
+        imp = item.get("展现", 0) or 0
+        click = item.get("点击", 0) or 0
+        cost = item.get("消费", 0) or 0
+        lines.append(f"账户名：{name}，展现：{imp}，点击：{click}，消费：{cost}")
+    return lines
+
+
+def print_unknown_baidu_accounts_notice(baidu_report: dict[str, Any]) -> None:
+    """使用 console_ui 输出未知账户提醒。"""
+    lines = format_unknown_baidu_accounts_notice(baidu_report)
+    if not lines:
+        return
+
+    from modules.console_ui import print_warning, print_quiet_line, verbose_print
+
+    print_warning(lines[0])
+    for line in lines[1:]:
+        print_quiet_line(f"  {line}")
+
+    unknown_path = baidu_report.get("unknown_accounts_report")
+    if unknown_path:
+        verbose_print(f"未知账户报告已保存：{unknown_path}")
