@@ -333,6 +333,45 @@ def force_relogin_current_project(
     return False
 
 
+# ── 页面可用性判断 ────────────────────────────────────────
+
+def _page_is_usable_search_promotion(page, root, config) -> bool:
+    """当前页面是否已经是可用的搜索推广数据页。
+
+    校验：URL/report、非 noauth、搜索推广特征、当前账号匹配。
+    """
+    if page is None or root is None:
+        return False
+    try:
+        from modules.baidu_detector import classify_baidu_page
+        text = _safe_text(page)
+        cls = classify_baidu_page(page.url, text)
+        if cls.get("login_status") == "not_logged_in":
+            return False
+        if not cls.get("signals", {}).get("has_search_promotion"):
+            return False
+        if "cc.baidu.com/report" not in (page.url or ""):
+            return False
+        if is_baidu_noauth_page(page):
+            return False
+
+        # 账号匹配校验
+        expected_user = get_expected_baidu_username(root, config)
+        detected_user = detect_current_baidu_username(page)
+        if detected_user and expected_user:
+            if detected_user.strip() != expected_user:
+                return False  # 明确不匹配
+            return True  # 匹配
+        # 无法识别用户名 → 参考 last_profile
+        last_profile = get_browser_login_profile(root)
+        current_profile = get_current_project_credential_profile(config)
+        if last_profile == current_profile:
+            return True
+        return False  # last_profile 不一致或为空
+    except Exception:
+        return False
+
+
 # ── Profile 一致性守卫（主入口） ──────────────────────────
 
 def ensure_baidu_profile_session(
@@ -358,13 +397,18 @@ def ensure_baidu_profile_session(
     if not profile:
         return True
 
-    # 1. 先进入百度稳定入口
+    # 1. 如果已在可用搜索推广数据页且账号匹配 → 不强制跳入口
+    if _page_is_usable_search_promotion(page, root, config):
+        logger.info("当前页面已是可用搜索推广数据页，跳过入口导航")
+        return True
+
+    # 2. 先进入百度稳定入口（仅未登录/noauth/不确定时）
     entry_result = ensure_baidu_entry_page(page)
     if not entry_result.get("success"):
         output_func(f"  [注意] 百度入口页打开失败：{entry_result.get('message', '')}")
         return False
 
-    # 2. 检测页面状态
+    # 3. 检测页面状态
     logged_in = is_baidu_logged_in(page)
     expected_user = get_expected_baidu_username(root, config)
     detected_user = detect_current_baidu_username(page)

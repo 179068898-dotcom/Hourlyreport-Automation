@@ -4740,8 +4740,19 @@ def test_force_relogin_triggers_logout_and_login(tmp_path, monkeypatch):
     assert len(login_calls) >= 1
 
 
-def test_goto_report_noauth_on_report_url_triggers_relogin(monkeypatch):
-    """report URL 下检测到 noauth → 触发退出重登，重试成功。"""
+def test_goto_report_non_noauth_passes(tmp_path):
+    """report URL 且非 noauth → _goto_report_page 直接返回 True。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_overview import _goto_report_page
+    import logging
+    logger = logging.getLogger("test")
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    assert _goto_report_page(fake_page, logger) is True
+
+
+def test_goto_report_noauth_relogin_menu_success(monkeypatch):
+    """noauth → 重登 → 菜单三步成功 → 最终验证搜索推广通过 → True。"""
     from unittest.mock import MagicMock
     from modules.baidu_overview import _goto_report_page
     import logging
@@ -4749,23 +4760,32 @@ def test_goto_report_noauth_on_report_url_triggers_relogin(monkeypatch):
 
     fake_page = MagicMock()
     fake_page.url = "https://cc.baidu.com/report"
-    fake_page.locator("body").inner_text.return_value = "无权限"
+    fake_page.locator("body").inner_text.return_value = "搜索推广"
 
     logout_calls = []
-    # 模拟：第一次检测到 noauth（重登前），重登+goto 后不再 noauth
-    noauth_responses = [True, True, False]
-    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page",
-                        lambda page: noauth_responses.pop(0) if noauth_responses else False)
+    # 动态 mock：前2次(CC_REPORT_URL检查+noauth分支条件)返回True，之后返回False
+    results = [True, False]
+    def dynamic_noauth(page):
+        return results.pop(0) if results else False
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", dynamic_noauth)
     monkeypatch.setattr("modules.baidu_session.force_relogin_current_project",
                         lambda root, config, page, logger, **kw: (logout_calls.append(1) or True))
+    monkeypatch.setattr("modules.baidu_overview._ensure_baidu_home_rendered",
+                        lambda page, config, logger: "")
+    monkeypatch.setattr("modules.baidu_overview._click_by_text_or_role",
+                        lambda page, labels, logger: "clicked")
+    monkeypatch.setattr("modules.baidu_detector.classify_baidu_page",
+                        lambda url, text: {"login_status": "logged_in", "signals": {"has_search_promotion": True}})
 
-    result = _goto_report_page(fake_page, logger, root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
-    assert result is True, "重登成功应返回 True"
-    assert len(logout_calls) >= 1, "应触发退出重登"
+    result = _goto_report_page(fake_page, logger,
+                               root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
+    assert result is True
+    assert len(logout_calls) >= 1
 
 
-def test_goto_report_noauth_still_fails_after_relogin(monkeypatch):
-    """report URL 下 noauth 重登后仍 noauth → 返回 False。"""
+def test_goto_report_menu_click_fails_returns_false(monkeypatch):
+    """菜单路径点击失败 → _goto_report_page 返回 False。"""
     from unittest.mock import MagicMock
     from modules.baidu_overview import _goto_report_page
     import logging
@@ -4773,14 +4793,80 @@ def test_goto_report_noauth_still_fails_after_relogin(monkeypatch):
 
     fake_page = MagicMock()
     fake_page.url = "https://cc.baidu.com/report"
-    fake_page.locator("body").inner_text.return_value = "无权限"
 
-    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: True)
+    # 动态 mock：前2次 True 进入 noauth 分支
+    results = [True, False]
+    def dynamic_noauth(page):
+        return results.pop(0) if results else False
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", dynamic_noauth)
     monkeypatch.setattr("modules.baidu_session.force_relogin_current_project",
                         lambda root, config, page, logger, **kw: True)
+    monkeypatch.setattr("modules.baidu_overview._ensure_baidu_home_rendered",
+                        lambda page, config, logger: "")
+    # 第一个菜单点击返回 None（失败）
+    monkeypatch.setattr("modules.baidu_overview._click_by_text_or_role",
+                        lambda page, labels, logger: None)
 
-    result = _goto_report_page(fake_page, logger, root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
-    assert result is False, "重登后仍 noauth 应返回 False"
+    result = _goto_report_page(fake_page, logger,
+                               root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
+    assert result is False, "菜单点击失败应返回 False"
+
+
+def test_page_usable_false_when_username_mismatch(tmp_path, monkeypatch):
+    """_page_is_usable 在 detected_user != expected_user 时返回 False。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import _page_is_usable_search_promotion
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: False)
+    monkeypatch.setattr("modules.baidu_detector.classify_baidu_page",
+                        lambda url, text: {"login_status": "logged_in", "signals": {"has_search_promotion": True}})
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda root, config: "user_a")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda page: "user_b")
+
+    result = _page_is_usable_search_promotion(fake_page, tmp_path, {})
+    assert result is False, "用户名不匹配应返回 False"
+
+
+def test_page_usable_true_when_username_match(tmp_path, monkeypatch):
+    """_page_is_usable 在 detected_user == expected_user 时返回 True。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import _page_is_usable_search_promotion
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: False)
+    monkeypatch.setattr("modules.baidu_detector.classify_baidu_page",
+                        lambda url, text: {"login_status": "logged_in", "signals": {"has_search_promotion": True}})
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda root, config: "user_a")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda page: "user_a")
+
+    result = _page_is_usable_search_promotion(fake_page, tmp_path, {})
+    assert result is True
+
+
+def test_page_usable_false_when_last_profile_empty_no_detect(tmp_path, monkeypatch):
+    """_page_is_usable 在无法识别且 last_profile 为空时返回 False。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import _page_is_usable_search_promotion
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: False)
+    monkeypatch.setattr("modules.baidu_detector.classify_baidu_page",
+                        lambda url, text: {"login_status": "logged_in", "signals": {"has_search_promotion": True}})
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda root, config: None)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda page: None)
+    monkeypatch.setattr("modules.baidu_session.get_browser_login_profile", lambda root: None)
+    monkeypatch.setattr("modules.baidu_session.get_current_project_credential_profile", lambda config: "proj_a")
+
+    result = _page_is_usable_search_promotion(fake_page, tmp_path, {})
+    assert result is False
 
 
 def test_logger_error_no_playwright_call_log(capsys):

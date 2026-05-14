@@ -312,12 +312,11 @@ def _goto_report_page(page, logger, root=None, config=None) -> bool:
 
     report URL 下也可能展示 noauth，必须先检查再决定是否返回。
     """
+    from modules.baidu_session import is_baidu_noauth_page, force_relogin_current_project
+
     already_there = page.url.rstrip("/").startswith(CC_REPORT_URL)
-    if already_there:
-        # report URL 下也可能是 noauth → 先检查
-        from modules.baidu_session import is_baidu_noauth_page
-        if not is_baidu_noauth_page(page):
-            return True
+    if already_there and not is_baidu_noauth_page(page):
+        return True
 
     if not already_there:
         logger.info("直接打开百度数据报告页：%s", CC_REPORT_URL)
@@ -328,32 +327,44 @@ def _goto_report_page(page, logger, root=None, config=None) -> bool:
             logger.error("进入百度报告页异常")
             goto_ok = False
         _safe_wait_after_click(page, logger)
+        # 检查是否已进入搜索推广
+        if goto_ok and not is_baidu_noauth_page(page):
+            return True
     else:
-        goto_ok = False  # 已在 report URL 但是 noauth
+        goto_ok = False
 
-    from modules.baidu_session import is_baidu_noauth_page, force_relogin_current_project
-
-    # noauth 处理：当前账号无权限 → 重登后重试一次
-    if is_baidu_noauth_page(page) and root is not None and config is not None:
-        logger.info("检测到 noauth 页，触发强制重登")
+    # noauth / goto 失败 → 重登后通过菜单路径进入
+    if root is not None and config is not None:
+        logger.info("直接进入报告页失败或 noauth，尝试重登后走菜单路径")
         if force_relogin_current_project(root, config, page, logger):
-            try:
-                page.goto(CC_REPORT_URL, wait_until="domcontentloaded", timeout=60000)
+            # 通过首页菜单路径进入，每步检查结果
+            _ensure_baidu_home_rendered(page, config, logger)
+            _safe_wait_after_click(page, logger)
+            menu_ok = True
+            for label in ["数据报告", "数据概览", "搜索推广"]:
+                clicked = _click_by_text_or_role(page, [label], logger)
+                if not clicked:
+                    logger.error("菜单路径点击失败：%s", label)
+                    menu_ok = False
+                    break
                 _safe_wait_after_click(page, logger)
-                if is_baidu_noauth_page(page):
-                    logger.error("重登后仍为 noauth 页")
-                    return False
-                return True
-            except Exception:
-                logger.error("重登后进入报告页异常")
+            if not menu_ok:
                 return False
+            # 验证最终页面
+            if is_baidu_noauth_page(page):
+                logger.error("菜单路径后仍为 noauth 页")
+                return False
+            # 验证是搜索推广数据页
+            from modules.baidu_detector import classify_baidu_page
+            text = _read_page_text(page)
+            cls = classify_baidu_page(page.url, text)
+            if not cls.get("signals", {}).get("has_search_promotion"):
+                logger.error("菜单路径后不是搜索推广数据页")
+                return False
+            return True
         return False
 
-    # 非 noauth 但 goto 失败 → 不能静默通过
-    if not goto_ok and not already_there:
-        return False
-
-    return False  # already_there + noauth + no root/config to handle
+    return False
 
 
 def _refresh_report_and_wait_for_data(page, config: dict[str, Any], logger) -> str:

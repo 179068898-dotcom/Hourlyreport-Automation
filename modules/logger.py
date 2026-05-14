@@ -19,11 +19,8 @@ def setup_logger(log_path: Path) -> logging.Logger:
     file_handler.setLevel(logging.INFO)
     logger.addHandler(file_handler)
 
-    # 终端：只输出 WARNING 及以上
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(fmt)
-    stream_handler.setLevel(logging.WARNING)
-    logger.addHandler(stream_handler)
+    # 终端：不输出 logger 内容，终端只走 console_ui
+    # logger 详细错误仅保留在 logs/run.log
 
     # 抑制 openpyxl 日志
     logging.getLogger("openpyxl").setLevel(logging.ERROR)
