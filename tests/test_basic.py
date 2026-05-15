@@ -3976,8 +3976,8 @@ def test_force_relogin_login_failure_returns_false(tmp_path, monkeypatch):
     assert result is False
 
 
-def test_login_flow_username_mismatch_returns_false(tmp_path, monkeypatch):
-    """CAS 登录成功但 detected_user != expected_user -> 返回 False，不写状态。"""
+def test_login_flow_username_mismatch_allows_proceeding(tmp_path, monkeypatch):
+    """用户名不匹配时：不写 browser_login_state，返回 needs_project_account_check。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import _do_login_flow, load_browser_login_state
@@ -3989,16 +3989,20 @@ def test_login_flow_username_mismatch_returns_false(tmp_path, monkeypatch):
 
     monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "user_a")
     monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "user_b")
+    monkeypatch.setattr("modules.baidu_session.get_current_project_credential_profile", lambda c: "test_prof")
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
 
-    result = _do_login_flow(tmp_path, {}, fake_page, logger, "p", "n", None, lambda _: None)
-    assert result is False
+    result = _do_login_flow(tmp_path, {"baidu": {"credential_profile": "test_prof"}},
+                            fake_page, logger, "p", "n", None, lambda _: None)
+    assert result["success"] is True
+    assert result["account_verified"] is False
+    assert result["needs_project_account_check"] is True
     state = load_browser_login_state(tmp_path)
-    assert state.get("last_profile") is None, "不匹配时不应写 login_state"
+    assert state.get("last_profile") is None, "用户名不匹配时不应写 login_state"
 
 
-def test_login_flow_undetectable_user_returns_false(tmp_path, monkeypatch):
-    """CAS 登录成功但无法识别 detected_user -> 返回 False，不写状态。"""
+def test_login_flow_undetectable_user_allows_proceeding(tmp_path, monkeypatch):
+    """无法识别用户名时：不写 browser_login_state，返回 needs_project_account_check。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import _do_login_flow, load_browser_login_state
@@ -4010,16 +4014,20 @@ def test_login_flow_undetectable_user_returns_false(tmp_path, monkeypatch):
 
     monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "user_a")
     monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: None)
+    monkeypatch.setattr("modules.baidu_session.get_current_project_credential_profile", lambda c: "test_prof")
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
 
-    result = _do_login_flow(tmp_path, {}, fake_page, logger, "p", "n", None, lambda _: None)
-    assert result is False
+    result = _do_login_flow(tmp_path, {"baidu": {"credential_profile": "test_prof"}},
+                            fake_page, logger, "p", "n", None, lambda _: None)
+    assert result["success"] is True
+    assert result["account_verified"] is False
+    assert result["needs_project_account_check"] is True
     state = load_browser_login_state(tmp_path)
-    assert state.get("last_profile") is None
+    assert state.get("last_profile") is None, "无法识别时不应写 login_state"
 
 
-def test_login_flow_username_match_marks_success(tmp_path, monkeypatch):
-    """CAS 登录成功 + detected_user == expected_user -> 写入 login_state。"""
+def test_login_flow_username_match_returns_verified(tmp_path, monkeypatch):
+    """用户名匹配时 account_verified=True，但 _do_login_flow 本身不写状态。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import _do_login_flow, load_browser_login_state
@@ -4036,11 +4044,12 @@ def test_login_flow_username_match_marks_success(tmp_path, monkeypatch):
 
     result = _do_login_flow(tmp_path, {"baidu": {"credential_profile": "kunming_niu_baidu"}},
                             fake_page, logger, "kunming_niu", "昆明牛", None, lambda _: None)
-    assert result is True
+    assert result["success"] is True
+    assert result["account_verified"] is True
+    assert result["needs_project_account_check"] is False
+    # _do_login_flow 本身不写状态
     state = load_browser_login_state(tmp_path)
-    assert state["last_profile"] == "kunming_niu_baidu"
-    assert "username" not in state
-    assert "password" not in state
+    assert state.get("last_profile") is None, "_do_login_flow 不写状态，由项目账户复核后写"
 
 
 def test_logout_baidu_account_prioritizes_click(monkeypatch):
@@ -4163,6 +4172,23 @@ def test_logout_success_requires_cas_verification(monkeypatch):
 
     result = logout_baidu_account(fake_page, root=".")
     assert result["success"] is False, "未到 CAS 不应返回成功"
+
+
+def test_baidu_session_has_no_mark_login_calls():
+    """baidu_session.py 中不再有 mark_browser_login_success 调用。"""
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "modules" / "baidu_session.py").read_text(encoding="utf-8")
+    lines = source.split("\n")
+    # 找到 def mark_browser_login_success 之后的所有调用
+    in_def = False
+    calls = []
+    for line in lines:
+        if "def mark_browser_login_success" in line:
+            in_def = True
+            continue
+        if in_def and "mark_browser_login_success(" in line and "def " not in line:
+            calls.append(line.strip())
+    assert len(calls) == 0, f"baidu_session.py 不应调用 mark_browser_login_success：{calls}"
 
 
 # ── 未知百度账户报告测试 ──────────────────────────────────

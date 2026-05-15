@@ -584,6 +584,15 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
     ready = validate_overview_ready(visible_text, report["target_date"], config)
     report["ready_check"] = ready
     report["errors"].extend(error for error in ready["errors"] if error not in report["errors"])
+
+    # 项目账户复核通过 → 写 browser_login_state
+    if ready.get("passed"):
+        from modules.baidu_session import mark_browser_login_success
+        profile = config.get("baidu", {}).get("credential_profile") or config.get("baidu", {}).get("credential_project", "")
+        if profile:
+            mark_browser_login_success(root, profile, project_id=config.get("project_id"),
+                                       project_name=config.get("project_name"), task="fetch-baidu-auto")
+
     report["finished_at"] = datetime.now().isoformat(timespec="seconds")
     _write_json(report_path, report)
     logger.info("baidu-prepare-overview 报告已输出：%s；错误数：%s", report_path, len(report["errors"]))

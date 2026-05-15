@@ -301,6 +301,15 @@ def fetch_baidu_daily(
         _write_json(candidates_path, {"source": "visible_text", "rows": rows, "row_count": len(rows)})
         parsed_report = build_baidu_daily_report_from_visible_text(visible_text, config, target_date, str(text_path))
         report.update(parsed_report)
+
+        # 日报页面复核通过 → 写 browser_login_state
+        if not report.get("errors") and len(report.get("accounts", {})) >= 1:
+            from modules.baidu_session import mark_browser_login_success
+            profile = config.get("baidu", {}).get("credential_profile") or config.get("baidu", {}).get("credential_project", "")
+            if profile:
+                mark_browser_login_success(root, profile, project_id=config.get("project_id"),
+                                           project_name=config.get("project_name"), task="fetch-baidu-daily")
+
         report["started_at"] = started_at
         report["finished_at"] = datetime.now().isoformat(timespec="seconds")
         report["outputs"] = {

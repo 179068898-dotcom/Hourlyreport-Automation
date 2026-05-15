@@ -309,7 +309,7 @@ def _click_element_center(page, box: dict) -> bool:
         return False
 
 
-def wait_until_cas_login_page(page, timeout_ms: int = 5000) -> bool:
+def wait_until_cas_login_page(page, timeout_ms: int = 2000) -> bool:
     """等待页面进入 CAS 登录页（URL 必须含 cas.baidu.com）。"""
     if page is None:
         return True
@@ -317,7 +317,7 @@ def wait_until_cas_login_page(page, timeout_ms: int = 5000) -> bool:
     while time.time() < deadline:
         if "cas.baidu.com" in (page.url or ""):
             return True
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(250)
     return False
 
 
@@ -438,33 +438,37 @@ LOGOUT_SELECTORS = [
 
 # ── CAS 登录当前项目 ──────────────────────────────────────
 
-def _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func) -> bool:
+def _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func) -> dict:
+    """CAS 登录动作。不写 browser_login_state，由项目账户复核后写入。
+
+    返回 {"success": True/False, "account_verified": True/False,
+           "needs_project_account_check": True/False, "message": "..."}
+    """
+    result = {"success": False, "account_verified": False, "needs_project_account_check": True}
+
     try:
         from modules.baidu_overview import _auto_login_if_needed
         if not _auto_login_if_needed(page, root, config, logger):
             logger.error("百度重新登录失败")
-            return False
+            return result
     except Exception:
         logger.error("百度重新登录异常")
-        return False
+        return result
 
+    result["success"] = True
     expected_user = get_expected_baidu_username(root, config)
     detected_user = detect_current_baidu_username(page)
-    if detected_user and expected_user:
-        if detected_user.strip() != expected_user:
-            logger.error("当前百度账号与项目账号不匹配")
-            output_func("  [注意] 当前百度账号与项目账号不匹配，请退出后重新登录当前项目账号")
-            return False
-    elif not detected_user:
-        logger.error("无法确认当前百度账号是否匹配")
-        output_func("  [注意] 无法确认当前百度账号是否匹配项目账号，请重新登录当前项目账号")
-        return False
+    if detected_user and expected_user and detected_user.strip() == expected_user:
+        result["account_verified"] = True
+        result["needs_project_account_check"] = False
+        logger.info("顶部用户名已匹配项目账号")
+    elif detected_user and expected_user:
+        logger.info("顶部用户名与项目账号不完全匹配，将在搜索推广页通过账户列表复核")
+    else:
+        logger.info("未识别到顶部用户名，将在搜索推广页通过账户列表复核")
 
-    mark_browser_login_success(root, get_current_project_credential_profile(config),
-                               project_id=project_id, project_name=project_name,
-                               task=task, url=_safe_url(page))
     output_func("  [通过] 百度账号登录完成")
-    return True
+    return result
 
 
 def force_relogin_current_project(
@@ -493,17 +497,17 @@ def force_relogin_current_project(
         output_func("  [注意] 未能自动点击退出，正在使用登录页兜底")
     logger.info("账号切换：退出结果=%s", logout_result.get("success"))
 
-    # 2. 进入 CAS 登录页
-    entry = goto_baidu_login_page(page)
-    if not entry.get("success"):
-        output_func("  [失败] 百度登录页打开失败")
-        return False
+    # 2. 等待 CAS 登录页稳定
+    if not wait_until_cas_login_page(page):
+        entry = goto_baidu_login_page(page)
+        if not entry.get("success"):
+            output_func("  [失败] 百度登录页打开失败")
+            return False
+    page.wait_for_timeout(1000)
 
-    # 3. 登录 + 复核
-    if not _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func):
-        return False
-
-    return True
+    # 3. 登录当前项目（不写 browser_login_state — 由调用方复核后写）
+    login_result = _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func)
+    return login_result.get("success", False)
 
 
 # ── Profile 一致性守卫（主入口） ──────────────────────────
@@ -525,6 +529,7 @@ def ensure_baidu_profile_session(
         return True
 
     if _page_is_usable_search_promotion(page, root, config):
+        # 页面可用 → 不写状态，由调用方在项目账户复核后写入
         return True
 
     # 需要切换 → 退出 + CAS 登录
