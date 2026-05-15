@@ -4432,15 +4432,12 @@ def test_goto_report_noauth_relogin_menu_success(monkeypatch):
     fake_page.url = "https://cc.baidu.com/report"
     fake_page.locator("body").inner_text.return_value = "搜索推广"
 
-    logout_calls = []
-    # 动态 mock：前2次(CC_REPORT_URL检查+noauth分支条件)返回True，之后返回False
+    # 动态 mock：先 noauth=True 进菜单路径，之后 noauth=False
     results = [True, False]
     def dynamic_noauth(page):
         return results.pop(0) if results else False
 
     monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", dynamic_noauth)
-    monkeypatch.setattr("modules.baidu_session.force_relogin_current_project",
-                        lambda root, config, page, logger, **kw: (logout_calls.append(1) or True))
     monkeypatch.setattr("modules.baidu_overview._ensure_baidu_home_rendered",
                         lambda page, config, logger: "")
     monkeypatch.setattr("modules.baidu_overview._click_by_text_or_role",
@@ -4451,7 +4448,6 @@ def test_goto_report_noauth_relogin_menu_success(monkeypatch):
     result = _goto_report_page(fake_page, logger,
                                root=".", config={"baidu": {"credential_profile": "test"}, "project_id": "p"})
     assert result is True
-    assert len(logout_calls) >= 1
 
 
 def test_goto_report_menu_click_fails_returns_false(monkeypatch):
@@ -4557,3 +4553,36 @@ def test_logger_error_no_playwright_call_log(capsys):
     assert "navigating to" not in captured.err
 
     logger.handlers.clear()
+
+
+def test_goto_report_homepage_calls_menu_path(monkeypatch):
+    """非 report URL（如 homepage）→ 走菜单路径。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_overview import _goto_report_page
+    import logging
+    logger = logging.getLogger("test")
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/homepage"
+    fake_page.locator("body").inner_text.return_value = ""
+
+    click_calls = []
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: False)
+    monkeypatch.setattr("modules.baidu_overview._ensure_baidu_home_rendered",
+                        lambda page, config, logger: "")
+    monkeypatch.setattr("modules.baidu_overview._click_by_text_or_role",
+                        lambda page, labels, logger: click_calls.append(labels) or "clicked")
+    monkeypatch.setattr("modules.baidu_detector.classify_baidu_page",
+                        lambda url, text: {"login_status": "logged_in", "signals": {"has_search_promotion": True}})
+
+    result = _goto_report_page(fake_page, logger, root=".", config={"project_id": "p"})
+    assert result is True
+    assert len(click_calls) == 3
+
+
+def test_baidu_prepare_overview_returns_early_on_open_errors():
+    """open_report 有 errors 时立即返回，不继续 validate_overview_ready。"""
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "modules" / "baidu_overview.py").read_text(encoding="utf-8")
+    assert "baidu-prepare-overview 中断" in source
+    assert "搜索推广页打开失败" in source

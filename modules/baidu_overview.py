@@ -308,57 +308,52 @@ def _select_backend_page(context, current_page, logger):
 
 
 def _goto_report_page(page, logger, root=None, config=None) -> bool:
-    """打开百度数据报告页。noauth 时触发重登重试一次。
+    """打开百度搜索推广数据页。
 
-    report URL 下也可能展示 noauth，必须先检查再决定是否返回。
+    - 已在 report 页且非 noauth → 直接通过
+    - 不在 report 页 → 直接 goto；goto 后仍在 homepage 或 noauth → 走菜单路径
+    - 菜单路径：首页 → 数据报告 → 数据概览 → 搜索推广
     """
     from modules.baidu_session import is_baidu_noauth_page, force_relogin_current_project
 
-    already_there = page.url.rstrip("/").startswith(CC_REPORT_URL)
-    if already_there and not is_baidu_noauth_page(page):
+    # 已在 report 页且可用 → 直接通过
+    if page.url.rstrip("/").startswith(CC_REPORT_URL) and not is_baidu_noauth_page(page):
         return True
 
-    if not already_there:
+    # 尝试直接 goto report 页
+    if not page.url.rstrip("/").startswith(CC_REPORT_URL):
         logger.info("直接打开百度数据报告页：%s", CC_REPORT_URL)
-        goto_ok = True
         try:
             page.goto(CC_REPORT_URL, wait_until="domcontentloaded", timeout=60000)
         except Exception:
             logger.error("进入百度报告页异常")
-            goto_ok = False
         _safe_wait_after_click(page, logger)
-        # 检查是否已进入搜索推广
-        if goto_ok and not is_baidu_noauth_page(page):
+        # 验证确实进入了 report 页（非 homepage）
+        if page.url.rstrip("/").startswith(CC_REPORT_URL) and not is_baidu_noauth_page(page):
             return True
-    else:
-        goto_ok = False
 
-    # noauth / goto 失败 → CAS 登录兜底 + 菜单路径进入
+    # goto 失败 / 停在 homepage / noauth → 菜单路径进入
     if root is not None and config is not None:
-        logger.info("直接进入报告页失败或 noauth，CAS 登录后走菜单路径")
-        if force_relogin_current_project(root, config, page, logger):
-            _ensure_baidu_home_rendered(page, config, logger)
+        logger.info("通过菜单路径进入搜索推广数据页")
+        # 如果不在首页，先渲染首页
+        _ensure_baidu_home_rendered(page, config, logger)
+        _safe_wait_after_click(page, logger)
+        for label in ["数据报告", "数据概览", "搜索推广"]:
+            if not _click_by_text_or_role(page, [label], logger):
+                logger.error("菜单路径点击失败：%s", label)
+                return False
             _safe_wait_after_click(page, logger)
-            menu_ok = True
-            for label in ["数据报告", "数据概览", "搜索推广"]:
-                if not _click_by_text_or_role(page, [label], logger):
-                    logger.error("菜单路径点击失败：%s", label)
-                    menu_ok = False
-                    break
-                _safe_wait_after_click(page, logger)
-            if not menu_ok:
-                return False
-            if is_baidu_noauth_page(page):
-                logger.error("CAS 登录后仍为 noauth 页")
-                return False
-            from modules.baidu_detector import classify_baidu_page
-            text = _read_page_text(page)
-            cls = classify_baidu_page(page.url, text)
-            if not cls.get("signals", {}).get("has_search_promotion"):
-                logger.error("CAS 登录后不是搜索推广数据页")
-                return False
-            return True
-        return False
+        # 验证结果
+        if is_baidu_noauth_page(page):
+            logger.error("菜单路径后仍为 noauth 页")
+            return False
+        from modules.baidu_detector import classify_baidu_page
+        text = _read_page_text(page)
+        cls = classify_baidu_page(page.url, text)
+        if not cls.get("signals", {}).get("has_search_promotion"):
+            logger.error("菜单路径后不是搜索推广数据页")
+            return False
+        return True
 
     return False
 
@@ -579,6 +574,11 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
     }
     if open_report.get("errors"):
         report["errors"].extend(open_report["errors"])
+        report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        _write_json(report_path, report)
+        logger.error("baidu-prepare-overview 中断：搜索推广页打开失败。")
+        return report
+
     text_path = root / "reports" / "baidu_visible_text.txt"
     visible_text = text_path.read_text(encoding="utf-8") if text_path.exists() else ""
     ready = validate_overview_ready(visible_text, report["target_date"], config)
