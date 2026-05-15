@@ -219,24 +219,214 @@ def _page_is_usable_search_promotion(page, root, config) -> bool:
         return False
 
 
-# ── 百度退出登录（模拟人工点击） ──────────────────────────
+# ── 百度退出登录（跨 frame 探测 + 候选 dump） ──────────────
 
-ACCOUNT_AREA_SELECTORS = [
-    ".user-center",
-    ".user-info",
-    ".account-info",
-    ".header-user",
-    ".top-user",
-    "[class*='user-avatar']",
-    "[class*='user-name']",
-    "[class*='username']",
-    "[class*='account']",
-    "a[href*='account']",
-    "a[href*='user']",
-    ".header-avatar",
-    ".avatar",
+CANDIDATE_KEYWORDS = [
+    "百度管家", "账号", "用户", "退出", "退出登录", "管家", "BDCC",
+    "登录", "安全退出", "注销", "登出",
 ]
 
+ACCOUNT_KEYWORDS = ["百度管家", "账号", "用户", "管家", "BDCC"]
+
+LOGOUT_KEYWORDS = ["退出", "退出登录", "安全退出", "注销", "登出"]
+
+
+def _find_clickable_in_frame(frame, page) -> list[dict[str, Any]]:
+    """在指定 frame 中收集所有可点击元素信息。"""
+    items = []
+    try:
+        loc = frame.locator("a, button, span, div, li, [role='button'], [role='menuitem']")
+        count = loc.count()
+        for i in range(min(count, 200)):
+            try:
+                el = loc.nth(i)
+                if not el.is_visible():
+                    continue
+                text = el.inner_text(timeout=200).strip()[:100] if el.count() > 0 else ""
+                if not text:
+                    continue
+                box = el.bounding_box()
+                info = {
+                    "text": text,
+                    "tag": el.evaluate("el => el.tagName") if hasattr(el, 'evaluate') else "?",
+                    "class": el.get_attribute("class") or "",
+                    "id": el.get_attribute("id") or "",
+                    "title": el.get_attribute("title") or "",
+                    "aria_label": el.get_attribute("aria-label") or "",
+                    "visible": True,
+                    "box": {"x": box["x"], "y": box["y"]} if box else None,
+                    "frame_url": (frame.url or "")[:120],
+                }
+                items.append(info)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return items
+
+
+def _dump_candidates_to(page, root: str | Path, filename: str) -> list[dict[str, Any]]:
+    """收集候选并写入指定文件。同时保存截图。"""
+    all_items = []
+    try:
+        for frame in page.frames:
+            items = _find_clickable_in_frame(frame, page)
+            all_items.extend(items)
+    except Exception:
+        pass
+
+    reports_dir = Path(root) / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    out = reports_dir / filename
+    out.write_text(json.dumps({"frames_checked": len(page.frames), "candidates": all_items},
+                              ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 保存截图
+    png_name = filename.replace(".json", ".png")
+    try:
+        page.screenshot(path=str(reports_dir / png_name), full_page=False)
+    except Exception:
+        pass
+
+    return all_items
+
+
+def dump_baidu_logout_candidates(page, root: str | Path = ".") -> list[dict[str, Any]]:
+    """兼容旧接口。"""
+    return _dump_candidates_to(page, root, "baidu_logout_candidates.json")
+
+
+def _click_element_center(page, box: dict) -> bool:
+    """点击元素中心点，先 hover 再 click。"""
+    try:
+        cx = box["x"] + box.get("width", 40) / 2
+        cy = box["y"] + box.get("height", 24) / 2
+        page.mouse.move(cx, cy)
+        page.wait_for_timeout(300)
+        page.mouse.click(cx, cy)
+        return True
+    except Exception:
+        return False
+
+
+def wait_until_cas_login_page(page, timeout_ms: int = 5000) -> bool:
+    """等待页面进入 CAS 登录页（URL 必须含 cas.baidu.com）。"""
+    if page is None:
+        return True
+    deadline = time.time() + timeout_ms / 1000.0
+    while time.time() < deadline:
+        if "cas.baidu.com" in (page.url or ""):
+            return True
+        page.wait_for_timeout(500)
+    return False
+
+
+def logout_baidu_account(page, root: str | Path = ".") -> dict[str, Any]:
+    """真实人工路径：hover 右上角账号 → click → 等菜单 → 点退出 → 验证 CAS。
+
+    生成 before/after candidates 和截图。
+    """
+    if page is None:
+        return {"success": False, "message": "page 对象为空"}
+
+    # ── Before dump ──
+    _dump_candidates_to(page, root, "baidu_logout_candidates_before.json")
+
+    # ── 1. 找右上角账号区域并 hover + click ──
+    viewport = page.viewport_size or {"width": 1920, "height": 1080}
+    vw = viewport["width"]
+
+    def _is_top_right(box: dict) -> bool:
+        return box.get("y", 999) < 140 and box.get("x", 0) > vw * 0.55
+
+    clicked_account = False
+    # 先尝试直接用 account trigger 选择器（优先右上角）
+    account_sel = ".uc-cc-nav_trigger, .one-dropdown-trigger, [class*='nav-trigger'], [class*='profile']"
+    for sel in [account_sel, "[class*='user']", "[class*='account']", "[class*='avatar']"]:
+        try:
+            el = page.locator(sel).first
+            if el.count() > 0 and el.is_visible():
+                box = el.bounding_box()
+                if box and _is_top_right(box):
+                    _click_element_center(page, box)
+                    page.wait_for_timeout(2500)
+                    clicked_account = True
+                    break
+        except Exception:
+            continue
+
+    # 候选兜底：遍历 candidates，右上角优先
+    if not clicked_account:
+        before = _dump_candidates_to(page, root, "baidu_logout_candidates_before.json")
+        # 排序：越靠右越优先
+        top_right_items = []
+        top_items = []
+        for item in before:
+            text = item.get("text", "")
+            cls = item.get("class", "")
+            if any(kw in text + cls for kw in ACCOUNT_KEYWORDS):
+                box = item.get("box")
+                if box and _is_top_right(box):
+                    top_right_items.append(item)
+                elif box and box.get("y", 999) < 140:
+                    top_items.append(item)
+        # 右上角按 x 降序（最靠右优先）
+        top_right_items.sort(key=lambda i: i["box"]["x"], reverse=True)
+        for item in top_right_items + top_items:
+            if _click_element_center(page, item["box"]):
+                page.wait_for_timeout(2500)
+                clicked_account = True
+                break
+
+    # ── After account click dump ──
+    page.wait_for_timeout(1000)
+    _dump_candidates_to(page, root, "baidu_logout_candidates_after_account_click.json")
+
+    # ── 2. 在 after candidates 中找"退出"并点击 ──
+    after = _dump_candidates_to(page, root, "baidu_logout_candidates_after_account_click.json")
+    clicked_logout = False
+    for item in after:
+        text = item.get("text", "")
+        if any(kw in text for kw in LOGOUT_KEYWORDS):
+            box = item.get("box")
+            if box:
+                if _click_element_center(page, box):
+                    page.wait_for_timeout(2000)
+                    clicked_logout = True
+                    break
+
+    # 兜底：选择器搜索退出
+    if not clicked_logout:
+        for sel in LOGOUT_SELECTORS:
+            try:
+                el = page.locator(sel).first
+                if el.count() > 0 and el.is_visible():
+                    el.click(timeout=3000)
+                    page.wait_for_timeout(2000)
+                    clicked_logout = True
+                    break
+            except Exception:
+                continue
+
+    # ── 3. 验证退出 ──
+    if clicked_logout and wait_until_cas_login_page(page, timeout_ms=6000):
+        return {"success": True, "message": "已通过页面点击退出百度账号"}
+
+    # 最后兜底
+    for sel in LOGOUT_SELECTORS:
+        try:
+            el = page.locator(sel).first
+            if el.count() > 0 and el.is_visible():
+                el.click(timeout=3000)
+                if wait_until_cas_login_page(page, timeout_ms=6000):
+                    return {"success": True, "message": "已退出百度账号"}
+        except Exception:
+            continue
+
+    return {"success": False, "message": "未找到退出登录入口"}
+
+
+# Keep selectors for fallback use
 LOGOUT_SELECTORS = [
     "a:has-text('退出')", "a:has-text('退出登录')", "a:has-text('安全退出')",
     "span:has-text('退出')", "span:has-text('退出登录')",
@@ -244,67 +434,6 @@ LOGOUT_SELECTORS = [
     "button:has-text('退出')", "button:has-text('退出登录')",
     ".logout", ".logout-btn", "#logout",
 ]
-
-
-def _try_click_account_area(page) -> bool:
-    """点击右上角账号区域，返回是否点到了东西。"""
-    for selector in ACCOUNT_AREA_SELECTORS:
-        try:
-            el = page.locator(selector).first
-            if el.count() > 0 and el.is_visible():
-                el.click(timeout=3000)
-                page.wait_for_timeout(1500)
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def _try_click_logout_text(page) -> bool:
-    """在已展开的菜单中点击退出登录文本。"""
-    for selector in LOGOUT_SELECTORS:
-        try:
-            el = page.locator(selector).first
-            if el.count() > 0 and el.is_visible():
-                el.click(timeout=3000)
-                return True
-        except Exception:
-            continue
-    return False
-
-
-def wait_until_logged_out(page, timeout_ms: int = 5000) -> bool:
-    if page is None:
-        return True
-    deadline = time.time() + timeout_ms / 1000.0
-    while time.time() < deadline:
-        if is_baidu_logged_out_or_login_page(page):
-            return True
-        page.wait_for_timeout(500)
-    return False
-
-
-def logout_baidu_account(page) -> dict[str, Any]:
-    """模拟人工退出：点账号区域 → 点退出 → 等进入 CAS 登录页。
-
-    优先通过页面点击退出，不 traceback。
-    """
-    if page is None:
-        return {"success": False, "message": "page 对象为空"}
-
-    # 1. 点击账号区域展开菜单
-    if _try_click_account_area(page):
-        # 2. 点击退出登录
-        if _try_click_logout_text(page):
-            if wait_until_logged_out(page, timeout_ms=5000):
-                return {"success": True, "message": "已通过页面点击退出百度账号"}
-
-    # 兜底：直接搜索退出文本
-    if _try_click_logout_text(page):
-        if wait_until_logged_out(page, timeout_ms=5000):
-            return {"success": True, "message": "已退出百度账号"}
-
-    return {"success": False, "message": "未找到退出登录入口"}
 
 
 # ── CAS 登录当前项目 ──────────────────────────────────────

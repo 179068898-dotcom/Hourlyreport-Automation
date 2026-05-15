@@ -4056,9 +4056,9 @@ def test_logout_baidu_account_prioritizes_click(monkeypatch):
     fake_page.locator.return_value.first = fake_el
 
     # wait_until_logged_out 返回 True
-    monkeypatch.setattr("modules.baidu_session.wait_until_logged_out", lambda page, timeout_ms=5000: True)
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: True)
 
-    result = logout_baidu_account(fake_page)
+    result = logout_baidu_account(fake_page, root=".")
     assert result["success"] is True, "应退出成功"
 
 
@@ -4072,7 +4072,7 @@ def test_logout_baidu_account_no_entry_returns_false():
     fake_el.count.return_value = 0
     fake_page.locator.return_value.first = fake_el
 
-    result = logout_baidu_account(fake_page)
+    result = logout_baidu_account(fake_page, root=".")
     assert isinstance(result, dict)
     assert result["success"] is False
 
@@ -4132,6 +4132,37 @@ def test_logout_failure_still_proceeds_to_cas(tmp_path, monkeypatch):
     result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
     assert result is True
     assert len(cas_calls) >= 1, "logout 失败后仍应进 CAS"
+
+
+def test_wait_until_cas_only_accepts_cas_url():
+    """wait_until_cas_login_page 只在 URL 含 cas.baidu.com 时返回 True。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import wait_until_cas_login_page
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cas.baidu.com/?tpl=www2"
+    assert wait_until_cas_login_page(fake_page, timeout_ms=500) is True
+
+    fake_page.url = "https://www2.baidu.com/"
+    assert wait_until_cas_login_page(fake_page, timeout_ms=500) is False
+
+
+def test_logout_success_requires_cas_verification(monkeypatch):
+    """退出成功必须验证 CAS 页面。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import logout_baidu_account
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    fake_el = MagicMock()
+    fake_el.count.return_value = 0
+    fake_page.locator.return_value.first = fake_el
+
+    # CAS 验证失败
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
+
+    result = logout_baidu_account(fake_page, root=".")
+    assert result["success"] is False, "未到 CAS 不应返回成功"
 
 
 # ── 未知百度账户报告测试 ──────────────────────────────────

@@ -52,6 +52,7 @@ def main() -> None:
         "mock-write",
         "test-browser",
         "test-browser-connect",
+        "test-baidu-logout",
         "fetch-baidu",
         "fetch-baidu-auto",
         "fetch-baidu-daily",
@@ -170,6 +171,30 @@ def main() -> None:
             print_error(f"连接已有 Chrome 测试失败，已输出报告：reports/browser_connect_report.json")
         else:
             print_success(f"连接已有 Chrome 测试完成：reports/browser_connect_report.json")
+        return
+    if args.mode == "test-baidu-logout":
+        from modules.browser_manager import connect_existing_chrome
+        from modules.baidu_session import logout_baidu_account
+        from modules.console_ui import print_success, print_error, verbose_print
+        from modules.chrome_debug import ensure_chrome_debug_ready
+
+        if not ensure_chrome_debug_ready(ROOT, config).get("ready"):
+            print_error("Chrome 调试端口未就绪，请先启动 Chrome")
+            return
+        try:
+            from playwright.sync_api import sync_playwright
+            with sync_playwright() as pw:
+                context, page = connect_existing_chrome(pw, config)
+                page.bring_to_front()
+                result = logout_baidu_account(page, root=ROOT)
+                if result.get("success"):
+                    print_success("已自动退出百度账号")
+                    verbose_print("候选文件：reports/baidu_logout_candidates.json")
+                else:
+                    print_error("未能自动退出百度账号")
+                    verbose_print("请查看 reports/baidu_logout_candidates.json 分析失败原因")
+        except Exception as exc:
+            print_error(f"退出登录测试异常：{exc}")
         return
     if args.mode == "fetch-baidu":
         report = fetch_baidu_account_report(config=config, root=ROOT, logger=logger, period=args.period)
