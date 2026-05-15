@@ -219,6 +219,94 @@ def _page_is_usable_search_promotion(page, root, config) -> bool:
         return False
 
 
+# ── 百度退出登录（模拟人工点击） ──────────────────────────
+
+ACCOUNT_AREA_SELECTORS = [
+    ".user-center",
+    ".user-info",
+    ".account-info",
+    ".header-user",
+    ".top-user",
+    "[class*='user-avatar']",
+    "[class*='user-name']",
+    "[class*='username']",
+    "[class*='account']",
+    "a[href*='account']",
+    "a[href*='user']",
+    ".header-avatar",
+    ".avatar",
+]
+
+LOGOUT_SELECTORS = [
+    "a:has-text('退出')", "a:has-text('退出登录')", "a:has-text('安全退出')",
+    "span:has-text('退出')", "span:has-text('退出登录')",
+    "div:has-text('退出')", "div:has-text('退出登录')",
+    "button:has-text('退出')", "button:has-text('退出登录')",
+    ".logout", ".logout-btn", "#logout",
+]
+
+
+def _try_click_account_area(page) -> bool:
+    """点击右上角账号区域，返回是否点到了东西。"""
+    for selector in ACCOUNT_AREA_SELECTORS:
+        try:
+            el = page.locator(selector).first
+            if el.count() > 0 and el.is_visible():
+                el.click(timeout=3000)
+                page.wait_for_timeout(1500)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _try_click_logout_text(page) -> bool:
+    """在已展开的菜单中点击退出登录文本。"""
+    for selector in LOGOUT_SELECTORS:
+        try:
+            el = page.locator(selector).first
+            if el.count() > 0 and el.is_visible():
+                el.click(timeout=3000)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def wait_until_logged_out(page, timeout_ms: int = 5000) -> bool:
+    if page is None:
+        return True
+    deadline = time.time() + timeout_ms / 1000.0
+    while time.time() < deadline:
+        if is_baidu_logged_out_or_login_page(page):
+            return True
+        page.wait_for_timeout(500)
+    return False
+
+
+def logout_baidu_account(page) -> dict[str, Any]:
+    """模拟人工退出：点账号区域 → 点退出 → 等进入 CAS 登录页。
+
+    优先通过页面点击退出，不 traceback。
+    """
+    if page is None:
+        return {"success": False, "message": "page 对象为空"}
+
+    # 1. 点击账号区域展开菜单
+    if _try_click_account_area(page):
+        # 2. 点击退出登录
+        if _try_click_logout_text(page):
+            if wait_until_logged_out(page, timeout_ms=5000):
+                return {"success": True, "message": "已通过页面点击退出百度账号"}
+
+    # 兜底：直接搜索退出文本
+    if _try_click_logout_text(page):
+        if wait_until_logged_out(page, timeout_ms=5000):
+            return {"success": True, "message": "已退出百度账号"}
+
+    return {"success": False, "message": "未找到退出登录入口"}
+
+
 # ── CAS 登录当前项目 ──────────────────────────────────────
 
 def _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func) -> bool:
@@ -231,7 +319,6 @@ def _do_login_flow(root, config, page, logger, project_id, project_name, task, o
         logger.error("百度重新登录异常")
         return False
 
-    # CAS 登录后复核：确认当前登录账号匹配当前项目账号
     expected_user = get_expected_baidu_username(root, config)
     detected_user = detect_current_baidu_username(page)
     if detected_user and expected_user:
@@ -256,7 +343,7 @@ def force_relogin_current_project(
     task: str | None = None,
     input_func: Any = None, output_func: Any = None,
 ) -> bool:
-    """CAS 登录页兜底：进 CAS 页，登录当前项目账号。"""
+    """优先点击退出 → CAS 登录当前项目。"""
     import builtins
     if input_func is None:
         input_func = builtins.input
@@ -268,15 +355,26 @@ def force_relogin_current_project(
 
     project_id = config.get("project_id", "")
     project_name = config.get("project_name", "")
-    output_func("  [注意] 正在登录当前项目百度账号")
-    logger.info("进入 CAS 登录页兜底")
 
+    # 1. 尝试页面点击退出
+    logout_result = logout_baidu_account(page)
+    if logout_result.get("success"):
+        output_func("  [通过] 已退出旧百度账号，正在登录当前项目账号")
+    else:
+        output_func("  [注意] 未能自动点击退出，正在使用登录页兜底")
+    logger.info("账号切换：退出结果=%s", logout_result.get("success"))
+
+    # 2. 进入 CAS 登录页
     entry = goto_baidu_login_page(page)
     if not entry.get("success"):
         output_func("  [失败] 百度登录页打开失败")
         return False
 
-    return _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func)
+    # 3. 登录 + 复核
+    if not _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func):
+        return False
+
+    return True
 
 
 # ── Profile 一致性守卫（主入口） ──────────────────────────
@@ -297,25 +395,16 @@ def ensure_baidu_profile_session(
     if not profile:
         return True
 
-    # 已在可用搜索推广数据页且账号匹配 → 直接通过
     if _page_is_usable_search_promotion(page, root, config):
-        logger.info("当前页面已是可用搜索推广数据页")
         return True
 
-    # 需要登录 → CAS 兜底
-    last_profile = get_browser_login_profile(root)
-    if last_profile != profile:
-        if last_profile is None:
-            logger.info("登录状态未知，进入 CAS 登录")
-        else:
-            logger.info("profile 不一致，进入 CAS 登录")
-        return force_relogin_current_project(root, config, page, logger, task=task,
-                                             input_func=input_func, output_func=output_func)
+    # 需要切换 → 退出 + CAS 登录
+    output_func("  [注意] 正在切换到当前项目百度账号")
+    if not force_relogin_current_project(root, config, page, logger, task=task,
+                                         input_func=input_func, output_func=output_func):
+        return False
 
-    # last_profile 一致但页面不可用 → 尝试 CAS 登录刷新
-    output_func("  [注意] 正在登录当前项目百度账号")
-    return force_relogin_current_project(root, config, page, logger, task=task,
-                                         input_func=input_func, output_func=output_func)
+    return True
 
 
 # ── 内部辅助 ──────────────────────────────────────────────

@@ -4043,6 +4043,97 @@ def test_login_flow_username_match_marks_success(tmp_path, monkeypatch):
     assert "password" not in state
 
 
+def test_logout_baidu_account_prioritizes_click(monkeypatch):
+    """logout_baidu_account 优先通过页面点击退出。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import logout_baidu_account
+
+    fake_page = MagicMock()
+    fake_page.url = "about:blank"
+    fake_el = MagicMock()
+    fake_el.count.return_value = 1
+    fake_el.is_visible.return_value = True
+    fake_page.locator.return_value.first = fake_el
+
+    # wait_until_logged_out 返回 True
+    monkeypatch.setattr("modules.baidu_session.wait_until_logged_out", lambda page, timeout_ms=5000: True)
+
+    result = logout_baidu_account(fake_page)
+    assert result["success"] is True, "应退出成功"
+
+
+def test_logout_baidu_account_no_entry_returns_false():
+    """找不到退出入口时不 traceback，返回 success=False。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import logout_baidu_account
+
+    fake_page = MagicMock()
+    fake_el = MagicMock()
+    fake_el.count.return_value = 0
+    fake_page.locator.return_value.first = fake_el
+
+    result = logout_baidu_account(fake_page)
+    assert isinstance(result, dict)
+    assert result["success"] is False
+
+
+def test_force_relogin_tries_logout_then_cas(tmp_path, monkeypatch):
+    """force_relogin 先调 logout，再进 CAS。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import force_relogin_current_project
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu", "project_name": "昆明牛"}
+    fake_page = MagicMock()
+    fake_page.url = "about:blank"
+    logger = logging.getLogger("test")
+
+    logout_calls = []
+    cas_calls = []
+    login_calls = []
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: logout_calls.append(1) or {"success": True, "message": "ok"})
+    monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page",
+                        lambda page: cas_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "test_user")
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed",
+                        lambda p, r, c, l: login_calls.append(1) or True)
+
+    result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
+    assert result is True
+    assert len(logout_calls) >= 1, "应先调用 logout"
+    assert len(cas_calls) >= 1, "应进入 CAS"
+    assert len(login_calls) >= 1, "应登录"
+
+
+def test_logout_failure_still_proceeds_to_cas(tmp_path, monkeypatch):
+    """logout 失败后仍进 CAS 兜底。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import force_relogin_current_project
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu", "project_name": "昆明牛"}
+    fake_page = MagicMock()
+    fake_page.url = "about:blank"
+    logger = logging.getLogger("test")
+
+    cas_calls = []
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
+                        lambda page: {"success": False, "message": "未找到"})
+    monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page",
+                        lambda page: cas_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "test_user")
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
+
+    result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
+    assert result is True
+    assert len(cas_calls) >= 1, "logout 失败后仍应进 CAS"
+
+
 # ── 未知百度账户报告测试 ──────────────────────────────────
 
 
