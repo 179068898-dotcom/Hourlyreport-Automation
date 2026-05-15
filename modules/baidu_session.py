@@ -526,58 +526,53 @@ def ensure_baidu_profile_session(
 
     profile = get_current_project_credential_profile(config)
     if not profile:
-        return True
+        return {"passed": True, "decision": "no_profile"}
 
     expected_user = get_expected_baidu_username(root, config)
     detected_user = detect_current_baidu_username(page)
     last_profile = get_browser_login_profile(root)
     logged_in = is_baidu_logged_in(page)
 
-    # 确定当前 URL 类型
     url = page.url or "" if page else ""
     url_type = "other"
-    if "cas.baidu.com" in url:
-        url_type = "cas"
-    elif "/homepage" in url:
-        url_type = "homepage"
-    elif "cc.baidu.com/report" in url:
-        url_type = "report"
-    elif "noauth" in url.lower():
-        url_type = "noauth"
+    if "cas.baidu.com" in url: url_type = "cas"
+    elif "/homepage" in url: url_type = "homepage"
+    elif "cc.baidu.com/report" in url: url_type = "report"
+    elif "noauth" in url.lower(): url_type = "noauth"
 
-    # 写入诊断报告
     _write_session_check_report(root, profile, expected_user, detected_user,
                                 last_profile, url_type, logged_in)
 
-    # 决策：bypass / relogin
     decision = "relogin"
     reason = "状态未知"
 
     if detected_user and expected_user and detected_user.strip() == expected_user:
         decision = "bypass"
         reason = "当前页面用户名已匹配项目账号"
-    elif _page_is_usable_search_promotion(page, root, config):
-        decision = "bypass"
-        reason = "已在可用搜索推广数据页"
-    elif last_profile == profile and logged_in:
-        decision = "bypass"
-        reason = "last_profile 一致且已登录"
     elif detected_user and expected_user and detected_user.strip() != expected_user:
         decision = "relogin"
         reason = "当前页面用户名与项目账号不匹配"
+    elif _page_is_usable_search_promotion(page, root, config):
+        decision = "bypass"
+        reason = "已在可用搜索推广数据页"
+    elif not detected_user and last_profile == profile and logged_in:
+        decision = "tentative_bypass"
+        reason = "last_profile 一致但无法确认用户名，需项目账户复核"
 
-    # 写回 decision
     _write_session_check_report(root, profile, expected_user, detected_user,
                                 last_profile, url_type, logged_in, decision, reason)
 
-    if decision == "bypass":
-        logger.info("session bypass: %s", reason)
-        return True
+    result = {"passed": True, "decision": decision, "reason": reason}
 
-    # relogin
-    output_func("  [注意] 正在切换到当前项目百度账号")
-    return force_relogin_current_project(root, config, page, logger, task=task,
-                                         input_func=input_func, output_func=output_func)
+    if decision == "relogin":
+        output_func("  [注意] 正在切换到当前项目百度账号")
+        relogin_ok = force_relogin_current_project(root, config, page, logger, task=task,
+                                                   input_func=input_func, output_func=output_func)
+        result["passed"] = relogin_ok
+        return result
+
+    logger.info("session %s: %s", decision, reason)
+    return result
 
 
 def _write_session_check_report(root, profile, expected_user, detected_user,

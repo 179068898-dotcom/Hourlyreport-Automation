@@ -3875,7 +3875,7 @@ def test_session_usable_page_skips_cas(tmp_path, monkeypatch):
     cas_calls = []
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is True
+    assert result.get("passed") is True
     assert len(cas_calls) == 0, "可用页面不应跳 CAS"
 
 
@@ -3899,7 +3899,7 @@ def test_session_profile_mismatch_triggers_cas_login(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: login_calls.append(1) or True)
     result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is True
+    assert result.get("passed") is True
     assert len(cas_calls) >= 1
     assert len(login_calls) >= 1
 
@@ -3923,7 +3923,7 @@ def test_session_last_profile_none_triggers_cas(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: login_calls.append(1) or True)
     result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is True
+    assert result.get("passed") is True
     assert len(cas_calls) >= 1
     assert len(login_calls) >= 1
 
@@ -3945,7 +3945,7 @@ def test_username_match_skips_cas_login(tmp_path, monkeypatch):
     cas_calls = []
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is True
+    assert result.get("passed") is True
     assert len(cas_calls) == 0, "账号匹配时不应调用 CAS 登录"
 
 
@@ -3957,7 +3957,7 @@ def test_no_profile_skips_check(tmp_path):
     fake_page = MagicMock()
     logger = logging.getLogger("test")
     result = ensure_baidu_profile_session(tmp_path, {}, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is True
+    assert result.get("passed") is True
 
 
 def test_force_relogin_uses_cas_page(tmp_path, monkeypatch):
@@ -4609,3 +4609,60 @@ def test_baidu_prepare_overview_returns_early_on_open_errors():
     source = (root / "modules" / "baidu_overview.py").read_text(encoding="utf-8")
     assert "baidu-prepare-overview 中断" in source
     assert "搜索推广页打开失败" in source
+
+def test_tentative_bypass_missing_accounts_triggers_relogin(tmp_path, monkeypatch):
+    import logging
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu", "project_name": "昆明牛"}
+
+    def fake_open(config, root, logger):
+        return {"final_url": "https://cc.baidu.com/report", "errors": [], "session_check": {"decision": "tentative_bypass", "passed": True}}
+
+    validate_calls = []
+    def fake_validate(visible_text, target_date, config):
+        validate_calls.append(1)
+        if len(validate_calls) == 1:
+            return {"passed": False, "errors": ["页面未看到目标账户：银康01"]}
+        return {"passed": True, "errors": []}
+
+    clear_calls = []
+    mark_calls = []
+    monkeypatch.setattr("modules.baidu_overview.baidu_open_overview", fake_open)
+    monkeypatch.setattr("modules.baidu_overview.validate_overview_ready", fake_validate)
+    monkeypatch.setattr("modules.baidu_session.clear_browser_login_state", lambda root: clear_calls.append(1))
+    monkeypatch.setattr("modules.baidu_session.mark_browser_login_success", lambda root, credential_profile, **kw: mark_calls.append(1))
+
+    from modules.baidu_overview import baidu_prepare_overview
+    report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
+    assert report.get("validation_retry_triggered") is True
+    assert report.get("validation_retry_passed") is True
+    assert len(clear_calls) >= 1
+    assert len(mark_calls) >= 1
+    assert len(validate_calls) == 2
+    assert "银康01" not in str(report.get("errors", []))
+
+
+def test_tentative_bypass_retry_still_fails_error_converges(tmp_path, monkeypatch):
+    import logging
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu", "project_name": "昆明牛"}
+
+    def fake_open(config, root, logger):
+        return {"final_url": "https://cc.baidu.com/report", "errors": [], "session_check": {"decision": "tentative_bypass", "passed": True}}
+
+    def fake_validate(visible_text, target_date, config):
+        return {"passed": False, "errors": ["页面未看到目标账户：银康01"]}
+
+    mark_calls = []
+    monkeypatch.setattr("modules.baidu_overview.baidu_open_overview", fake_open)
+    monkeypatch.setattr("modules.baidu_overview.validate_overview_ready", fake_validate)
+    monkeypatch.setattr("modules.baidu_session.clear_browser_login_state", lambda root: None)
+    monkeypatch.setattr("modules.baidu_session.mark_browser_login_success", lambda root, credential_profile, **kw: mark_calls.append(1))
+
+    from modules.baidu_overview import baidu_prepare_overview
+    report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
+    assert report.get("validation_retry_triggered") is True
+    assert len(report["errors"]) > 0
+    assert "未看到当前项目账户" in " ".join(report["errors"])
+    assert "银康01" not in " ".join(report["errors"])
+    assert len(mark_calls) == 0

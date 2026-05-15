@@ -506,8 +506,12 @@ def baidu_open_overview(
 
         # 百度登录状态守卫：确保当前浏览器登录的是本项目账号
         from modules.baidu_session import ensure_baidu_profile_session
-        if not ensure_baidu_profile_session(root, config, page, logger, task="fetch-baidu-auto",
-                                            input_func=input_func):
+        session_result = ensure_baidu_profile_session(root, config, page, logger, task="fetch-baidu-auto",
+                                                      input_func=input_func)
+        report["session_check"] = {"passed": session_result.get("passed"),
+                                    "decision": session_result.get("decision"),
+                                    "reason": session_result.get("reason")}
+        if not session_result.get("passed"):
             report["errors"].append("百度账号切换未完成或用户取消")
             return finish(page)
 
@@ -614,6 +618,32 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
     ready = validate_overview_ready(visible_text, report["target_date"], config)
     report["ready_check"] = ready
     report["errors"].extend(error for error in ready["errors"] if error not in report["errors"])
+
+    # tentative_bypass + 目标账户缺失 → 自动 relogin 一次
+    session_decision = (open_report.get("session_check") or {}).get("decision", "")
+    has_missing_accounts = any("缺失" in e or "缺少" in e or "未看到" in e
+                               for e in ready.get("errors", []))
+    if not ready.get("passed") and session_decision == "tentative_bypass" and has_missing_accounts:
+        from modules.baidu_session import clear_browser_login_state
+        report["validation_retry_triggered"] = True
+        report["validation_retry_reason"] = "tentative_bypass 后目标账户缺失"
+        clear_browser_login_state(root)
+        logger.info("tentative_bypass + 账户缺失 → 清空状态后重新打开搜索推广页")
+        # 重新打开搜索推广页（内部会触发 session guard + force_relogin）
+        retry_open = baidu_open_overview(config, root, logger)
+        report["errors"] = []  # 清除第一次 validate 的错误
+        if not retry_open.get("errors"):
+            retry_text_path = root / "reports" / "baidu_visible_text.txt"
+            retry_text = retry_text_path.read_text(encoding="utf-8") if retry_text_path.exists() else ""
+            ready = validate_overview_ready(retry_text, report["target_date"], config)
+            report["ready_check"] = ready
+            if ready.get("passed"):
+                report["relogin_after_validation_failed"] = True
+                report["validation_retry_passed"] = True
+            else:
+                report["errors"] = ["百度账号切换后仍未看到当前项目账户，请检查百度账号或项目配置"]
+        else:
+            report["errors"] = ["百度账号切换后仍未看到当前项目账户，请检查百度账号或项目配置"]
 
     # 项目账户复核通过 → 写 browser_login_state
     if ready.get("passed"):

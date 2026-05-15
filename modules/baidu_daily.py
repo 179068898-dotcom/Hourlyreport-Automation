@@ -259,7 +259,10 @@ def fetch_baidu_daily(
 
         # 百度登录状态守卫：确保当前浏览器登录的是本项目账号
         from modules.baidu_session import ensure_baidu_profile_session
-        if not ensure_baidu_profile_session(root, config, page, logger, task="run-daily"):
+        session_result = ensure_baidu_profile_session(root, config, page, logger, task="run-daily")
+        report["session_check"] = {"passed": session_result.get("passed"),
+                                    "decision": session_result.get("decision")}
+        if not session_result.get("passed"):
             report["errors"].append("百度账号切换未完成或用户取消")
             report["finished_at"] = datetime.now().isoformat(timespec="seconds")
             _write_json(output_path, report)
