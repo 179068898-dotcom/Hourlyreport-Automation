@@ -528,33 +528,79 @@ def ensure_baidu_profile_session(
     if not profile:
         return True
 
-    # 最高优先级：当前页面用户名已匹配 → 不退出不重登
-    # 后续由 _goto_report_page 负责从 homepage 进入搜索推广页
     expected_user = get_expected_baidu_username(root, config)
     detected_user = detect_current_baidu_username(page)
-    if detected_user and expected_user and detected_user.strip() == expected_user:
-        logger.info("当前百度账号已匹配项目账号，跳过退出重登")
-        return True
-
-    # 已在可用搜索推广页 → 直接通过
-    if _page_is_usable_search_promotion(page, root, config):
-        return True
-
-    # 当前账号明确不匹配 → 必须退出重登
-    if detected_user and expected_user and detected_user.strip() != expected_user:
-        output_func("  [注意] 正在切换到当前项目百度账号")
-        return force_relogin_current_project(root, config, page, logger, task=task,
-                                             input_func=input_func, output_func=output_func)
-
-    # 无法识别用户名 → 参考 last_profile
     last_profile = get_browser_login_profile(root)
-    if last_profile == profile and is_baidu_logged_in(page):
+    logged_in = is_baidu_logged_in(page)
+
+    # 确定当前 URL 类型
+    url = page.url or "" if page else ""
+    url_type = "other"
+    if "cas.baidu.com" in url:
+        url_type = "cas"
+    elif "/homepage" in url:
+        url_type = "homepage"
+    elif "cc.baidu.com/report" in url:
+        url_type = "report"
+    elif "noauth" in url.lower():
+        url_type = "noauth"
+
+    # 写入诊断报告
+    _write_session_check_report(root, profile, expected_user, detected_user,
+                                last_profile, url_type, logged_in)
+
+    # 决策：bypass / relogin
+    decision = "relogin"
+    reason = "状态未知"
+
+    if detected_user and expected_user and detected_user.strip() == expected_user:
+        decision = "bypass"
+        reason = "当前页面用户名已匹配项目账号"
+    elif _page_is_usable_search_promotion(page, root, config):
+        decision = "bypass"
+        reason = "已在可用搜索推广数据页"
+    elif last_profile == profile and logged_in:
+        decision = "bypass"
+        reason = "last_profile 一致且已登录"
+    elif detected_user and expected_user and detected_user.strip() != expected_user:
+        decision = "relogin"
+        reason = "当前页面用户名与项目账号不匹配"
+
+    # 写回 decision
+    _write_session_check_report(root, profile, expected_user, detected_user,
+                                last_profile, url_type, logged_in, decision, reason)
+
+    if decision == "bypass":
+        logger.info("session bypass: %s", reason)
         return True
 
-    # 状态未知 / last_profile 不一致 → 退出 + CAS 登录
+    # relogin
     output_func("  [注意] 正在切换到当前项目百度账号")
     return force_relogin_current_project(root, config, page, logger, task=task,
                                          input_func=input_func, output_func=output_func)
+
+
+def _write_session_check_report(root, profile, expected_user, detected_user,
+                                 last_profile, url_type, logged_in,
+                                 decision=None, reason=None):
+    """写入 baidu_session_check_report.json，不含 username 明文。"""
+    report = {
+        "credential_profile": profile,
+        "last_profile_matches_current": last_profile == profile,
+        "detected_user_found": detected_user is not None,
+        "detected_user_matches_expected": (
+            True if (detected_user and expected_user and detected_user.strip() == expected_user)
+            else False if (detected_user and expected_user)
+            else None
+        ),
+        "current_url_type": url_type,
+        "is_logged_in": logged_in,
+        "decision": decision,
+        "reason": reason,
+    }
+    out = Path(root) / "reports" / "baidu_session_check_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ── 内部辅助 ──────────────────────────────────────────────
