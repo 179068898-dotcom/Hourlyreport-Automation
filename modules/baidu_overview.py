@@ -333,33 +333,29 @@ def _goto_report_page(page, logger, root=None, config=None) -> bool:
     else:
         goto_ok = False
 
-    # noauth / goto 失败 → 重登后通过菜单路径进入
+    # noauth / goto 失败 → CAS 登录兜底 + 菜单路径进入
     if root is not None and config is not None:
-        logger.info("直接进入报告页失败或 noauth，尝试重登后走菜单路径")
+        logger.info("直接进入报告页失败或 noauth，CAS 登录后走菜单路径")
         if force_relogin_current_project(root, config, page, logger):
-            # 通过首页菜单路径进入，每步检查结果
             _ensure_baidu_home_rendered(page, config, logger)
             _safe_wait_after_click(page, logger)
             menu_ok = True
             for label in ["数据报告", "数据概览", "搜索推广"]:
-                clicked = _click_by_text_or_role(page, [label], logger)
-                if not clicked:
+                if not _click_by_text_or_role(page, [label], logger):
                     logger.error("菜单路径点击失败：%s", label)
                     menu_ok = False
                     break
                 _safe_wait_after_click(page, logger)
             if not menu_ok:
                 return False
-            # 验证最终页面
             if is_baidu_noauth_page(page):
-                logger.error("菜单路径后仍为 noauth 页")
+                logger.error("CAS 登录后仍为 noauth 页")
                 return False
-            # 验证是搜索推广数据页
             from modules.baidu_detector import classify_baidu_page
             text = _read_page_text(page)
             cls = classify_baidu_page(page.url, text)
             if not cls.get("signals", {}).get("has_search_promotion"):
-                logger.error("菜单路径后不是搜索推广数据页")
+                logger.error("CAS 登录后不是搜索推广数据页")
                 return False
             return True
         return False
