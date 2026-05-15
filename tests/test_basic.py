@@ -3880,7 +3880,7 @@ def test_session_usable_page_skips_cas(tmp_path, monkeypatch):
 
 
 def test_session_profile_mismatch_triggers_cas_login(tmp_path, monkeypatch):
-    """last_profile 不一致时触发 CAS 登录。"""
+    """last_profile 不一致且用户名无法识别时触发 CAS 登录。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import ensure_baidu_profile_session, mark_browser_login_success
@@ -3891,12 +3891,13 @@ def test_session_profile_mismatch_triggers_cas_login(tmp_path, monkeypatch):
     fake_page.url = "https://cc.baidu.com/report"
     logger = logging.getLogger("test")
     monkeypatch.setattr("modules.baidu_session._page_is_usable_search_promotion", lambda p, r, c: False)
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: True)
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: None)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: None)
     cas_calls = []
     login_calls = []
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: login_calls.append(1) or True)
-    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
-    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "test_user")
     result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
     assert result is True
     assert len(cas_calls) >= 1
@@ -3904,7 +3905,7 @@ def test_session_profile_mismatch_triggers_cas_login(tmp_path, monkeypatch):
 
 
 def test_session_last_profile_none_triggers_cas(tmp_path, monkeypatch):
-    """last_profile=None 时触发 CAS 登录。"""
+    """last_profile=None 且无法识别用户名时触发 CAS 登录。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import ensure_baidu_profile_session
@@ -3914,16 +3915,38 @@ def test_session_last_profile_none_triggers_cas(tmp_path, monkeypatch):
     fake_page.url = "https://cc.baidu.com/report"
     logger = logging.getLogger("test")
     monkeypatch.setattr("modules.baidu_session._page_is_usable_search_promotion", lambda p, r, c: False)
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: True)
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: None)
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: None)
     cas_calls = []
     login_calls = []
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: login_calls.append(1) or True)
-    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
-    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "test_user")
     result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
     assert result is True
     assert len(cas_calls) >= 1
     assert len(login_calls) >= 1
+
+
+def test_username_match_skips_cas_login(tmp_path, monkeypatch):
+    """当前账号匹配时直接通过，不调用 CAS 登录。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu", "project_name": "昆明牛"}
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    logger = logging.getLogger("test")
+    monkeypatch.setattr("modules.baidu_session._page_is_usable_search_promotion", lambda p, r, c: False)
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "test_user")
+    cas_calls = []
+    monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
+    result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
+    assert result is True
+    assert len(cas_calls) == 0, "账号匹配时不应调用 CAS 登录"
 
 
 def test_no_profile_skips_check(tmp_path):

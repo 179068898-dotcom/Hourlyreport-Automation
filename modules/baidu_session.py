@@ -528,17 +528,33 @@ def ensure_baidu_profile_session(
     if not profile:
         return True
 
-    if _page_is_usable_search_promotion(page, root, config):
-        # 页面可用 → 不写状态，由调用方在项目账户复核后写入
+    # 最高优先级：当前页面用户名已匹配 → 不退出不重登
+    # 后续由 _goto_report_page 负责从 homepage 进入搜索推广页
+    expected_user = get_expected_baidu_username(root, config)
+    detected_user = detect_current_baidu_username(page)
+    if detected_user and expected_user and detected_user.strip() == expected_user:
+        logger.info("当前百度账号已匹配项目账号，跳过退出重登")
         return True
 
-    # 需要切换 → 退出 + CAS 登录
-    output_func("  [注意] 正在切换到当前项目百度账号")
-    if not force_relogin_current_project(root, config, page, logger, task=task,
-                                         input_func=input_func, output_func=output_func):
-        return False
+    # 已在可用搜索推广页 → 直接通过
+    if _page_is_usable_search_promotion(page, root, config):
+        return True
 
-    return True
+    # 当前账号明确不匹配 → 必须退出重登
+    if detected_user and expected_user and detected_user.strip() != expected_user:
+        output_func("  [注意] 正在切换到当前项目百度账号")
+        return force_relogin_current_project(root, config, page, logger, task=task,
+                                             input_func=input_func, output_func=output_func)
+
+    # 无法识别用户名 → 参考 last_profile
+    last_profile = get_browser_login_profile(root)
+    if last_profile == profile and is_baidu_logged_in(page):
+        return True
+
+    # 状态未知 / last_profile 不一致 → 退出 + CAS 登录
+    output_func("  [注意] 正在切换到当前项目百度账号")
+    return force_relogin_current_project(root, config, page, logger, task=task,
+                                         input_func=input_func, output_func=output_func)
 
 
 # ── 内部辅助 ──────────────────────────────────────────────

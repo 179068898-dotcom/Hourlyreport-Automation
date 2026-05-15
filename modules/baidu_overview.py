@@ -332,29 +332,59 @@ def _goto_report_page(page, logger, root=None, config=None) -> bool:
         if page.url.rstrip("/").startswith(CC_REPORT_URL) and not is_baidu_noauth_page(page):
             return True
 
-    # goto 失败 / 停在 homepage / noauth → 菜单路径进入
+    # goto 失败 / 停在 homepage / noauth → 菜单路径进入（最多重试一次）
     if root is not None and config is not None:
-        logger.info("通过菜单路径进入搜索推广数据页")
-        # 如果不在首页，先渲染首页
-        _ensure_baidu_home_rendered(page, config, logger)
-        _safe_wait_after_click(page, logger)
-        for label in ["数据报告", "数据概览", "搜索推广"]:
-            if not _click_by_text_or_role(page, [label], logger):
-                logger.error("菜单路径点击失败：%s", label)
+        for attempt in range(2):
+            logger.info("通过菜单路径进入搜索推广数据页 (attempt %d)", attempt + 1)
+            _ensure_baidu_home_rendered(page, config, logger)
+            page.wait_for_timeout(1500)
+            menu_ok = True
+            for label in ["数据报告", "数据概览", "搜索推广"]:
+                if not _click_by_text_or_role(page, [label], logger):
+                    logger.error("菜单路径点击失败：%s", label)
+                    menu_ok = False
+                    break
+                page.wait_for_timeout(2000)  # 等页面内容加载
+            if not menu_ok:
+                if attempt == 0:
+                    page.wait_for_timeout(3000)  # 重试前等一会
+                    continue
                 return False
-            _safe_wait_after_click(page, logger)
-        # 验证结果
-        if is_baidu_noauth_page(page):
-            logger.error("菜单路径后仍为 noauth 页")
-            return False
-        from modules.baidu_detector import classify_baidu_page
-        text = _read_page_text(page)
-        cls = classify_baidu_page(page.url, text)
-        if not cls.get("signals", {}).get("has_search_promotion"):
-            logger.error("菜单路径后不是搜索推广数据页")
-            return False
-        return True
+            # 等搜索推广内容出现
+            _wait_for_search_promotion_content(page, logger)
+            # 验证结果
+            if is_baidu_noauth_page(page):
+                logger.error("菜单路径后仍为 noauth 页")
+                if attempt == 0:
+                    page.wait_for_timeout(3000)
+                    continue
+                return False
+            from modules.baidu_detector import classify_baidu_page
+            text = _read_page_text(page)
+            cls = classify_baidu_page(page.url, text)
+            if cls.get("signals", {}).get("has_search_promotion"):
+                return True
+            logger.error("菜单路径后不是搜索推广数据页 (attempt %d)", attempt + 1)
+            if attempt == 0:
+                page.wait_for_timeout(3000)
+        return False
 
+    return False
+
+
+def _wait_for_search_promotion_content(page, logger, timeout_ms: int = 10000) -> bool:
+    """等待页面出现搜索推广特征（表头关键词）。"""
+    keywords = ["展现", "点击", "消费", "账户"]
+    deadline = __import__("time").time() + timeout_ms / 1000.0
+    while __import__("time").time() < deadline:
+        try:
+            text = page.locator("body").inner_text(timeout=2000) or ""
+            if all(kw in text for kw in keywords[:2]):
+                return True
+        except Exception:
+            pass
+        page.wait_for_timeout(500)
+    logger.info("等待搜索推广内容超时")
     return False
 
 
