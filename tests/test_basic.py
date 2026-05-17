@@ -4668,3 +4668,122 @@ def test_tentative_bypass_retry_still_fails_error_converges(tmp_path, monkeypatc
     assert "未看到当前项目账户" in " ".join(report["errors"])
     assert "银康01" not in " ".join(report["errors"])
     assert len(mark_calls) == 0
+def test_force_relogin_retries_logout_once_before_cas(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import force_relogin_current_project
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/homepage"
+    logger = logging.getLogger("test")
+
+    logout_results = [
+        {"success": False, "message": "first"},
+        {"success": True, "message": "second"},
+    ]
+    cas_calls = []
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account", lambda page: logout_results.pop(0))
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
+    monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
+
+    result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
+    assert result is True
+    assert len(cas_calls) == 1
+
+
+def test_force_relogin_double_logout_failure_blocks_cas(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import force_relogin_current_project
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/homepage"
+    logger = logging.getLogger("test")
+
+    cas_calls = []
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account", lambda page: {"success": False, "message": "nope"})
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
+    monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
+
+    result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
+    assert result is False
+    assert len(cas_calls) == 0
+
+
+def test_session_detected_none_logged_in_uses_tentative_bypass(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import ensure_baidu_profile_session
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/homepage"
+    logger = logging.getLogger("test")
+
+    relogin_calls = []
+    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "target")
+    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: None)
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: True)
+    monkeypatch.setattr("modules.baidu_session._page_is_usable_search_promotion", lambda p, r, c: False)
+    monkeypatch.setattr("modules.baidu_session.force_relogin_current_project", lambda *args, **kwargs: relogin_calls.append(1) or True)
+
+    result = ensure_baidu_profile_session(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
+    assert result["passed"] is True
+    assert result["decision"] == "tentative_bypass"
+    assert relogin_calls == []
+
+
+def test_goto_report_homepage_failure_returns_false_without_parse(monkeypatch):
+    from unittest.mock import MagicMock
+    from modules.baidu_overview import _goto_report_page
+    import logging
+    logger = logging.getLogger("test")
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/homepage"
+
+    monkeypatch.setattr("modules.baidu_overview._ensure_baidu_home_rendered", lambda page, config, logger: "")
+    monkeypatch.setattr("modules.baidu_overview._click_by_text_or_role", lambda page, labels, logger: None)
+    monkeypatch.setattr("modules.baidu_session.is_baidu_noauth_page", lambda page: False)
+
+    result = _goto_report_page(fake_page, logger, root=".", config={"project_id": "p"})
+    assert result is False
+
+
+def test_baidu_prepare_overview_does_not_write_state_when_validate_fails(tmp_path, monkeypatch):
+    import logging
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    (tmp_path / "reports" / "baidu_visible_text.txt").write_text("homepage", encoding="utf-8")
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+
+    monkeypatch.setattr(
+        "modules.baidu_overview.baidu_open_overview",
+        lambda config, root, logger: {
+            "final_url": "https://cc.baidu.com/homepage",
+            "errors": [],
+            "session_check": {"decision": "bypass", "passed": True},
+        },
+    )
+    monkeypatch.setattr(
+        "modules.baidu_overview.validate_overview_ready",
+        lambda visible_text, target_date, config: {
+            "passed": False,
+            "errors": ["百度搜索推广数据页打开失败，请检查百度后台页面状态"],
+        },
+    )
+    mark_calls = []
+    monkeypatch.setattr("modules.baidu_session.mark_browser_login_success", lambda root, credential_profile, **kw: mark_calls.append(1))
+
+    from modules.baidu_overview import baidu_prepare_overview
+    report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
+    assert report["errors"]
+    assert mark_calls == []

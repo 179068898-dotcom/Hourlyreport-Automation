@@ -105,17 +105,6 @@ def detect_current_baidu_username(page) -> str | None:
     if page is None:
         return None
     try:
-        text = page.locator("body").inner_text(timeout=2000) or ""
-        patterns = [
-            r"欢迎[，,\s]*(\S+)",
-            r"你好[，,\s]*(\S+)",
-            r"Hi[,，\s]*(\S+)",
-            r"您好[，,\s]*(\S+)",
-        ]
-        for pat in patterns:
-            m = re.search(pat, text)
-            if m:
-                return m.group(1).rstrip("，,。.")
         for sel in [
             ".uc-cc-nav_triggerUsername", ".widget-Header_ccProfile",
             ".one-dropdown-trigger", ".user-name", ".username",
@@ -129,10 +118,19 @@ def detect_current_baidu_username(page) -> str | None:
                         return name
             except Exception:
                 continue
+        text = page.locator("body").inner_text(timeout=2000) or ""
+        for pat in [
+            r"\u6b22\u8fce[\uff1f?\s]*(\S+)",
+            r"\u4f60\u597d[\uff1f?\s]*(\S+)",
+            r"Hi[,\uff1fs]*(\S+)",
+            r"\u60a8\u597d[\uff1f?\s]*(\S+)",
+        ]:
+            m = re.search(pat, text)
+            if m:
+                return m.group(1).rstrip("\uff0c\u3002")
         return None
     except Exception:
         return None
-
 
 def is_current_baidu_user_expected(page, root: str | Path, config: dict[str, Any]) -> bool:
     expected = get_expected_baidu_username(root, config)
@@ -480,7 +478,6 @@ def force_relogin_current_project(
     task: str | None = None,
     input_func: Any = None, output_func: Any = None,
 ) -> bool:
-    """优先点击退出 → CAS 登录当前项目。"""
     import builtins
     if input_func is None:
         input_func = builtins.input
@@ -492,41 +489,41 @@ def force_relogin_current_project(
 
     project_id = config.get("project_id", "")
     project_name = config.get("project_name", "")
+    on_cas_page = wait_until_cas_login_page(page, timeout_ms=3000)
+    logged_in = is_baidu_logged_in(page)
 
-    # 1. 尝试页面点击退出
-    logout_result = logout_baidu_account(page)
-    if logout_result.get("success"):
-        output_func("  [通过] 已退出旧百度账号，正在登录当前项目账号")
-    elif wait_until_cas_login_page(page, timeout_ms=3000):
-        # 页面已是 CAS/登录页 → 无需退出，直接登录
-        logger.info("已在 CAS 登录页，跳过退出")
-    elif is_baidu_logged_in(page):
-        # 退出失败 + 仍登录 → 不进 CAS（SSO 会沿用旧账号）
-        output_func("  [失败] 未能自动退出旧百度账号，请手动退出后重试")
-        return False
-    logger.info("账号切换：退出结果=%s", logout_result.get("success"))
+    if not on_cas_page and logged_in:
+        logout_result = None
+        for attempt in range(2):
+            logout_result = logout_baidu_account(page)
+            if logout_result.get("success"):
+                output_func("  [\u901a\u8fc7] \u5df2\u9000\u51fa\u65e7\u767e\u5ea6\u8d26\u53f7\uff0c\u6b63\u5728\u767b\u5f55\u5f53\u524d\u9879\u76ee\u8d26\u53f7")
+                break
+            logger.warning("logout_baidu_account failed on attempt %s", attempt + 1)
+            if attempt == 0:
+                page.wait_for_timeout(1000)
+        if not logout_result or not logout_result.get("success"):
+            output_func("  [\u5931\u8d25] \u672a\u80fd\u81ea\u52a8\u9000\u51fa\u65e7\u767e\u5ea6\u8d26\u53f7\uff0c\u8bf7\u624b\u52a8\u9000\u51fa\u540e\u91cd\u8bd5")
+            return False
+    else:
+        logger.info("skip logout: cas=%s logged_in=%s", on_cas_page, logged_in)
 
-    # 2. 等待 CAS 登录页稳定
     if not wait_until_cas_login_page(page):
         entry = goto_baidu_login_page(page)
         if not entry.get("success"):
-            output_func("  [失败] 百度登录页打开失败")
+            output_func("  [\u5931\u8d25] \u767e\u5ea6\u767b\u5f55\u9875\u6253\u5f00\u5931\u8d25")
             return False
     page.wait_for_timeout(1000)
 
-    # 3. 登录当前项目（不写 browser_login_state — 由调用方复核后写）
     login_result = _do_login_flow(root, config, page, logger, project_id, project_name, task, output_func)
     return login_result.get("success", False)
 
-
-# ── Profile 一致性守卫（主入口） ──────────────────────────
 
 def ensure_baidu_profile_session(
     root: Path, config: dict[str, Any], page, logger,
     task: str | None = None,
     input_func: Any = None, output_func: Any = None,
 ) -> bool:
-    """执行百度抓数前调用。只在真正执行任务时才检查百度账号。"""
     import builtins
     if input_func is None:
         input_func = builtins.input
@@ -544,45 +541,44 @@ def ensure_baidu_profile_session(
 
     url = page.url or "" if page else ""
     url_type = "other"
-    if "cas.baidu.com" in url: url_type = "cas"
-    elif "/homepage" in url: url_type = "homepage"
-    elif "cc.baidu.com/report" in url: url_type = "report"
-    elif "noauth" in url.lower(): url_type = "noauth"
-
-    _write_session_check_report(root, profile, expected_user, detected_user,
-                                last_profile, url_type, logged_in)
+    if "cas.baidu.com" in url:
+        url_type = "cas"
+    elif "/homepage" in url:
+        url_type = "homepage"
+    elif "cc.baidu.com/report" in url:
+        url_type = "report"
+    elif "noauth" in url.lower():
+        url_type = "noauth"
 
     decision = "relogin"
-    reason = "状态未知"
-
+    reason = "state_unknown"
     if detected_user and expected_user and detected_user.strip() == expected_user:
         decision = "bypass"
-        reason = "当前页面用户名已匹配项目账号"
+        reason = "username_match"
     elif detected_user and expected_user and detected_user.strip() != expected_user:
         decision = "relogin"
-        reason = "当前页面用户名与项目账号不匹配"
-    elif _page_is_usable_search_promotion(page, root, config):
-        decision = "bypass"
-        reason = "已在可用搜索推广数据页"
+        reason = "username_mismatch"
     elif not detected_user and logged_in:
         decision = "tentative_bypass"
-        reason = "无法识别用户名但页面已登录，需项目账户复核"
+        reason = "logged_in_but_username_missing"
+    elif _page_is_usable_search_promotion(page, root, config):
+        decision = "bypass"
+        reason = "usable_search_promotion_page"
 
-    _write_session_check_report(root, profile, expected_user, detected_user,
-                                last_profile, url_type, logged_in, decision, reason)
+    _write_session_check_report(
+        root, profile, expected_user, detected_user, last_profile, url_type, logged_in, decision, reason
+    )
 
     result = {"passed": True, "decision": decision, "reason": reason}
-
     if decision == "relogin":
-        output_func("  [注意] 正在切换到当前项目百度账号")
-        relogin_ok = force_relogin_current_project(root, config, page, logger, task=task,
-                                                   input_func=input_func, output_func=output_func)
-        result["passed"] = relogin_ok
+        output_func("  [\u6ce8\u610f] \u6b63\u5728\u5207\u6362\u5230\u5f53\u524d\u9879\u76ee\u767e\u5ea6\u8d26\u53f7")
+        result["passed"] = force_relogin_current_project(
+            root, config, page, logger, task=task, input_func=input_func, output_func=output_func
+        )
         return result
 
     logger.info("session %s: %s", decision, reason)
     return result
-
 
 def _write_session_check_report(root, profile, expected_user, detected_user,
                                  last_profile, url_type, logged_in,

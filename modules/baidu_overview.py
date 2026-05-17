@@ -282,14 +282,29 @@ def _click_by_text_or_role(page, labels: list[str], logger) -> str | None:
                 locator = locator_factory()
                 if locator.count() <= 0:
                     continue
-                locator.first.click(timeout=8000)
-                logger.info("百度概览路径点击：%s", label)
+                target = locator.first
+                try:
+                    target.hover(timeout=3000)
+                    page.wait_for_timeout(300)
+                except Exception:
+                    pass
+                target.click(timeout=8000)
+                logger.info("clicked baidu menu label: %s", label)
                 _safe_wait_after_click(page, logger)
                 return label
             except Exception:
                 continue
     return None
 
+
+def _is_report_page_ready_for_parse(page, config: dict[str, Any], visible_text: str | None = None) -> bool:
+    text = visible_text if visible_text is not None else _read_page_text(page)
+    classification = classify_baidu_page(page.url, text)
+    if not is_search_promotion_overview(classification):
+        return False
+    if not overview_text_has_account_table(text, config):
+        return False
+    return True
 
 def _select_backend_page(context, current_page, logger):
     backend_pages = [
@@ -308,69 +323,62 @@ def _select_backend_page(context, current_page, logger):
 
 
 def _goto_report_page(page, logger, root=None, config=None) -> bool:
-    """打开百度搜索推广数据页。
+    from modules.baidu_session import is_baidu_noauth_page
+    from modules.baidu_detector import classify_baidu_page as detector_classify_baidu_page
 
-    - 已在 report 页且非 noauth → 直接通过
-    - 不在 report 页 → 直接 goto；goto 后仍在 homepage 或 noauth → 走菜单路径
-    - 菜单路径：首页 → 数据报告 → 数据概览 → 搜索推广
-    """
-    from modules.baidu_session import is_baidu_noauth_page, force_relogin_current_project
-
-    # 已在 report 页且可用 → 直接通过
+    current_text = _read_page_text(page)
+    current_cls = detector_classify_baidu_page(page.url, current_text)
     if page.url.rstrip("/").startswith(CC_REPORT_URL) and not is_baidu_noauth_page(page):
-        return True
+        if current_cls.get("signals", {}).get("has_search_promotion") or root is None or config is None:
+            return True
 
-    # 尝试直接 goto report 页
     if not page.url.rstrip("/").startswith(CC_REPORT_URL):
-        logger.info("直接打开百度数据报告页：%s", CC_REPORT_URL)
+        logger.info("open baidu report url directly: %s", CC_REPORT_URL)
         try:
             page.goto(CC_REPORT_URL, wait_until="domcontentloaded", timeout=60000)
         except Exception:
-            logger.error("进入百度报告页异常")
+            logger.error("open baidu report page failed")
         _safe_wait_after_click(page, logger)
-        # 验证确实进入了 report 页（非 homepage）
+        current_text = _read_page_text(page)
+        current_cls = detector_classify_baidu_page(page.url, current_text)
         if page.url.rstrip("/").startswith(CC_REPORT_URL) and not is_baidu_noauth_page(page):
-            return True
-
-    # goto 失败 / 停在 homepage / noauth → 菜单路径进入（最多重试一次）
-    if root is not None and config is not None:
-        for attempt in range(2):
-            logger.info("通过菜单路径进入搜索推广数据页 (attempt %d)", attempt + 1)
-            _ensure_baidu_home_rendered(page, config, logger)
-            page.wait_for_timeout(1500)
-            menu_ok = True
-            for label in ["数据报告", "数据概览", "搜索推广"]:
-                if not _click_by_text_or_role(page, [label], logger):
-                    logger.error("菜单路径点击失败：%s", label)
-                    menu_ok = False
-                    break
-                page.wait_for_timeout(2000)  # 等页面内容加载
-            if not menu_ok:
-                if attempt == 0:
-                    page.wait_for_timeout(3000)  # 重试前等一会
-                    continue
-                return False
-            # 等搜索推广内容出现
-            _wait_for_search_promotion_content(page, logger)
-            # 验证结果
-            if is_baidu_noauth_page(page):
-                logger.error("菜单路径后仍为 noauth 页")
-                if attempt == 0:
-                    page.wait_for_timeout(3000)
-                    continue
-                return False
-            from modules.baidu_detector import classify_baidu_page
-            text = _read_page_text(page)
-            cls = classify_baidu_page(page.url, text)
-            if cls.get("signals", {}).get("has_search_promotion"):
+            if current_cls.get("signals", {}).get("has_search_promotion"):
                 return True
-            logger.error("菜单路径后不是搜索推广数据页 (attempt %d)", attempt + 1)
-            if attempt == 0:
-                page.wait_for_timeout(3000)
+
+    if root is None or config is None:
         return False
 
+    for attempt in range(2):
+        logger.info("navigate to search promotion via menu, attempt=%s", attempt + 1)
+        _ensure_baidu_home_rendered(page, config, logger)
+        page.wait_for_timeout(1500)
+        menu_ok = True
+        for label in ["\u6570\u636e\u62a5\u544a", "\u6570\u636e\u6982\u89c8", "\u641c\u7d22\u63a8\u5e7f"]:
+            if not _click_by_text_or_role(page, [label], logger):
+                logger.error("menu path click failed: %s", label)
+                menu_ok = False
+                break
+            page.wait_for_timeout(1200)
+        if not menu_ok:
+            if attempt == 0:
+                page.wait_for_timeout(2000)
+                continue
+            return False
+        _wait_for_search_promotion_content(page, logger)
+        current_text = _read_page_text(page)
+        current_cls = detector_classify_baidu_page(page.url, current_text)
+        if is_baidu_noauth_page(page):
+            logger.error("menu path still on noauth page")
+            if attempt == 0:
+                page.wait_for_timeout(2000)
+                continue
+            return False
+        if current_cls.get("signals", {}).get("has_search_promotion"):
+            return True
+        logger.error("menu path did not reach search promotion page, attempt=%s", attempt + 1)
+        if attempt == 0:
+            page.wait_for_timeout(2000)
     return False
-
 
 def _wait_for_search_promotion_content(page, logger, timeout_ms: int = 10000) -> bool:
     """等待页面出现搜索推广特征（表头关键词）。"""
@@ -463,16 +471,16 @@ def baidu_open_overview(
             try:
                 _dump_open_overview_artifacts(root, page, report, bool(baidu_config.get("debug_screenshot", False)))
             except Exception as exc:
-                report["errors"].append(f"输出百度诊断文件失败：{exc}")
+                report["errors"].append(f"output debug artifacts failed: {exc}")
         report["finished_at"] = datetime.now().isoformat(timespec="seconds")
         _write_json(report_path, report)
-        logger.info("baidu-open-overview 报告已输出：%s；错误数：%s", report_path, len(report["errors"]))
+        logger.info("baidu-open-overview report saved: %s; errors=%s", report_path, len(report["errors"]))
         return report
 
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
-        report["errors"].append(f"Playwright 未安装，无法打开百度概览页：{exc}")
+        report["errors"].append(f"Playwright import failed: {exc}")
         return finish()
 
     with sync_playwright() as playwright:
@@ -480,7 +488,7 @@ def baidu_open_overview(
             context, page = launch_chrome_context(playwright, config, root)
         except BrowserLaunchError as exc:
             report["errors"].append(str(exc))
-            logger.error("baidu-open-overview 连接 Chrome 失败：%s", exc)
+            logger.error("baidu-open-overview connect chrome failed: %s", exc)
             return finish()
 
         report["connected"] = True
@@ -489,7 +497,7 @@ def baidu_open_overview(
         try:
             page.wait_for_load_state("domcontentloaded", timeout=30000)
         except Exception:
-            logger.info("baidu-open-overview 等待 domcontentloaded 超时，继续读取当前页面。")
+            logger.info("baidu-open-overview wait domcontentloaded timed out")
 
         visible_text = _ensure_baidu_home_rendered(page, config, logger)
         classification = classify_baidu_page(page.url, visible_text)
@@ -504,83 +512,43 @@ def baidu_open_overview(
             classification = classify_baidu_page(page.url, visible_text)
             report["login_status"] = classification["login_status"]
 
-        # 百度登录状态守卫：确保当前浏览器登录的是本项目账号
         from modules.baidu_session import ensure_baidu_profile_session
-        session_result = ensure_baidu_profile_session(root, config, page, logger, task="fetch-baidu-auto",
-                                                      input_func=input_func)
-        report["session_check"] = {"passed": session_result.get("passed"),
-                                    "decision": session_result.get("decision"),
-                                    "reason": session_result.get("reason")}
+        session_result = ensure_baidu_profile_session(
+            root, config, page, logger, task="fetch-baidu-auto", input_func=input_func
+        )
+        report["session_check"] = {
+            "passed": session_result.get("passed"),
+            "decision": session_result.get("decision"),
+            "reason": session_result.get("reason"),
+        }
         if not session_result.get("passed"):
-            report["errors"].append("百度账号切换未完成或用户取消")
+            report["errors"].append("account switch failed or cancelled")
             return finish(page)
 
-        if is_search_promotion_overview(classification):
-            visible_text = _refresh_report_and_wait_for_data(page, config, logger)
-            classification = classify_baidu_page(page.url, visible_text)
-            report["already_on_target"] = True
-            report["final_url"] = page.url
-            report["final_page_type"] = classification["page_type"]
-            return finish(page)
-
-        if not _goto_report_page(page, logger, root=root, config=config):
-            report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
-            return finish(page)
-        report["clicked_steps"].append({"step": "打开数据报告页", "clicked_text": CC_REPORT_URL})
-        visible_text = _refresh_report_and_wait_for_data(page, config, logger)
+        visible_text = _read_page_text(page)
         classification = classify_baidu_page(page.url, visible_text)
         report["login_status"] = classification["login_status"]
-        if classification["login_status"] == "not_logged_in" or "login" in page.url:
-            if not _auto_login_if_needed(page, root, config, logger):
-                report["errors"].append(build_login_failure_message(config))
-                return finish(page)
-            if not _goto_report_page(page, logger, root=root, config=config):
-                report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
-                return finish(page)
+        if _is_report_page_ready_for_parse(page, config, visible_text):
             visible_text = _refresh_report_and_wait_for_data(page, config, logger)
             classification = classify_baidu_page(page.url, visible_text)
-            report["login_status"] = classification["login_status"]
-        if is_search_promotion_overview(classification):
-            report["final_url"] = page.url
-            report["final_page_type"] = classification["page_type"]
-            return finish(page)
-
-        if page.url.rstrip("/").startswith(CC_REPORT_URL):
-            visible_text = _refresh_report_and_wait_for_data(page, config, logger)
-            classification = classify_baidu_page(page.url, visible_text)
-            if is_search_promotion_overview(classification):
+            if _is_report_page_ready_for_parse(page, config, visible_text):
+                report["already_on_target"] = True
                 report["final_url"] = page.url
                 report["final_page_type"] = classification["page_type"]
                 return finish(page)
 
-        steps = [
-            ("搜索推广", ["搜索推广"]),
-        ]
-        for step_name, labels in steps:
-            visible_text = _read_page_text(page)
-            classification = classify_baidu_page(page.url, visible_text)
-            if step_name == "数据报告" and classification["signals"].get("has_data_report"):
-                logger.info("百度概览路径已处于或可见数据报告区域，跳过重复点击：%s", step_name)
-                continue
-            if step_name == "数据概览" and classification["signals"].get("has_data_overview"):
-                logger.info("百度概览路径已处于数据概览，跳过重复点击：%s", step_name)
-                continue
-            if step_name == "搜索推广" and classification["signals"].get("has_search_promotion"):
-                logger.info("百度概览路径已处于搜索推广，跳过重复点击：%s", step_name)
-                continue
+        if not _goto_report_page(page, logger, root=root, config=config):
+            report["errors"].append("\u767e\u5ea6\u641c\u7d22\u63a8\u5e7f\u6570\u636e\u9875\u6253\u5f00\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u540e\u53f0\u9875\u9762\u72b6\u6001")
+            return finish(page)
 
-            clicked = _click_by_text_or_role(page, labels, logger)
-            if not clicked:
-                report["errors"].append(f"找不到可点击入口：{step_name}")
-                return finish(page)
-            report["clicked_steps"].append({"step": step_name, "clicked_text": clicked})
-
-        visible_text = _read_page_text(page)
-        final_classification = classify_baidu_page(page.url, visible_text)
+        visible_text = _refresh_report_and_wait_for_data(page, config, logger)
+        classification = classify_baidu_page(page.url, visible_text)
+        report["login_status"] = classification["login_status"]
         report["final_url"] = page.url
-        report["final_page_type"] = final_classification["page_type"]
-        if not is_search_promotion_overview(final_classification):
-            report["errors"].append("未能进入 数据报告 → 数据概览 → 搜索推广 页面")
+        report["final_page_type"] = classification["page_type"]
+        if not _is_report_page_ready_for_parse(page, config, visible_text):
+            report["errors"].append("\u767e\u5ea6\u641c\u7d22\u63a8\u5e7f\u6570\u636e\u9875\u6253\u5f00\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u540e\u53f0\u9875\u9762\u72b6\u6001")
+            return finish(page)
         return finish(page)
 
 
@@ -619,19 +587,19 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
     report["ready_check"] = ready
     report["errors"].extend(error for error in ready["errors"] if error not in report["errors"])
 
-    # tentative_bypass + 目标账户缺失 → 自动 relogin 一次
     session_decision = (open_report.get("session_check") or {}).get("decision", "")
-    has_missing_accounts = any("缺失" in e or "缺少" in e or "未看到" in e
-                               for e in ready.get("errors", []))
+    has_missing_accounts = any(
+        "\u7f3a\u5931" in e or "\u7f3a\u5c11" in e or "\u672a\u770b\u5230" in e
+        for e in ready.get("errors", [])
+    )
     if not ready.get("passed") and session_decision == "tentative_bypass" and has_missing_accounts:
         from modules.baidu_session import clear_browser_login_state
         report["validation_retry_triggered"] = True
-        report["validation_retry_reason"] = "tentative_bypass 后目标账户缺失"
+        report["validation_retry_reason"] = "tentative_bypass_after_missing_accounts"
         clear_browser_login_state(root)
-        logger.info("tentative_bypass + 账户缺失 → 清空状态后重新打开搜索推广页")
-        # 重新打开搜索推广页（内部会触发 session guard + force_relogin）
+        logger.info("tentative bypass failed account validation, retry with relogin")
         retry_open = baidu_open_overview(config, root, logger)
-        report["errors"] = []  # 清除第一次 validate 的错误
+        report["errors"] = []
         if not retry_open.get("errors"):
             retry_text_path = root / "reports" / "baidu_visible_text.txt"
             retry_text = retry_text_path.read_text(encoding="utf-8") if retry_text_path.exists() else ""
@@ -641,19 +609,27 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
                 report["relogin_after_validation_failed"] = True
                 report["validation_retry_passed"] = True
             else:
-                report["errors"] = ["百度账号切换后仍未看到当前项目账户，请检查百度账号或项目配置"]
+                report["errors"] = [
+                    "\u767e\u5ea6\u8d26\u53f7\u5207\u6362\u540e\u4ecd\u672a\u770b\u5230\u5f53\u524d\u9879\u76ee\u8d26\u6237\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u8d26\u53f7\u6216\u9879\u76ee\u914d\u7f6e"
+                ]
         else:
-            report["errors"] = ["百度账号切换后仍未看到当前项目账户，请检查百度账号或项目配置"]
+            report["errors"] = [
+                "\u767e\u5ea6\u8d26\u53f7\u5207\u6362\u540e\u4ecd\u672a\u770b\u5230\u5f53\u524d\u9879\u76ee\u8d26\u6237\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u8d26\u53f7\u6216\u9879\u76ee\u914d\u7f6e"
+            ]
 
-    # 项目账户复核通过 → 写 browser_login_state
     if ready.get("passed"):
         from modules.baidu_session import mark_browser_login_success
         profile = config.get("baidu", {}).get("credential_profile") or config.get("baidu", {}).get("credential_project", "")
         if profile:
-            mark_browser_login_success(root, profile, project_id=config.get("project_id"),
-                                       project_name=config.get("project_name"), task="fetch-baidu-auto")
+            mark_browser_login_success(
+                root,
+                profile,
+                project_id=config.get("project_id"),
+                project_name=config.get("project_name"),
+                task="fetch-baidu-auto",
+            )
 
     report["finished_at"] = datetime.now().isoformat(timespec="seconds")
     _write_json(report_path, report)
-    logger.info("baidu-prepare-overview 报告已输出：%s；错误数：%s", report_path, len(report["errors"]))
+    logger.info("baidu-prepare-overview report saved: %s; errors=%s", report_path, len(report["errors"]))
     return report
