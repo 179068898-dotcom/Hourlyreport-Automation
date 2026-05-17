@@ -2,7 +2,7 @@
   "project_id": "ningbo_niu",
   "project_name": "宁波牛",
   "excel": {
-    "path": "D:\\宁波牛\\竞价数据.xlsx",
+    "path": "D:\\Seafile\\【竞价】\\【❤宁波牛】\\【2026年】【宁波牛】竞价数据\\【宁波YXB】2026竞价数据.xlsx",
     "hourly_sheet": "时段数据",
     "daily_sheet": "百度",
     "engine": "openpyxl"

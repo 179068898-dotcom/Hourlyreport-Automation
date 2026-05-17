@@ -2,7 +2,7 @@
   "project_id": "changsha_niu",
   "project_name": "长沙牛",
   "excel": {
-    "path": "D:\\长沙牛\\竞价数据.xlsx",
+    "path": "D:\\Seafile\\【竞价】\\【❤长沙牛】\\【长沙】2026竞价数据 .xlsx",
     "hourly_sheet": "时段数据",
     "daily_sheet": "百度",
     "engine": "openpyxl"

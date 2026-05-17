@@ -3891,7 +3891,7 @@ def test_session_profile_mismatch_triggers_cas_login(tmp_path, monkeypatch):
     fake_page.url = "https://cc.baidu.com/report"
     logger = logging.getLogger("test")
     monkeypatch.setattr("modules.baidu_session._page_is_usable_search_promotion", lambda p, r, c: False)
-    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: True)
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: False)
     monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: None)
     monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: None)
     cas_calls = []
@@ -3915,7 +3915,7 @@ def test_session_last_profile_none_triggers_cas(tmp_path, monkeypatch):
     fake_page.url = "https://cc.baidu.com/report"
     logger = logging.getLogger("test")
     monkeypatch.setattr("modules.baidu_session._page_is_usable_search_promotion", lambda p, r, c: False)
-    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: True)
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda p: False)
     monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: None)
     monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: None)
     cas_calls = []
@@ -3961,7 +3961,7 @@ def test_no_profile_skips_check(tmp_path):
 
 
 def test_force_relogin_uses_cas_page(tmp_path, monkeypatch):
-    """force_relogin_current_project 进入 CAS 登录页。"""
+    """force_relogin_current_project 退出成功 → 进入 CAS 登录页。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import force_relogin_current_project
@@ -3972,6 +3972,8 @@ def test_force_relogin_uses_cas_page(tmp_path, monkeypatch):
     logger = logging.getLogger("test")
     cas_calls = []
     login_calls = []
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account", lambda page: {"success": True, "message": "ok"})
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
     monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: login_calls.append(1) or True)
     monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
@@ -4126,6 +4128,7 @@ def test_force_relogin_tries_logout_then_cas(tmp_path, monkeypatch):
     login_calls = []
     monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
                         lambda page: logout_calls.append(1) or {"success": True, "message": "ok"})
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page",
                         lambda page: cas_calls.append(1) or {"success": True})
     monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
@@ -4140,8 +4143,8 @@ def test_force_relogin_tries_logout_then_cas(tmp_path, monkeypatch):
     assert len(login_calls) >= 1, "应登录"
 
 
-def test_logout_failure_still_proceeds_to_cas(tmp_path, monkeypatch):
-    """logout 失败后仍进 CAS 兜底。"""
+def test_logout_failure_stops_before_cas(tmp_path, monkeypatch):
+    """logout 失败且页面已登录 → force_relogin 返回 False，不进 CAS。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import force_relogin_current_project
@@ -4155,15 +4158,14 @@ def test_logout_failure_still_proceeds_to_cas(tmp_path, monkeypatch):
     cas_calls = []
     monkeypatch.setattr("modules.baidu_session.logout_baidu_account",
                         lambda page: {"success": False, "message": "未找到"})
+    monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page",
                         lambda page: cas_calls.append(1) or {"success": True})
-    monkeypatch.setattr("modules.baidu_session.get_expected_baidu_username", lambda r, c: "test_user")
-    monkeypatch.setattr("modules.baidu_session.detect_current_baidu_username", lambda p: "test_user")
-    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
 
     result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is True
-    assert len(cas_calls) >= 1, "logout 失败后仍应进 CAS"
+    assert result is False, "logout 失败且已登录应返回 False"
+    assert len(cas_calls) == 0, "logout 失败不应进 CAS"
 
 
 def test_wait_until_cas_only_accepts_cas_url():

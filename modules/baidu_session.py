@@ -116,7 +116,11 @@ def detect_current_baidu_username(page) -> str | None:
             m = re.search(pat, text)
             if m:
                 return m.group(1).rstrip("，,。.")
-        for sel in [".user-name", ".username", "#username", "[class*='user']", ".account-name"]:
+        for sel in [
+            ".uc-cc-nav_triggerUsername", ".widget-Header_ccProfile",
+            ".one-dropdown-trigger", ".user-name", ".username",
+            "#username", "[class*='user']", ".account-name",
+        ]:
             try:
                 el = page.locator(sel).first
                 if el.count() > 0:
@@ -493,8 +497,13 @@ def force_relogin_current_project(
     logout_result = logout_baidu_account(page)
     if logout_result.get("success"):
         output_func("  [通过] 已退出旧百度账号，正在登录当前项目账号")
-    else:
-        output_func("  [注意] 未能自动点击退出，正在使用登录页兜底")
+    elif wait_until_cas_login_page(page, timeout_ms=3000):
+        # 页面已是 CAS/登录页 → 无需退出，直接登录
+        logger.info("已在 CAS 登录页，跳过退出")
+    elif is_baidu_logged_in(page):
+        # 退出失败 + 仍登录 → 不进 CAS（SSO 会沿用旧账号）
+        output_func("  [失败] 未能自动退出旧百度账号，请手动退出后重试")
+        return False
     logger.info("账号切换：退出结果=%s", logout_result.get("success"))
 
     # 2. 等待 CAS 登录页稳定
@@ -555,9 +564,9 @@ def ensure_baidu_profile_session(
     elif _page_is_usable_search_promotion(page, root, config):
         decision = "bypass"
         reason = "已在可用搜索推广数据页"
-    elif not detected_user and last_profile == profile and logged_in:
+    elif not detected_user and logged_in:
         decision = "tentative_bypass"
-        reason = "last_profile 一致但无法确认用户名，需项目账户复核"
+        reason = "无法识别用户名但页面已登录，需项目账户复核"
 
     _write_session_check_report(root, profile, expected_user, detected_user,
                                 last_profile, url_type, logged_in, decision, reason)
