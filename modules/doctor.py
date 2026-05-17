@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import platform
-import socket
 import sys
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ from modules.excel_engine import (
     is_openpyxl_installed,
     test_openpyxl_save_copy,
 )
+from modules.excel_inspector import inspect_excel_structure
 from modules.kst_export_parser import find_latest_kst_export
 from modules.project_config import get_current_project, load_app_config, validate_project_config
 
@@ -40,9 +40,7 @@ def _resolve(root: Path, value: str | Path | None) -> Path | None:
     if value in (None, ""):
         return None
     path = Path(value)
-    if path.is_absolute():
-        return path
-    return root / path
+    return path if path.is_absolute() else root / path
 
 
 def _check_python() -> dict[str, Any]:
@@ -90,7 +88,7 @@ def _check_requirements(root: Path, excel_engine: str = "openpyxl") -> dict[str,
         )
     message = f"requirements 依赖检查通过，共 {len(checked)} 项"
     if skipped_optional:
-        message += f"；openpyxl 模式已跳过 Excel COM 备用依赖：{', '.join(skipped_optional)}"
+        message += f"（openpyxl 模式已跳过 Excel COM 备用依赖：{', '.join(skipped_optional)}）"
     return _ok(message, {"checked": checked, "skipped_optional": skipped_optional})
 
 
@@ -106,30 +104,21 @@ def _check_excel_available() -> dict[str, Any]:
     for path in candidates:
         if path.exists():
             return _ok(f"Microsoft Excel 已找到：{path}", {"path": str(path)})
-    try:
-        import winreg
-
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\excel.exe") as key:
-            value, _ = winreg.QueryValueEx(key, None)
-        if value:
-            return _ok(f"Microsoft Excel 已注册：{value}", {"path": value})
-    except Exception as exc:
-        return _warn(f"未确认 Microsoft Excel 可用：{exc}")
-    return _warn("未找到 Microsoft Excel。若使用 WPS 打开文件，写入前也必须关闭目标表格。")
+    return _warn("未找到 Microsoft Excel。如使用 openpyxl 则可忽略此项。")
 
 
 def _check_excel_engine(engine: str) -> dict[str, Any]:
     if engine == "openpyxl":
-        return _ok("当前 Excel 写入引擎：openpyxl，适合 WPS 环境，不要求安装 Microsoft Excel。", {"engine": engine})
+        return _ok("当前 Excel 写入引擎：openpyxl，适合 WPS 环境，不要求安装 Microsoft Excel", {"engine": engine})
     if engine == "excel_com":
-        return _ok("当前 Excel 写入引擎：excel_com，需要 Microsoft Excel COM 可用。", {"engine": engine})
-    return _warn(f"不支持的 Excel 写入引擎：{engine}，建议使用 openpyxl。", {"engine": engine})
+        return _ok("当前 Excel 写入引擎：excel_com", {"engine": engine})
+    return _warn(f"不支持的 Excel 写入引擎：{engine}", {"engine": engine})
 
 
 def _check_openpyxl_installed() -> dict[str, Any]:
     if is_openpyxl_installed():
-        return _ok("openpyxl 已安装，可直接读写 xlsx 文件。")
-    return _warn("openpyxl 未安装，请先运行 install_env.bat 安装依赖。")
+        return _ok("openpyxl 已安装，可直接读写 xlsx 文件")
+    return _warn("openpyxl 未安装，请先运行 install_env.bat 安装依赖")
 
 
 def _check_secret_profile(secrets_file: Path | None, project: dict[str, Any]) -> dict[str, Any]:
@@ -138,7 +127,7 @@ def _check_secret_profile(secrets_file: Path | None, project: dict[str, Any]) ->
         return _warn("百度账号未配置，如需自动登录请联系管理员")
     try:
         data = json.loads(secrets_file.read_text(encoding="utf-8-sig"))
-    except Exception as exc:
+    except Exception:
         return _warn("百度凭据文件无法读取")
     item = data.get("baidu", {}).get(profile)
     if isinstance(item, dict) and item.get("username") and item.get("password"):
@@ -152,15 +141,7 @@ def _check_chrome(config: dict[str, Any]) -> dict[str, Any]:
         settings = get_browser_settings(config)
         profile_dir = settings.get("browser_profile_dir", "browser_profile/chrome")
         return _ok(f"Google Chrome 已找到：{chrome_exe}；项目专用用户目录：{profile_dir}", {"path": str(chrome_exe)})
-    candidates = [
-        Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
-        Path("C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
-    ]
-    return _warn(
-        "未找到 Google Chrome。请确认 Chrome 已安装到以下路径之一：\n"
-        + "\n".join(f"  - {path}" for path in candidates)
-        + "\n或通过项目配置 browser.managed.executable_path 指定 Chrome 路径。"
-    )
+    return _warn("未找到 Google Chrome，请确认已安装或在 browser.managed.executable_path 指定路径")
 
 
 def _check_cdp(root: Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -173,21 +154,17 @@ def _check_cdp(root: Path, config: dict[str, Any]) -> dict[str, Any]:
     result = ensure_chrome_debug_ready(root, config, host=host, port=port, auto_start=auto_start)
     if result["ready"]:
         if result.get("port_already_open"):
-            return _ok(f"Chrome 调试端口已就绪：{endpoint}（已有 Chrome 实例）")
-        return _ok(
-            f"Chrome 调试端口已就绪：{endpoint}（自动启动了项目专用 Chrome）",
-            {"profile_dir": result.get("profile_dir"), "startup_url": result.get("startup_url")},
-        )
-    else:
-        msg = f"Chrome 调试端口未就绪：{endpoint}。"
-        if result.get("error"):
-            msg += f" {result['error']}"
-        else:
-            msg += " 请手动运行 start_chrome_debug.bat。"
-        return _warn(msg)
+            return _ok(f"Chrome 调试端口已就绪：{endpoint}（已存在 Chrome 实例）")
+        return _ok(f"Chrome 调试端口已就绪：{endpoint}（已启动项目专用 Chrome）", result)
+    message = f"Chrome 调试端口未就绪：{endpoint}"
+    if result.get("error"):
+        message += f"。{result['error']}"
+    return _warn(message)
 
 
-def _project_excel_path(root: Path, project: dict[str, Any]) -> Path | None:
+def _runtime_excel_path(root: Path, config: dict[str, Any], project: dict[str, Any]) -> Path | None:
+    if config.get("excel_path"):
+        return _resolve(root, config.get("excel_path"))
     return get_project_excel_path(project, root)
 
 
@@ -203,6 +180,28 @@ def _check_sheet(excel_path: Path | None, sheet_name: str, label: str) -> dict[s
         return _warn(f"{label} 不存在：{sheet_name}；当前 sheet：{', '.join(wb.sheetnames)}")
     except Exception as exc:
         return _warn(f"检查 {label} 失败：{exc}")
+
+
+class _SilentLogger:
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        return None
+
+
+def _check_hourly_structure(root: Path, config: dict[str, Any], excel_path: Path | None) -> dict[str, Any]:
+    if not excel_path or not excel_path.exists():
+        return _warn("无法检查小时报结构，因为目标 Excel 不存在")
+    inspect_config = dict(config)
+    inspect_config["excel_path"] = str(excel_path)
+    try:
+        report = inspect_excel_structure(inspect_config, root, logger=_SilentLogger())
+    except Exception as exc:
+        return _warn(f"小时报结构检查失败：{exc}")
+    if report.get("errors"):
+        return _warn("小时报结构缺少必要字段：" + "；".join(report["errors"]), report)
+    return _ok("小时报结构识别通过", report)
 
 
 def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
@@ -239,8 +238,8 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     elif excel_engine == "excel_com":
         checks["excel_app"] = _check_excel_available()
 
-    pid = project.get("project_id", "") if project else ""
-    excel_path = _project_excel_path(root_path, project) if project else None
+    pid = str(config.get("project_id") or project.get("project_id", ""))
+    excel_path = _runtime_excel_path(root_path, config, project)
     if excel_path and excel_path.exists():
         checks["target_excel"] = _ok(f"已找到：{excel_path.name}")
     else:
@@ -251,13 +250,14 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
         save_test = test_openpyxl_save_copy(excel_path, root_path) if excel_path else {"passed": False, "message": "目标 Excel 未配置"}
         checks["openpyxl_save_test"] = _ok(save_test["message"], save_test) if save_test.get("passed") else _warn(save_test["message"], save_test)
 
-    checks["daily_sheet"] = _check_sheet(excel_path, get_project_sheet_name(project, "daily") if project else "百度", "日报 sheet")
-    checks["hourly_sheet"] = _check_sheet(excel_path, get_project_sheet_name(project, "hourly") if project else "时段数据", "小时报 sheet")
+    daily_sheet_name = str(config.get("daily_sheet_name") or get_project_sheet_name(project, "daily") if project else "百度")
+    hourly_sheet_name = str(config.get("sheet_name") or get_project_sheet_name(project, "hourly") if project else "时段数据")
+    checks["daily_sheet"] = _check_sheet(excel_path, daily_sheet_name, "日报 sheet")
+    checks["hourly_sheet"] = _check_sheet(excel_path, hourly_sheet_name, "小时报 sheet")
+    checks["hourly_structure"] = _check_hourly_structure(root_path, dict(config, sheet_name=hourly_sheet_name), excel_path)
 
-    export_dir = _resolve(root_path, project.get("kst", {}).get("export_dir") if project else config.get("kst", {}).get("export_dir", "kst_exports"))
-    if export_dir and export_dir.is_file():
-        checks["kst_export_dir"] = _ok(f"已找到：{export_dir}")
-    elif export_dir and export_dir.exists():
+    export_dir = _resolve(root_path, config.get("kst", {}).get("export_dir") or project.get("kst", {}).get("export_dir") if project else config.get("kst", {}).get("export_dir", "kst_exports"))
+    if export_dir and export_dir.exists():
         checks["kst_export_dir"] = _ok(f"已找到：{export_dir}")
     else:
         hint = f"请修改 configs/projects/{pid}.json 的 kst.export_dir" if pid else "请在项目配置中设置 kst.export_dir"
@@ -275,8 +275,8 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     passed_count = sum(1 for item in checks.values() if item.get("passed"))
     report = {
         "mode": "doctor",
-        "project_id": project.get("project_id") if project else None,
-        "project_name": project.get("project_name") if project else None,
+        "project_id": config.get("project_id") or project.get("project_id") if project else config.get("project_id"),
+        "project_name": config.get("project_name") or project.get("project_name") if project else config.get("project_name"),
         "checks": checks,
         "summary": {
             "total": len(checks),
@@ -297,19 +297,10 @@ def print_doctor_report(report: dict[str, Any]) -> None:
     checks: list[dict[str, Any]] = []
     for key, item in report.get("checks", {}).items():
         name = _DOCTOR_CHECK_LABELS.get(key, key)
-        if item.get("passed"):
-            status = "pass"
-        elif item.get("level") == "warning":
-            status = "warn"
-        else:
-            status = "fail"
-        checks.append({
-            "name": name,
-            "status": status,
-            "message": item.get("message", ""),
-        })
+        status = "pass" if item.get("passed") else "warn" if item.get("level") == "warning" else "fail"
+        checks.append({"name": name, "status": status, "message": item.get("message", "")})
 
-    title = f"文件合格校验  —  {report.get('project_name') or report.get('project_id') or '未知'}"
+    title = f"文件合格校验  -  {report.get('project_name') or report.get('project_id') or '未知'}"
     print_check_table(title, checks)
 
 
@@ -327,6 +318,7 @@ _DOCTOR_CHECK_LABELS = {
     "openpyxl_save_test": "openpyxl 保存测试",
     "daily_sheet": "日报 sheet",
     "hourly_sheet": "小时报 sheet",
+    "hourly_structure": "小时报结构",
     "kst_export_dir": "商务通导出目录",
     "secrets_json": "百度凭据文件",
     "latest_kst_export": "最新商务通导出文件",

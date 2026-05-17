@@ -4787,3 +4787,329 @@ def test_baidu_prepare_overview_does_not_write_state_when_validate_fails(tmp_pat
     report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
     assert report["errors"]
     assert mark_calls == []
+
+
+def test_extract_baidu_rows_from_page_prefers_dom_table_and_parses_currency_formats():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return """
+数据报告
+搜索推广
+账户
+展现
+点击
+消费
+"""
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return [
+                {"账户": "竞网CS博润241209", "展现": "1,234", "点击": "56", "消费": "￥1,234.56"},
+                {"账户": "竞网CS博润240304", "展现": "2,345", "点击": "--", "消费": "123.45元"},
+                {"账户": "竞网CS博润251218", "展现": "-", "点击": "78", "消费": "0"},
+                {"账户": "总计-3", "展现": "3,579", "点击": "134", "消费": "1358.01"},
+            ]
+
+    config = {
+        "project_id": "changsha_niu",
+        "accounts": {
+            "竞网CS博润241209": {"baidu_name": "竞网CS博润241209", "aliases": ["竞网CS博润241209"]},
+            "竞网CS博润240304": {"baidu_name": "竞网CS博润240304", "aliases": ["竞网CS博润240304"]},
+            "竞网CS博润251218": {"baidu_name": "竞网CS博润251218", "aliases": ["竞网CS博润251218"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+    parsed = parse_baidu_table(result["rows"], config)
+
+    assert result["extraction_method"] == "dom"
+    assert result["detected_headers"] == ["账户", "展现", "点击", "消费"]
+    assert result["debug"]["parsed_account_count"] == 3
+    assert parsed["accounts"]["竞网CS博润241209"]["点击"] == 56
+    assert parsed["accounts"]["竞网CS博润241209"]["消费"] == 1234.56
+    assert parsed["accounts"]["竞网CS博润240304"]["点击"] == 0
+    assert parsed["accounts"]["竞网CS博润251218"]["展现"] == 0
+
+
+def test_extract_baidu_rows_from_page_falls_back_to_visible_text_when_dom_unusable():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    text = """
+数据报告
+搜索推广
+账户
+账户ID
+展现
+点击
+消费
+总计-3
+-
+-
+-
+-
+宁波博润1
+1001
+1,001
+11
+￥101.50
+宁波博润2
+1002
+2,002
+22
+202.25元
+宁波博润12
+1003
+3,003
+33
+303.75
+20条/页
+"""
+
+    class FakeLocator:
+        def __init__(self, value):
+            self._value = value
+
+        def inner_text(self, timeout=None):
+            return self._value
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator(text)
+
+        def evaluate(self, script):
+            return [{"列1": "未知", "列2": "N/A"}]
+
+    config = {
+        "project_id": "ningbo_niu",
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润2": {"baidu_name": "宁波博润2", "aliases": ["宁波博润2"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+    parsed = parse_baidu_table(result["rows"], config)
+
+    assert result["extraction_method"] == "visible_text"
+    assert set(parsed["accounts"].keys()) == {"宁波博润1", "宁波博润2", "宁波博润12"}
+    assert parsed["accounts"]["宁波博润12"]["消费"] == 303.75
+
+
+def test_parse_baidu_table_reports_raw_value_and_extraction_method_for_non_numeric_fields():
+    config = {
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+        }
+    }
+    rows = [
+        {
+            "账户": "宁波博润1",
+            "展现": "1,234",
+            "点击": "N/A",
+            "消费": "abc",
+            "__source__": "dom",
+            "__row_sample_id__": "row-2",
+        }
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert any("raw_value=N/A" in error and "extraction_method=dom" in error and "row_sample_id=row-2" in error for error in parsed["errors"])
+    assert any("raw_value=abc" in error and "account_name=宁波博润1" in error for error in parsed["errors"])
+
+
+def test_baidu_prepare_overview_fails_when_report_table_not_parseable(tmp_path, monkeypatch):
+    import logging
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    (tmp_path / "reports" / "baidu_visible_text.txt").write_text(
+        "数据报告 搜索推广 2026/05/07 账户 展现 点击 消费",
+        encoding="utf-8",
+    )
+    (tmp_path / "reports" / "baidu_table_parse_debug.json").write_text(
+        json.dumps(
+            {
+                "project_id": "changsha_niu",
+                "required_accounts": ["A", "B", "C"],
+                "extraction_method": "dom",
+                "detected_headers": ["账户", "展现", "点击", "消费"],
+                "parsed_account_count": 0,
+                "parsed_accounts": [],
+                "missing_accounts": ["A", "B", "C"],
+                "non_numeric_fields": [],
+                "sample_rows": [],
+                "row_cell_count": [4],
+                "parse_ready": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = {
+        "project_id": "changsha_niu",
+        "project_name": "长沙牛",
+        "accounts": {
+            "A": {"baidu_name": "A", "aliases": ["A"]},
+            "B": {"baidu_name": "B", "aliases": ["B"]},
+            "C": {"baidu_name": "C", "aliases": ["C"]},
+        },
+    }
+
+    monkeypatch.setattr(
+        "modules.baidu_overview.baidu_open_overview",
+        lambda config, root, logger: {
+            "final_url": "https://cc.baidu.com/report",
+            "final_page_type": "搜索推广",
+            "errors": [],
+            "session_check": {"decision": "bypass", "passed": True},
+        },
+    )
+
+    from modules.baidu_overview import baidu_prepare_overview
+    report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
+
+    assert report["errors"]
+    assert any("百度搜索推广账户表格未完整加载" in error for error in report["errors"])
+
+
+def test_doctor_uses_runtime_excel_path_when_project_file_is_stale(tmp_path):
+    from openpyxl import Workbook
+
+    configs_dir = tmp_path / "configs"
+    projects_dir = configs_dir / "projects"
+    projects_dir.mkdir(parents=True)
+    (configs_dir / "app_config.json").write_text(
+        json.dumps(
+            {
+                "default_project_id": "changsha_niu",
+                "projects_dir": "configs/projects",
+                "secrets_file": "secrets/secrets.json",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    stale_path = tmp_path / "missing.xlsx"
+    actual_path = tmp_path / "actual.xlsx"
+    wb = Workbook()
+    wb.active.title = "时段数据"
+    wb.create_sheet("百度")
+    wb.save(actual_path)
+    (projects_dir / "changsha_niu.json").write_text(
+        json.dumps(
+            {
+                "project_id": "changsha_niu",
+                "project_name": "长沙牛",
+                "excel": {"path": str(stale_path), "hourly_sheet": "时段数据", "daily_sheet": "百度", "engine": "openpyxl"},
+                "kst": {"export_dir": "kst_exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+                "baidu": {"credential_profile": "changsha_niu_baidu", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+                "accounts": [
+                    {"standard_name": "A", "baidu_names": ["A"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+                    {"standard_name": "B", "baidu_names": ["B"], "excel_name": "B", "kst_ids": ["2"], "kst_names": ["B"]},
+                    {"standard_name": "C", "baidu_names": ["C"], "excel_name": "C", "kst_ids": ["3"], "kst_names": ["C"]},
+                ],
+                "hourly": {"periods": ["11点", "15点", "18点"]},
+                "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = {
+        "project_id": "changsha_niu",
+        "project_name": "长沙牛",
+        "excel_path": str(actual_path),
+        "sheet_name": "时段数据",
+        "daily_sheet_name": "百度",
+        "excel_engine": "openpyxl",
+        "kst": {"export_dir": "kst_exports"},
+        "browser": {"cdp_endpoint": "http://127.0.0.1:9", "auto_start_debug_chrome": False},
+        "accounts": {"A": {}, "B": {}, "C": {}},
+    }
+
+    report = run_doctor(tmp_path, config)
+
+    assert report["checks"]["target_excel"]["passed"] is True
+    assert "actual.xlsx" in report["checks"]["target_excel"]["message"]
+
+
+def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp_path):
+    import logging
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "时段数据"
+    ws["A1"] = "日期"
+    ws["B1"] = "时段"
+    ws["F2"] = "华厦npx1"
+    ws.merge_cells("F2:L2")
+    ws["M2"] = "华厦npx3"
+    ws.merge_cells("M2:S2")
+    ws["T2"] = "华厦npx5"
+    ws.merge_cells("T2:Z2")
+    headers = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+    for offset, header in enumerate(headers):
+        ws.cell(row=3, column=6 + offset).value = header
+        ws.cell(row=3, column=13 + offset).value = header
+        ws.cell(row=3, column=20 + offset).value = header
+    ws["A4"] = "2026-05-07"
+    ws.merge_cells("A4:A6")
+    ws["B4"] = "11点"
+    ws["B5"] = "3点"
+    ws["B6"] = "6点"
+    excel_path = tmp_path / "nanjing.xlsx"
+    wb.save(excel_path)
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "merged_hourly_data.json").write_text(
+        """
+{
+  "date": "2026-05-07",
+  "period": "15点",
+  "accounts": {
+    "华厦npx1": {"展现": 101, "点击": 11, "消费": 12.5, "总对话": 3, "有效": 2, "有效转潜": 1, "总转潜": 1},
+    "华厦npx3": {"展现": 202, "点击": 22, "消费": 23.5, "总对话": 4, "有效": 2, "有效转潜": 1, "总转潜": 1},
+    "华厦npx5": {"展现": 303, "点击": 33, "消费": 34.5, "总对话": 5, "有效": 3, "有效转潜": 1, "总转潜": 2}
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    config = {
+        "excel_path": str(excel_path),
+        "sheet_name": "时段数据",
+        "accounts": {
+            "华厦npx1": {"aliases": ["华厦npx1"], "excel_name": "华厦npx1", "baidu_name": "华厦npx1"},
+            "华厦npx3": {"aliases": ["华厦npx3"], "excel_name": "华厦npx3", "baidu_name": "华厦npx3"},
+            "华厦npx5": {"aliases": ["华厦npx5"], "excel_name": "华厦npx5", "baidu_name": "华厦npx5"},
+        },
+        "field_aliases": {
+            "日期": ["日期"],
+            "时段": ["时段"],
+            "展现": ["展现"],
+            "点击": ["点击"],
+            "消费": ["消费"],
+            "总对话": ["总对话"],
+            "有效": ["有效"],
+            "有效转潜": ["有效转潜"],
+            "总转潜": ["总转潜"]
+        },
+    }
+
+    report = write_merged_hourly_data(config, tmp_path, logging.getLogger("test"), "15点")
+
+    assert report["errors"] == []
+    assert report["self_check"]["verification_passed"] is True

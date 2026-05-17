@@ -8,9 +8,11 @@ from typing import Any, Callable
 
 from modules.baidu_browser import _write_debug_artifacts
 from modules.baidu_detector import classify_baidu_page
+from modules.baidu_parser import extract_baidu_rows_from_page
 from modules.browser_manager import BrowserLaunchError, get_browser_settings, launch_chrome_context
 from modules.credential_manager import build_login_failure_message, load_project_credentials
 from modules.text_normalizer import normalize_text
+
 
 CC_REPORT_URL = "https://cc.baidu.com/report"
 QINGGE_LOGIN_URL = "https://qingge.baidu.com/login"
@@ -25,10 +27,7 @@ def is_search_promotion_overview(classification: dict[str, Any]) -> bool:
     signals = classification.get("signals", {})
     return bool(
         signals.get("has_search_promotion")
-        and (
-            signals.get("has_data_overview")
-            or (signals.get("has_data_report") and signals.get("has_table_fields"))
-        )
+        and (signals.get("has_data_overview") or (signals.get("has_data_report") and signals.get("has_table_fields")))
     )
 
 
@@ -57,6 +56,37 @@ def _extract_dates(text: str) -> list[str]:
     return dates
 
 
+def _table_parse_debug_path(root: Path) -> Path:
+    return root / "reports" / "baidu_table_parse_debug.json"
+
+
+def _table_candidates_path(root: Path) -> Path:
+    return root / "reports" / "baidu_table_candidates.json"
+
+
+def _write_table_parse_artifacts(root: Path, extraction: dict[str, Any]) -> None:
+    _write_json(_table_parse_debug_path(root), extraction.get("debug", {}))
+    _write_json(
+        _table_candidates_path(root),
+        {
+            "source": extraction.get("extraction_method"),
+            "rows": extraction.get("rows", []),
+            "row_count": len(extraction.get("rows", [])),
+            "detected_headers": extraction.get("detected_headers", []),
+        },
+    )
+
+
+def _load_table_parse_debug(root: Path) -> dict[str, Any]:
+    path = _table_parse_debug_path(root)
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def validate_overview_ready(visible_text: str, target_date: str, config: dict[str, Any]) -> dict[str, Any]:
     normalized_text = normalize_text(visible_text)
     dates = _extract_dates(visible_text)
@@ -67,13 +97,13 @@ def validate_overview_ready(visible_text: str, target_date: str, config: dict[st
         accounts[account] = any(normalize_text(alias) and normalize_text(alias) in normalized_text for alias in aliases)
 
     fields = {
-        "账户": "账户" in normalized_text,
-        "展现": any(key in normalized_text for key in ["展现", "展现量"]),
-        "点击": "点击" in normalized_text,
-        "消费": any(key in normalized_text for key in ["消费", "花费"]),
+        "账户": normalize_text("账户") in normalized_text,
+        "展现": any(item in normalized_text for item in [normalize_text("展现"), normalize_text("展现量")]),
+        "点击": normalize_text("点击") in normalized_text,
+        "消费": any(item in normalized_text for item in [normalize_text("消费"), normalize_text("花费")]),
     }
     checks = {
-        "is_search_promotion": "搜索推广" in normalized_text,
+        "is_search_promotion": normalize_text("搜索推广") in normalized_text,
         "date_is_today": target_date in dates,
         "all_accounts_visible": all(accounts.values()) if accounts else False,
         "required_fields_visible": all(fields.values()),
@@ -100,10 +130,41 @@ def validate_overview_ready(visible_text: str, target_date: str, config: dict[st
     }
 
 
+def validate_overview_parse_ready(root: Path, config: dict[str, Any]) -> dict[str, Any]:
+    debug = _load_table_parse_debug(root)
+    if not debug:
+        return {
+            "passed": True,
+            "checks": {"debug_report_present": False},
+            "debug": {},
+            "errors": [],
+        }
+    normalized_headers = {normalize_text(item) for item in debug.get("detected_headers", [])}
+    required = {name: normalize_text(name) for name in ["账户", "展现", "点击", "消费"]}
+    checks = {
+        "required_headers_detected": all(value in normalized_headers for value in required.values()),
+        "at_least_one_required_account": int(debug.get("parsed_account_count", 0) or 0) >= 1,
+        "all_required_accounts_detected": not debug.get("missing_accounts"),
+    }
+    errors: list[str] = []
+    if not checks["required_headers_detected"]:
+        for field, normalized in required.items():
+            if normalized not in normalized_headers:
+                errors.append(f"页面未看到必要表头：{field}")
+    if not checks["at_least_one_required_account"]:
+        errors.append("百度搜索推广账户表格未完整加载，请刷新或稍后重试")
+    return {
+        "passed": not errors,
+        "checks": checks,
+        "debug": debug,
+        "errors": errors,
+    }
+
+
 def overview_text_has_account_table(visible_text: str, config: dict[str, Any]) -> bool:
     normalized_text = normalize_text(visible_text)
     required_headers = ["账户", "展现", "点击", "消费"]
-    if not all(header in normalized_text for header in required_headers):
+    if not all(normalize_text(header) in normalized_text for header in required_headers):
         return False
     for account, info in config.get("accounts", {}).items():
         aliases = [account, info.get("baidu_name", ""), info.get("excel_name", "")]
@@ -141,7 +202,7 @@ def _ensure_baidu_home_rendered(page, config: dict[str, Any], logger) -> str:
         page.goto(home_url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
-        logger.info("打开百度首页或等待 networkidle 超时，继续读取当前页面。")
+        logger.info("打开百度首页或等待 networkidle 超时，继续读取当前页面")
     return _read_page_text(page)
 
 
@@ -149,7 +210,7 @@ def _safe_wait_after_click(page, logger) -> None:
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
-        logger.info("点击后 networkidle 等待超时，继续短暂等待当前页面状态。")
+        logger.info("点击后 networkidle 等待超时，继续短暂等待当前页面状态")
     try:
         page.wait_for_timeout(1200)
     except Exception:
@@ -174,97 +235,6 @@ def _fill_first_available(page, selectors: list[str], value: str, logger, field_
         except Exception:
             break
     return False
-
-
-def _click_login_submit(page, logger) -> bool:
-    for selector in ['#submit-form', 'input[type="submit"]']:
-        try:
-            locator = page.locator(selector)
-            if locator.count() > 0:
-                locator.first.click(timeout=5000)
-                logger.info("已点击百度登录提交按钮：%s", selector)
-                _safe_wait_after_click(page, logger)
-                return True
-        except Exception:
-            continue
-    labels = ["登录", "立即登录", "登 录", "立即登陆", "登陆"]
-    return _click_by_text_or_role(page, labels, logger) is not None
-
-
-def _auto_login_if_needed(page, root: Path, config: dict[str, Any], logger) -> bool:
-    text = _read_page_text(page)
-    classification = classify_baidu_page(page.url, text)
-    if (
-        classification["login_status"] != "not_logged_in"
-        and "login" not in page.url
-        and not should_open_cas_login(page.url)
-    ):
-        return True
-
-    credentials = load_project_credentials(root, config, "baidu", config.get("baidu", {}).get("credential_project", "yunnan_yinkang"))
-    if not credentials:
-        logger.warning("未找到百度本地凭据文件，无法自动登录。")
-        return False
-
-    if "cas.baidu.com" not in page.url:
-        logger.info("打开百度登录页：%s", CAS_LOGIN_URL)
-        page.goto(CAS_LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
-        _safe_wait_after_click(page, logger)
-    elif should_open_cas_login(page.url):
-        logger.info("当前是百度营销展示登录页，切换到 CAS 登录表单：%s", CAS_LOGIN_URL)
-        page.goto(CAS_LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
-        _safe_wait_after_click(page, logger)
-
-    username_ok = _fill_first_available(
-        page,
-        [
-            '#uc-common-account',
-            'input[name="username"]',
-            'input[name="userName"]',
-            'input[name="account"]',
-            'input[name="entered_login"]',
-            'input[type="text"]',
-            'input[placeholder*="账号"]',
-            'input[placeholder*="用户名"]',
-            'input[placeholder*="手机号"]',
-        ],
-        credentials["username"],
-        logger,
-        "username",
-    )
-    password_ok = _fill_first_available(
-        page,
-        [
-            '#ucsl-password-edit',
-            'input[type="password"]',
-            'input[name="password"]',
-            'input[placeholder*="密码"]',
-        ],
-        credentials["password"],
-        logger,
-        "password",
-    )
-    if not username_ok or not password_ok:
-        logger.error("百度登录页字段识别失败：username=%s password=%s", username_ok, password_ok)
-        return False
-    try:
-        checkbox = page.locator("#privacy-agreement")
-        if checkbox.count() > 0 and not checkbox.first.is_checked():
-            checkbox.first.check(timeout=5000)
-            logger.info("已勾选百度营销服务协议。")
-    except Exception:
-        logger.info("百度营销服务协议勾选状态不可读，继续尝试登录。")
-    if not _click_login_submit(page, logger):
-        logger.error("百度登录按钮识别失败。")
-        return False
-    try:
-        page.wait_for_url(lambda url: "login" not in url, timeout=30000)
-    except Exception:
-        logger.info("等待登录 URL 跳转超时，继续读取页面状态。")
-    _safe_wait_after_click(page, logger)
-    text = _read_page_text(page)
-    classification = classify_baidu_page(page.url, text)
-    return classification["login_status"] != "not_logged_in" and "login" not in page.url
 
 
 def _click_by_text_or_role(page, labels: list[str], logger) -> str | None:
@@ -297,29 +267,98 @@ def _click_by_text_or_role(page, labels: list[str], logger) -> str | None:
     return None
 
 
+def _click_login_submit(page, logger) -> bool:
+    for selector in ["#submit-form", 'input[type="submit"]']:
+        try:
+            locator = page.locator(selector)
+            if locator.count() > 0:
+                locator.first.click(timeout=5000)
+                logger.info("已点击百度登录提交按钮：%s", selector)
+                _safe_wait_after_click(page, logger)
+                return True
+        except Exception:
+            continue
+    return _click_by_text_or_role(page, ["登录", "立即登录", "登陆", "立即登陆"], logger) is not None
+
+
+def _auto_login_if_needed(page, root: Path, config: dict[str, Any], logger) -> bool:
+    text = _read_page_text(page)
+    classification = classify_baidu_page(page.url, text)
+    if classification["login_status"] != "not_logged_in" and "login" not in page.url and not should_open_cas_login(page.url):
+        return True
+
+    credentials = load_project_credentials(
+        root,
+        config,
+        "baidu",
+        config.get("baidu", {}).get("credential_project", "yunnan_yinkang"),
+    )
+    if not credentials:
+        logger.warning("未找到百度本地凭据文件，无法自动登录")
+        return False
+
+    if "cas.baidu.com" not in page.url or should_open_cas_login(page.url):
+        logger.info("打开百度登录页：%s", CAS_LOGIN_URL)
+        page.goto(CAS_LOGIN_URL, wait_until="domcontentloaded", timeout=60000)
+        _safe_wait_after_click(page, logger)
+
+    username_ok = _fill_first_available(
+        page,
+        [
+            "#uc-common-account",
+            'input[name="username"]',
+            'input[name="userName"]',
+            'input[name="account"]',
+            'input[name="entered_login"]',
+            'input[type="text"]',
+            'input[placeholder*="账号"]',
+            'input[placeholder*="用户名"]',
+            'input[placeholder*="手机号"]',
+        ],
+        credentials["username"],
+        logger,
+        "username",
+    )
+    password_ok = _fill_first_available(
+        page,
+        ["#ucsl-password-edit", 'input[type="password"]', 'input[name="password"]', 'input[placeholder*="密码"]'],
+        credentials["password"],
+        logger,
+        "password",
+    )
+    if not username_ok or not password_ok:
+        logger.error("百度登录页字段识别失败：username=%s password=%s", username_ok, password_ok)
+        return False
+
+    try:
+        checkbox = page.locator("#privacy-agreement")
+        if checkbox.count() > 0 and not checkbox.first.is_checked():
+            checkbox.first.check(timeout=5000)
+            logger.info("已勾选百度营销服务协议")
+    except Exception:
+        logger.info("百度营销服务协议勾选状态不可读，继续尝试登录")
+
+    if not _click_login_submit(page, logger):
+        logger.error("百度登录按钮识别失败")
+        return False
+
+    try:
+        page.wait_for_url(lambda url: "login" not in url, timeout=30000)
+    except Exception:
+        logger.info("等待登录 URL 跳转超时，继续读取页面状态")
+    _safe_wait_after_click(page, logger)
+    text = _read_page_text(page)
+    classification = classify_baidu_page(page.url, text)
+    return classification["login_status"] != "not_logged_in" and "login" not in page.url
+
+
 def _is_report_page_ready_for_parse(page, config: dict[str, Any], visible_text: str | None = None) -> bool:
     text = visible_text if visible_text is not None else _read_page_text(page)
     classification = classify_baidu_page(page.url, text)
     if not is_search_promotion_overview(classification):
         return False
-    if not overview_text_has_account_table(text, config):
-        return False
-    return True
-
-def _select_backend_page(context, current_page, logger):
-    backend_pages = [
-        page for page in context.pages
-        if "cc.baidu.com" in page.url or "yingxiao.baidu.com" in page.url
-    ]
-    for page in backend_pages:
-        if "cc.baidu.com" in page.url:
-            try:
-                page.bring_to_front()
-            except Exception:
-                pass
-            logger.info("已切换到百度投放后台页面：%s", page.url)
-            return page
-    return current_page
+    extraction = extract_baidu_rows_from_page(page, config)
+    return bool(extraction.get("debug", {}).get("parse_ready"))
 
 
 def _goto_report_page(page, logger, root=None, config=None) -> bool:
@@ -353,7 +392,7 @@ def _goto_report_page(page, logger, root=None, config=None) -> bool:
         _ensure_baidu_home_rendered(page, config, logger)
         page.wait_for_timeout(1500)
         menu_ok = True
-        for label in ["\u6570\u636e\u62a5\u544a", "\u6570\u636e\u6982\u89c8", "\u641c\u7d22\u63a8\u5e7f"]:
+        for label in ["数据报告", "数据概览", "搜索推广"]:
             if not _click_by_text_or_role(page, [label], logger):
                 logger.error("menu path click failed: %s", label)
                 menu_ok = False
@@ -380,14 +419,14 @@ def _goto_report_page(page, logger, root=None, config=None) -> bool:
             page.wait_for_timeout(2000)
     return False
 
+
 def _wait_for_search_promotion_content(page, logger, timeout_ms: int = 10000) -> bool:
-    """等待页面出现搜索推广特征（表头关键词）。"""
     keywords = ["展现", "点击", "消费", "账户"]
     deadline = __import__("time").time() + timeout_ms / 1000.0
     while __import__("time").time() < deadline:
         try:
             text = page.locator("body").inner_text(timeout=2000) or ""
-            if all(kw in text for kw in keywords[:2]):
+            if all(keyword in text for keyword in keywords[:2]):
                 return True
         except Exception:
             pass
@@ -397,7 +436,7 @@ def _wait_for_search_promotion_content(page, logger, timeout_ms: int = 10000) ->
 
 
 def _refresh_report_and_wait_for_data(page, config: dict[str, Any], logger) -> str:
-    logger.info("抓取前刷新百度 report 页面，避免读取非实时或未加载数据。")
+    logger.info("抓取前刷新百度 report 页面，避免读取未完成加载的数据")
     try:
         page.reload(wait_until="domcontentloaded", timeout=60000)
     except Exception as exc:
@@ -405,20 +444,21 @@ def _refresh_report_and_wait_for_data(page, config: dict[str, Any], logger) -> s
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
-        logger.info("刷新后 networkidle 等待超时，继续轮询账户表格。")
+        logger.info("刷新后 networkidle 等待超时，继续轮询账户表格")
 
     deadline = datetime.now().timestamp() + int(config.get("baidu", {}).get("report_table_wait_seconds", 30))
     last_text = ""
     while datetime.now().timestamp() < deadline:
         last_text = _read_page_text(page)
-        if overview_text_has_account_table(last_text, config):
-            logger.info("百度 report 页面账户表格已加载。")
+        extraction = extract_baidu_rows_from_page(page, config)
+        if extraction.get("debug", {}).get("parse_ready"):
+            logger.info("百度 report 页面账户表格已加载且可解析")
             return last_text
         try:
             page.wait_for_timeout(1000)
         except Exception:
             break
-    logger.info("百度 report 页面账户表格等待结束，但未看到完整账户行。")
+    logger.info("百度 report 页面账户表格等待结束，但仍不可解析")
     return last_text
 
 
@@ -426,6 +466,10 @@ def _dump_open_overview_artifacts(root: Path, page, report: dict[str, Any], incl
     text_path = root / "reports" / "baidu_visible_text.txt"
     visible_text = _read_page_text(page)
     _write_text(text_path, visible_text)
+    parse_config = report.get("config_for_parse")
+    if parse_config:
+        extraction = extract_baidu_rows_from_page(page, parse_config)
+        _write_table_parse_artifacts(root, extraction)
     _write_debug_artifacts(root, page, {"exceptions": []}, include_screenshot=include_screenshot)
     report["outputs"]["visible_text"] = str(text_path)
     report["outputs"]["debug_html"] = str(root / "reports" / "baidu_debug.html")
@@ -462,8 +506,11 @@ def baidu_open_overview(
             "report": str(report_path),
             "visible_text": str(root / "reports" / "baidu_visible_text.txt"),
             "debug_html": str(root / "reports" / "baidu_debug.html"),
+            "table_parse_debug": str(_table_parse_debug_path(root)),
+            "table_candidates": str(_table_candidates_path(root)),
         },
         "errors": [],
+        "config_for_parse": config,
     }
 
     def finish(page=None) -> dict[str, Any]:
@@ -472,6 +519,7 @@ def baidu_open_overview(
                 _dump_open_overview_artifacts(root, page, report, bool(baidu_config.get("debug_screenshot", False)))
             except Exception as exc:
                 report["errors"].append(f"output debug artifacts failed: {exc}")
+        report.pop("config_for_parse", None)
         report["finished_at"] = datetime.now().isoformat(timespec="seconds")
         _write_json(report_path, report)
         logger.info("baidu-open-overview report saved: %s; errors=%s", report_path, len(report["errors"]))
@@ -485,7 +533,7 @@ def baidu_open_overview(
 
     with sync_playwright() as playwright:
         try:
-            context, page = launch_chrome_context(playwright, config, root)
+            _context, page = launch_chrome_context(playwright, config, root)
         except BrowserLaunchError as exc:
             report["errors"].append(str(exc))
             logger.error("baidu-open-overview connect chrome failed: %s", exc)
@@ -513,9 +561,8 @@ def baidu_open_overview(
             report["login_status"] = classification["login_status"]
 
         from modules.baidu_session import ensure_baidu_profile_session
-        session_result = ensure_baidu_profile_session(
-            root, config, page, logger, task="fetch-baidu-auto", input_func=input_func
-        )
+
+        session_result = ensure_baidu_profile_session(root, config, page, logger, task="fetch-baidu-auto", input_func=input_func)
         report["session_check"] = {
             "passed": session_result.get("passed"),
             "decision": session_result.get("decision"),
@@ -538,7 +585,7 @@ def baidu_open_overview(
                 return finish(page)
 
         if not _goto_report_page(page, logger, root=root, config=config):
-            report["errors"].append("\u767e\u5ea6\u641c\u7d22\u63a8\u5e7f\u6570\u636e\u9875\u6253\u5f00\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u540e\u53f0\u9875\u9762\u72b6\u6001")
+            report["errors"].append("百度搜索推广数据页打开失败，请检查百度后台页面状态")
             return finish(page)
 
         visible_text = _refresh_report_and_wait_for_data(page, config, logger)
@@ -547,7 +594,7 @@ def baidu_open_overview(
         report["final_url"] = page.url
         report["final_page_type"] = classification["page_type"]
         if not _is_report_page_ready_for_parse(page, config, visible_text):
-            report["errors"].append("\u767e\u5ea6\u641c\u7d22\u63a8\u5e7f\u6570\u636e\u9875\u6253\u5f00\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u540e\u53f0\u9875\u9762\u72b6\u6001")
+            report["errors"].append("百度搜索推广数据页打开失败，请检查百度后台页面状态")
             return finish(page)
         return finish(page)
 
@@ -561,10 +608,12 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
         "target_date": date.today().isoformat(),
         "open_report": None,
         "ready_check": None,
+        "parse_check": None,
         "outputs": {
             "report": str(report_path),
             "visible_text": str(root / "reports" / "baidu_visible_text.txt"),
             "debug_html": str(root / "reports" / "baidu_debug.html"),
+            "table_parse_debug": str(_table_parse_debug_path(root)),
         },
         "errors": [],
     }
@@ -578,22 +627,23 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
         report["errors"].extend(open_report["errors"])
         report["finished_at"] = datetime.now().isoformat(timespec="seconds")
         _write_json(report_path, report)
-        logger.error("baidu-prepare-overview 中断：搜索推广页打开失败。")
+        logger.error("baidu-prepare-overview 中断：搜索推广页打开失败")
         return report
 
     text_path = root / "reports" / "baidu_visible_text.txt"
     visible_text = text_path.read_text(encoding="utf-8") if text_path.exists() else ""
     ready = validate_overview_ready(visible_text, report["target_date"], config)
+    parse_ready = validate_overview_parse_ready(root, config)
     report["ready_check"] = ready
+    report["parse_check"] = parse_ready
     report["errors"].extend(error for error in ready["errors"] if error not in report["errors"])
+    report["errors"].extend(error for error in parse_ready["errors"] if error not in report["errors"])
 
     session_decision = (open_report.get("session_check") or {}).get("decision", "")
-    has_missing_accounts = any(
-        "\u7f3a\u5931" in e or "\u7f3a\u5c11" in e or "\u672a\u770b\u5230" in e
-        for e in ready.get("errors", [])
-    )
-    if not ready.get("passed") and session_decision == "tentative_bypass" and has_missing_accounts:
+    has_missing_accounts = any("缺失" in e or "缺少" in e or "未看到" in e for e in ready.get("errors", []))
+    if report["errors"] and session_decision == "tentative_bypass" and has_missing_accounts:
         from modules.baidu_session import clear_browser_login_state
+
         report["validation_retry_triggered"] = True
         report["validation_retry_reason"] = "tentative_bypass_after_missing_accounts"
         clear_browser_login_state(root)
@@ -601,24 +651,24 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
         retry_open = baidu_open_overview(config, root, logger)
         report["errors"] = []
         if not retry_open.get("errors"):
-            retry_text_path = root / "reports" / "baidu_visible_text.txt"
-            retry_text = retry_text_path.read_text(encoding="utf-8") if retry_text_path.exists() else ""
+            retry_text = text_path.read_text(encoding="utf-8") if text_path.exists() else ""
             ready = validate_overview_ready(retry_text, report["target_date"], config)
+            parse_ready = validate_overview_parse_ready(root, config)
             report["ready_check"] = ready
-            if ready.get("passed"):
+            report["parse_check"] = parse_ready
+            report["errors"].extend(ready.get("errors", []))
+            report["errors"].extend(error for error in parse_ready.get("errors", []) if error not in report["errors"])
+            if not report["errors"]:
                 report["relogin_after_validation_failed"] = True
                 report["validation_retry_passed"] = True
             else:
-                report["errors"] = [
-                    "\u767e\u5ea6\u8d26\u53f7\u5207\u6362\u540e\u4ecd\u672a\u770b\u5230\u5f53\u524d\u9879\u76ee\u8d26\u6237\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u8d26\u53f7\u6216\u9879\u76ee\u914d\u7f6e"
-                ]
+                report["errors"] = ["百度账号切换后仍未看到当前项目账户，请检查百度账号或项目配置"]
         else:
-            report["errors"] = [
-                "\u767e\u5ea6\u8d26\u53f7\u5207\u6362\u540e\u4ecd\u672a\u770b\u5230\u5f53\u524d\u9879\u76ee\u8d26\u6237\uff0c\u8bf7\u68c0\u67e5\u767e\u5ea6\u8d26\u53f7\u6216\u9879\u76ee\u914d\u7f6e"
-            ]
+            report["errors"] = ["百度账号切换后仍未看到当前项目账户，请检查百度账号或项目配置"]
 
-    if ready.get("passed"):
+    if not report["errors"]:
         from modules.baidu_session import mark_browser_login_success
+
         profile = config.get("baidu", {}).get("credential_profile") or config.get("baidu", {}).get("credential_project", "")
         if profile:
             mark_browser_login_success(
