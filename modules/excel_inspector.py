@@ -8,7 +8,7 @@ from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.text_normalizer import normalize_for_display, normalize_text
-from modules.validators import validate_excel_report
+from modules.validators import validate_excel_report, validate_excel_report_v2
 
 
 def _build_merged_value_map(ws: Worksheet) -> dict[tuple[int, int], Any]:
@@ -158,6 +158,70 @@ def _match_field_header(text: str, aliases: list[str]) -> tuple[bool, bool]:
     return False, False
 
 
+def _find_fields_in_range(
+    ws: Worksheet,
+    aliases_config: dict[str, list[str]],
+    merged_values: dict[tuple[int, int], Any],
+    *,
+    min_row: int,
+    max_row: int,
+    min_col: int,
+    max_col: int,
+) -> dict[str, dict[str, Any]]:
+    fields: dict[str, dict[str, Any]] = {}
+    for field_name, aliases in aliases_config.items():
+        exact_cells = []
+        partial_cells = []
+        for row in range(min_row, max_row + 1):
+            for col in range(min_col, max_col + 1):
+                value = _get_merged_value(ws, row, col, merged_values)
+                normalized = normalize_text(value)
+                if not normalized:
+                    continue
+                matched, exact = _match_field_header(normalized, aliases)
+                if matched:
+                    target = exact_cells if exact else partial_cells
+                    target.append(
+                        {
+                            "row": row,
+                            "col": col,
+                            "address": ws.cell(row=row, column=col).coordinate,
+                            "raw_text": normalize_for_display(value),
+                        }
+                    )
+        matches = exact_cells or partial_cells
+        if matches:
+            matches.sort(key=lambda item: (item["row"], item["col"]))
+            first = matches[0]
+            fields[field_name] = {
+                "found": True,
+                "header_cell": first["address"],
+                "header_row": first["row"],
+                "header_col": first["col"],
+                "raw_text": first["raw_text"],
+                "all_matches": matches[:20],
+            }
+        else:
+            fields[field_name] = {"found": False, "all_matches": []}
+    return fields
+
+
+def _find_global_fields(ws: Worksheet, config: dict[str, Any], merged_values: dict[tuple[int, int], Any]) -> dict[str, dict[str, Any]]:
+    aliases_config = config.get("field_aliases", {})
+    global_aliases = {name: aliases for name, aliases in aliases_config.items() if name in {"日期", "时段"}}
+    if not global_aliases:
+        return {}
+    return _find_fields_in_range(
+        ws,
+        global_aliases,
+        merged_values,
+        min_row=1,
+        max_row=ws.max_row,
+        min_col=1,
+        max_col=ws.max_column,
+    )
+
+
 def _find_fields_for_account(ws: Worksheet, meta: dict[str, Any], config: dict[str, Any], merged_values: dict[tuple[int, int], Any]) -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     if not meta.get("found") or "range" not in meta:
@@ -209,6 +273,23 @@ def _find_fields_for_account(ws: Worksheet, meta: dict[str, Any], config: dict[s
         else:
             fields[field_name] = {"found": False, "all_matches": []}
     return fields
+
+
+def _find_fields_for_account_v2(ws: Worksheet, meta: dict[str, Any], config: dict[str, Any], merged_values: dict[tuple[int, int], Any]) -> dict[str, dict[str, Any]]:
+    if not meta.get("found") or "range" not in meta:
+        return {}
+    block = meta["range"]
+    aliases_config = config.get("field_aliases", {})
+    account_aliases = {name: aliases for name, aliases in aliases_config.items() if name not in {"日期", "时段"}}
+    return _find_fields_in_range(
+        ws,
+        account_aliases,
+        merged_values,
+        min_row=int(block["min_row"]) + 1,
+        max_row=min(ws.max_row, int(block["min_row"]) + 10),
+        min_col=int(block["min_col"]),
+        max_col=int(block["max_col"]),
+    )
 
 
 def _find_summary_regions(rows: list[dict[str, Any]], merged_bounds: dict[tuple[int, int], dict[str, int]]) -> list[dict[str, Any]]:
@@ -298,10 +379,11 @@ def inspect_excel_structure(config: dict[str, Any], root: Path, logger) -> dict[
     accounts = _find_account_titles(rows, config)
     accounts = _build_account_ranges(accounts, ws, merged_bounds)
     for account, meta in accounts.items():
-        meta["fields"] = _find_fields_for_account(ws, meta, config, merged_values)
+        meta["fields"] = _find_fields_for_account_v2(ws, meta, config, merged_values)
     report["accounts"] = accounts
+    report["global_fields"] = _find_global_fields(ws, config, merged_values)
     report["suspicious_titles"] = _find_suspicious_titles(rows, config)
-    report["errors"].extend(validate_excel_report(report))
+    report["errors"].extend(validate_excel_report_v2(report, required_accounts=list(accounts.keys())))
 
     if report["errors"]:
         logger.warning("Excel 结构识别存在问题：%s", report["errors"])

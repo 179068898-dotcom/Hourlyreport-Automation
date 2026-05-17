@@ -17,6 +17,13 @@ REQUIRED_HEADER_FIELDS = ["账户", "展现", "点击", "消费"]
 ZERO_TOKENS = {"", "-", "--", "—", "——", "暂无", "无"}
 
 
+def _is_percentage_text(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    return "%" in text or "％" in text
+
+
 def _parse_number(value: Any) -> int | float | None:
     if value is None:
         return None
@@ -29,12 +36,14 @@ def _parse_number(value: Any) -> int | float | None:
         return 0
     cleaned = (
         text.replace(",", "")
-        .replace("，", "")
         .replace("￥", "")
         .replace("¥", "")
         .replace("元", "")
+        .replace("块", "")
         .replace(" ", "")
     )
+    if _is_percentage_text(cleaned):
+        return None
     if cleaned in ZERO_TOKENS:
         return 0
     try:
@@ -49,7 +58,9 @@ def _parse_number(value: Any) -> int | float | None:
 def _alias_matches_key(alias: str, key: str) -> bool:
     if not alias or alias not in key:
         return False
-    if alias == normalize_text("点击") and any(blocked in key for blocked in [normalize_text("点击率"), normalize_text("平均点击价格")]):
+    if alias == normalize_text("点击") and any(
+        blocked in key for blocked in [normalize_text("点击率"), normalize_text("平均点击价格")]
+    ):
         return False
     return True
 
@@ -109,10 +120,6 @@ def _normalize_row(row: dict[str, Any], source: str, row_index: int) -> dict[str
     return normalized
 
 
-def _header_key(field: str) -> str:
-    return normalize_text(field)
-
-
 def _match_header(header: str, aliases: list[str]) -> bool:
     norm = normalize_text(header)
     if not norm:
@@ -164,7 +171,7 @@ def extract_baidu_rows_from_visible_text(text: str) -> list[dict[str, Any]]:
     end_index = len(lines)
     for idx in range(total_index + 1, len(lines)):
         marker = normalize_text(lines[idx])
-        if "条/页" in marker or marker == normalize_text("确定"):
+        if "页" in marker or marker == normalize_text("确定"):
             end_index = idx
             break
 
@@ -180,11 +187,36 @@ def extract_baidu_rows_from_visible_text(text: str) -> list[dict[str, Any]]:
     return rows
 
 
-def _extract_dom_rows(page) -> list[dict[str, Any]]:
-    rows = page.evaluate(
+def _extract_dom_rows_from_target(target) -> dict[str, Any]:
+    snapshot = target.evaluate(
         """
         () => {
           const normalize = (value) => (value || "").replace(/\\s+/g, " ").trim();
+          const roots = [];
+          const seen = new Set();
+          const enqueueRoot = (root) => {
+            if (!root || seen.has(root)) return;
+            seen.add(root);
+            roots.push(root);
+          };
+          enqueueRoot(document);
+          for (let index = 0; index < roots.length; index += 1) {
+            const root = roots[index];
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+            while (walker.nextNode()) {
+              const node = walker.currentNode;
+              if (node && node.shadowRoot) {
+                enqueueRoot(node.shadowRoot);
+              }
+            }
+          }
+          const queryAll = (selector) => {
+            const nodes = [];
+            for (const root of roots) {
+              nodes.push(...Array.from(root.querySelectorAll(selector)));
+            }
+            return nodes;
+          };
           const toRowObjects = (headers, bodyRows, sourcePrefix) => {
             if (!headers.length) return [];
             return bodyRows.map((cells, rowIndex) => {
@@ -199,44 +231,89 @@ def _extract_dom_rows(page) -> list[dict[str, Any]]:
           };
 
           const results = [];
-          for (const table of Array.from(document.querySelectorAll("table"))) {
+          let tableLikeFound = false;
+          let headerFound = false;
+          let bodyRowCount = 0;
+
+          for (const table of queryAll("table")) {
+            tableLikeFound = true;
             const headRows = Array.from(table.querySelectorAll("thead tr"));
             const lastHead = headRows.length ? headRows[headRows.length - 1] : null;
             const fallbackHead = table.querySelector("tr");
             const headerCells = Array.from((lastHead || fallbackHead || {}).querySelectorAll?.("th,td") || []);
             const headers = headerCells.map((cell) => normalize(cell.innerText || cell.textContent));
+            if (headers.length) headerFound = true;
             if (!headers.length) continue;
 
             const bodyNodes = Array.from(table.querySelectorAll("tbody tr"));
             const bodyRows = (bodyNodes.length ? bodyNodes : Array.from(table.querySelectorAll("tr")).slice(1))
               .map((tr) => Array.from(tr.querySelectorAll("td,th")).map((cell) => normalize(cell.innerText || cell.textContent)))
               .filter((cells) => cells.some(Boolean));
+            bodyRowCount += bodyRows.length;
             results.push(...toRowObjects(headers, bodyRows, "dom"));
           }
 
-          for (const grid of Array.from(document.querySelectorAll('[role="table"], [role="grid"]'))) {
+          for (const grid of queryAll('[role="table"], [role="grid"]')) {
+            tableLikeFound = true;
             const headers = Array.from(grid.querySelectorAll('[role="columnheader"]'))
               .map((cell) => normalize(cell.innerText || cell.textContent))
               .filter(Boolean);
+            if (headers.length) headerFound = true;
             if (!headers.length) continue;
             const bodyRows = Array.from(grid.querySelectorAll('[role="row"]'))
               .map((rowNode) => Array.from(rowNode.querySelectorAll('[role="gridcell"], [role="cell"], td'))
                 .map((cell) => normalize(cell.innerText || cell.textContent)))
               .filter((cells) => cells.some(Boolean) && cells.length > 1);
+            bodyRowCount += bodyRows.length;
             results.push(...toRowObjects(headers, bodyRows, "dom"));
           }
-          return results;
+
+          return {
+            rows: results,
+            table_like_found: tableLikeFound,
+            header_found: headerFound,
+            body_row_count: bodyRowCount,
+          };
         }
         """
     )
-    return [row for row in rows if isinstance(row, dict)]
+    if isinstance(snapshot, list):
+        rows = [row for row in snapshot if isinstance(row, dict)]
+        return {
+            "rows": rows,
+            "table_like_found": bool(rows),
+            "header_found": bool(rows),
+            "body_row_count": len(rows),
+        }
+    if not isinstance(snapshot, dict):
+        return {"rows": [], "table_like_found": False, "header_found": False, "body_row_count": 0}
+    snapshot["rows"] = [row for row in snapshot.get("rows", []) if isinstance(row, dict)]
+    return snapshot
+
+
+def _extract_dom_snapshot(page) -> dict[str, Any]:
+    combined = {"rows": [], "table_like_found": False, "header_found": False, "body_row_count": 0}
+    targets = [page]
+    frames = getattr(page, "frames", None)
+    if callable(frames):
+        try:
+            targets.extend(list(frames()))
+        except Exception:
+            pass
+    for target in targets:
+        try:
+            snapshot = _extract_dom_rows_from_target(target)
+        except Exception:
+            continue
+        combined["rows"].extend(snapshot.get("rows", []))
+        combined["table_like_found"] = combined["table_like_found"] or bool(snapshot.get("table_like_found"))
+        combined["header_found"] = combined["header_found"] or bool(snapshot.get("header_found"))
+        combined["body_row_count"] += int(snapshot.get("body_row_count", 0) or 0)
+    return combined
 
 
 def _parse_baidu_metrics(row: dict[str, Any]) -> dict[str, int | float | None]:
-    return {
-        field: _parse_number(_pick_value(row, aliases))
-        for field, aliases in FIELD_ALIASES.items()
-    }
+    return {field: _parse_number(_pick_value(row, aliases)) for field, aliases in FIELD_ALIASES.items()}
 
 
 def is_baidu_total_row(account_name: Any) -> bool:
@@ -307,7 +384,9 @@ def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dic
                 result["non_numeric_fields"].append(detail)
                 result["errors"].append(
                     "账户 {account_name} 字段 {field} 不是数字或不存在 "
-                    "(account_name={account_name}, raw_value={raw_value}, extraction_method={extraction_method}, row_sample_id={row_sample_id})".format(**detail)
+                    "(account_name={account_name}, raw_value={raw_value}, extraction_method={extraction_method}, row_sample_id={row_sample_id})".format(
+                        **detail
+                    )
                 )
                 continue
             parsed_row[field] = value
@@ -330,15 +409,37 @@ def _build_parse_debug(rows: list[dict[str, Any]], config: dict[str, Any], extra
     parsed_accounts = list(parsed.get("accounts", {}).keys())
     missing_accounts = [name for name in required_accounts if name not in parsed_accounts]
     headers, header_map = _detect_headers(rows)
-    debug = {
+    has_required_headers = all(field in header_map for field in REQUIRED_HEADER_FIELDS)
+    percent_misalignment = any(
+        item.get("field") in {"点击", "消费"} and _is_percentage_text(item.get("raw_value"))
+        for item in parsed.get("non_numeric_fields", [])
+    )
+    failure_reasons: list[str] = []
+    if not rows:
+        failure_reasons.append("no_rows")
+    if rows and not headers:
+        failure_reasons.append("no_header")
+    if rows and not has_required_headers:
+        failure_reasons.append("no_required_headers")
+    if missing_accounts:
+        failure_reasons.append("no_required_accounts")
+    if parsed.get("non_numeric_fields"):
+        failure_reasons.append("non_numeric_fields")
+    if extraction_method == "dom" and not rows:
+        failure_reasons.insert(0, "no_table")
+
+    return {
         "project_id": config.get("project_id"),
         "required_accounts": required_accounts,
+        "required_account_count": len(required_accounts),
         "extraction_method": extraction_method,
         "detected_headers": headers,
         "parsed_account_count": len(parsed_accounts),
         "parsed_accounts": parsed_accounts,
         "missing_accounts": missing_accounts,
         "non_numeric_fields": parsed.get("non_numeric_fields", []),
+        "percent_misalignment": percent_misalignment,
+        "failure_reasons": failure_reasons,
         "sample_rows": [
             {
                 "row_sample_id": row.get("__row_sample_id__"),
@@ -349,41 +450,49 @@ def _build_parse_debug(rows: list[dict[str, Any]], config: dict[str, Any], extra
         ],
         "raw_cell_count": sum(len([k for k in row.keys() if not str(k).startswith("__")]) for row in rows),
         "row_cell_count": [len([k for k in row.keys() if not str(k).startswith("__")]) for row in rows[:20]],
-        "has_required_headers": all(field in header_map for field in REQUIRED_HEADER_FIELDS),
-        "parse_ready": all(field in header_map for field in REQUIRED_HEADER_FIELDS) and len(parsed_accounts) >= 1,
+        "has_required_headers": has_required_headers,
+        "parse_ready": has_required_headers and len(parsed_accounts) >= 1,
     }
-    return debug
 
 
 def extract_baidu_rows_from_page(page, config: dict[str, Any]) -> dict[str, Any]:
-    dom_rows = _extract_dom_rows(page)
+    dom_snapshot = _extract_dom_snapshot(page)
+    dom_rows = dom_snapshot.get("rows", [])
     dom_debug = _build_parse_debug(dom_rows, config, "dom")
-    if dom_debug["parse_ready"]:
+    dom_debug["table_like_found"] = bool(dom_snapshot.get("table_like_found"))
+    dom_debug["header_found"] = bool(dom_snapshot.get("header_found"))
+    dom_debug["body_row_count"] = int(dom_snapshot.get("body_row_count", 0) or 0)
+
+    if dom_rows and dom_debug.get("has_required_headers"):
+        final_debug = dict(dom_debug)
+        final_debug["attempts"] = {"dom": dom_debug}
         return {
             "rows": dom_rows,
             "extraction_method": "dom",
             "detected_headers": dom_debug["detected_headers"],
-            "debug": dom_debug,
+            "debug": final_debug,
         }
 
     visible_text = page.locator("body").inner_text(timeout=10000)
     text_rows = extract_baidu_rows_from_visible_text(visible_text)
     text_debug = _build_parse_debug(text_rows, config, "visible_text")
-    if text_debug["parse_ready"]:
+    if text_rows and text_debug.get("has_required_headers"):
+        final_debug = dict(text_debug)
+        final_debug["attempts"] = {"dom": dom_debug, "visible_text": text_debug}
         return {
             "rows": text_rows,
             "extraction_method": "visible_text",
             "detected_headers": text_debug["detected_headers"],
-            "debug": text_debug,
+            "debug": final_debug,
         }
 
-    fallback_debug = dom_debug if dom_rows else text_debug
-    fallback_debug = dict(fallback_debug)
+    fallback_debug = dict(dom_debug if dom_rows else text_debug)
     fallback_debug["extraction_method"] = "fallback_failed"
     fallback_debug["parse_ready"] = False
+    fallback_debug["attempts"] = {"dom": dom_debug, "visible_text": text_debug}
     return {
         "rows": dom_rows or text_rows,
         "extraction_method": "fallback_failed",
-        "detected_headers": fallback_debug["detected_headers"],
+        "detected_headers": fallback_debug.get("detected_headers", []),
         "debug": fallback_debug,
     }

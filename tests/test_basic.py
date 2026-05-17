@@ -4981,6 +4981,204 @@ def test_baidu_prepare_overview_fails_when_report_table_not_parseable(tmp_path, 
     assert any("百度搜索推广账户表格未完整加载" in error for error in report["errors"])
 
 
+def test_fetch_baidu_auto_uses_dom_candidates_from_prepare_artifacts(tmp_path, monkeypatch):
+    import logging
+    from datetime import date
+
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / "baidu_visible_text.txt").write_text(date.today().strftime("%Y/%m/%d"), encoding="utf-8")
+    dom_rows = [
+        {"账户": "竞网CS博润241209", "展现": "1,001", "点击": "11", "消费": "101.5", "__source__": "dom", "__row_sample_id__": "dom-row-1"},
+        {"账户": "竞网CS博润240304", "展现": "2,002", "点击": "22", "消费": "202.5", "__source__": "dom", "__row_sample_id__": "dom-row-2"},
+        {"账户": "竞网CS博润251218", "展现": "3,003", "点击": "33", "消费": "303.5", "__source__": "dom", "__row_sample_id__": "dom-row-3"},
+    ]
+    (reports_dir / "baidu_table_candidates.json").write_text(
+        json.dumps({"source": "dom", "rows": dom_rows, "row_count": 3, "detected_headers": ["账户", "展现", "点击", "消费"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (reports_dir / "baidu_table_parse_debug.json").write_text(
+        json.dumps(
+            {
+                "project_id": "changsha_niu",
+                "required_accounts": ["竞网CS博润241209", "竞网CS博润240304", "竞网CS博润251218"],
+                "extraction_method": "dom",
+                "detected_headers": ["账户", "展现", "点击", "消费"],
+                "parsed_account_count": 3,
+                "parsed_accounts": ["竞网CS博润241209", "竞网CS博润240304", "竞网CS博润251218"],
+                "missing_accounts": [],
+                "non_numeric_fields": [],
+                "sample_rows": [{"row_sample_id": "dom-row-1", "source": "dom", "cells": {"账户": "竞网CS博润241209"}}],
+                "parse_ready": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "modules.baidu_auto.baidu_prepare_overview",
+        lambda config, root, logger: {"errors": [], "open_report": {"final_url": "https://cc.baidu.com/report", "final_page_type": "搜索推广"}},
+    )
+    monkeypatch.setattr(
+        "modules.baidu_auto.extract_baidu_rows_from_visible_text",
+        lambda text: (_ for _ in ()).throw(AssertionError("不应回退到 visible_text")),
+    )
+
+    config = {
+        "project_id": "changsha_niu",
+        "project_name": "长沙牛",
+        "accounts": {
+            "竞网CS博润241209": {"baidu_name": "竞网CS博润241209", "aliases": ["竞网CS博润241209"]},
+            "竞网CS博润240304": {"baidu_name": "竞网CS博润240304", "aliases": ["竞网CS博润240304"]},
+            "竞网CS博润251218": {"baidu_name": "竞网CS博润251218", "aliases": ["竞网CS博润251218"]},
+        },
+    }
+
+    report = fetch_baidu_auto(config, tmp_path, logging.getLogger("test"), "15点")
+
+    assert report["errors"] == []
+    assert report["parse_source"] == "dom"
+    assert set(report["accounts"].keys()) == {"竞网CS博润241209", "竞网CS博润240304", "竞网CS博润251218"}
+
+
+def test_baidu_prepare_overview_fails_early_on_visible_text_percent_misalignment(tmp_path, monkeypatch):
+    import logging
+    from modules.baidu_overview import baidu_prepare_overview
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    (tmp_path / "reports" / "baidu_visible_text.txt").write_text(
+        "数据报告 搜索推广 2026/05/07 账户 展现 点击 消费",
+        encoding="utf-8",
+    )
+    (tmp_path / "reports" / "baidu_table_parse_debug.json").write_text(
+        json.dumps(
+            {
+                "project_id": "ningbo_niu",
+                "required_accounts": ["宁波博润1", "宁波博润2", "宁波博润12"],
+                "extraction_method": "visible_text",
+                "detected_headers": ["账户", "展现", "点击", "消费"],
+                "parsed_account_count": 1,
+                "parsed_accounts": ["宁波博润1"],
+                "missing_accounts": ["宁波博润2", "宁波博润12"],
+                "non_numeric_fields": [
+                    {
+                        "account_name": "宁波博润1",
+                        "field": "消费",
+                        "raw_value": "8.77%",
+                        "extraction_method": "visible_text",
+                        "row_sample_id": "visible_text-row-2",
+                    }
+                ],
+                "sample_rows": [
+                    {"row_sample_id": "visible_text-row-2", "source": "visible_text", "cells": {"账户": "宁波博润1", "消费": "8.77%"}}
+                ],
+                "parse_ready": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "modules.baidu_overview.baidu_open_overview",
+        lambda config, root, logger: {
+            "final_url": "https://cc.baidu.com/report",
+            "final_page_type": "搜索推广",
+            "errors": [],
+            "session_check": {"decision": "bypass", "passed": True},
+        },
+    )
+
+    config = {
+        "project_id": "ningbo_niu",
+        "project_name": "宁波牛",
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润2": {"baidu_name": "宁波博润2", "aliases": ["宁波博润2"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        },
+    }
+
+    report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
+
+    assert report["errors"]
+    assert "百度搜索推广账户表格未完整加载或列解析异常，请刷新后重试" in report["errors"]
+    assert report["parse_check"]["debug"]["missing_accounts"] == ["宁波博润2", "宁波博润12"]
+
+
+def test_extract_baidu_rows_from_page_supports_grid_rows_for_changsha_accounts():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return "数据报告 搜索推广"
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return [
+                {"账户": "竞网CS博润241209", "展现": "1,234", "点击": "56", "消费": "123.45", "__source__": "dom_grid", "__row_sample_id__": "dom_grid-row-1"},
+                {"账户": "竞网CS博润240304", "展现": "2,345", "点击": "67", "消费": "234.56", "__source__": "dom_grid", "__row_sample_id__": "dom_grid-row-2"},
+                {"账户": "竞网CS博润251218", "展现": "3,456", "点击": "78", "消费": "345.67", "__source__": "dom_grid", "__row_sample_id__": "dom_grid-row-3"},
+            ]
+
+    config = {
+        "project_id": "changsha_niu",
+        "accounts": {
+            "竞网CS博润241209": {"baidu_name": "竞网CS博润241209", "aliases": ["竞网CS博润241209"]},
+            "竞网CS博润240304": {"baidu_name": "竞网CS博润240304", "aliases": ["竞网CS博润240304"]},
+            "竞网CS博润251218": {"baidu_name": "竞网CS博润251218", "aliases": ["竞网CS博润251218"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+    parsed = parse_baidu_table(result["rows"], config)
+
+    assert result["extraction_method"] == "dom"
+    assert result["debug"]["missing_accounts"] == []
+    assert parsed["errors"] == []
+
+
+def test_extract_baidu_rows_from_page_supports_grid_rows_for_ningbo_accounts():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return "数据报告 搜索推广"
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return [
+                {"账户": "宁波博润1", "展现": "1,111", "点击": "11", "消费": "111.11", "__source__": "dom_grid", "__row_sample_id__": "dom_grid-row-1"},
+                {"账户": "宁波博润2", "展现": "2,222", "点击": "22", "消费": "222.22", "__source__": "dom_grid", "__row_sample_id__": "dom_grid-row-2"},
+                {"账户": "宁波博润12", "展现": "3,333", "点击": "33", "消费": "333.33", "__source__": "dom_grid", "__row_sample_id__": "dom_grid-row-3"},
+            ]
+
+    config = {
+        "project_id": "ningbo_niu",
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润2": {"baidu_name": "宁波博润2", "aliases": ["宁波博润2"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+    parsed = parse_baidu_table(result["rows"], config)
+
+    assert result["extraction_method"] == "dom"
+    assert result["debug"]["missing_accounts"] == []
+    assert parsed["errors"] == []
+
+
 def test_doctor_uses_runtime_excel_path_when_project_file_is_stale(tmp_path):
     from openpyxl import Workbook
 
@@ -5113,3 +5311,89 @@ def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp
 
     assert report["errors"] == []
     assert report["self_check"]["verification_passed"] is True
+
+
+def test_inspector_and_writer_share_global_date_period_field_locations(tmp_path):
+    import logging
+    from openpyxl import Workbook, load_workbook
+    from modules.excel_inspector import inspect_excel_structure
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "时段数据"
+    ws["A1"] = "每日时段统计数据"
+    ws["B3"] = "日期"
+    ws["C3"] = "时段"
+    ws["F5"] = "南京账户1"
+    ws.merge_cells("F5:L5")
+    ws["M5"] = "南京账户2"
+    ws.merge_cells("M5:S5")
+    ws["T5"] = "南京账户3"
+    ws.merge_cells("T5:Z5")
+    headers = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+    for offset, header in enumerate(headers):
+        ws.cell(row=6, column=6 + offset).value = header
+        ws.cell(row=6, column=13 + offset).value = header
+        ws.cell(row=6, column=20 + offset).value = header
+    ws["B7"] = "2026-05-07"
+    ws.merge_cells("B7:B9")
+    ws["C7"] = "11点"
+    ws["C8"] = "3点"
+    ws["C9"] = "6点"
+    excel_path = tmp_path / "nanjing_global.xlsx"
+    wb.save(excel_path)
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "merged_hourly_data.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-07",
+                "period": "15点",
+                "accounts": {
+                    "南京账户1": {"展现": 101, "点击": 11, "消费": 12.5, "总对话": 3, "有效": 2, "有效转潜": 1, "总转潜": 1},
+                    "南京账户2": {"展现": 202, "点击": 22, "消费": 23.5, "总对话": 4, "有效": 3, "有效转潜": 1, "总转潜": 1},
+                    "南京账户3": {"展现": 303, "点击": 33, "消费": 34.5, "总对话": 5, "有效": 4, "有效转潜": 2, "总转潜": 2},
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    config = {
+        "excel_path": str(excel_path),
+        "sheet_name": "时段数据",
+        "accounts": {
+            "南京账户1": {"aliases": ["南京账户1"], "excel_name": "南京账户1", "baidu_name": "南京账户1"},
+            "南京账户2": {"aliases": ["南京账户2"], "excel_name": "南京账户2", "baidu_name": "南京账户2"},
+            "南京账户3": {"aliases": ["南京账户3"], "excel_name": "南京账户3", "baidu_name": "南京账户3"},
+        },
+        "field_aliases": {
+            "日期": ["日期"],
+            "时段": ["时段"],
+            "展现": ["展现"],
+            "点击": ["点击"],
+            "消费": ["消费"],
+            "总对话": ["总对话"],
+            "有效": ["有效"],
+            "有效转潜": ["有效转潜"],
+            "总转潜": ["总转潜"],
+        },
+    }
+
+    structure = inspect_excel_structure(config=config, root=tmp_path, logger=logging.getLogger("test"))
+    assert structure["errors"] == []
+    assert structure["global_fields"]["日期"]["header_cell"] == "B3"
+    assert structure["global_fields"]["时段"]["header_cell"] == "C3"
+
+    report = write_merged_hourly_data(config, tmp_path, logging.getLogger("test"), "15点")
+
+    assert report["errors"] == []
+    assert report["self_check"]["verification_passed"] is True
+
+    verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
+    verify_ws = verify_wb["时段数据"]
+    assert verify_ws["F8"].value == 101
+    assert verify_ws["M8"].value == 202
+    assert verify_ws["T8"].value == 303

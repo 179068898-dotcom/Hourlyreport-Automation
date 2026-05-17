@@ -88,6 +88,14 @@ def _find_target_row(
     return None
 
 
+def _resolve_global_row_fields(structure: dict[str, Any], account_meta: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    global_fields = structure.get("global_fields", {})
+    account_fields = account_meta.get("fields", {})
+    date_field = global_fields.get("日期") or account_fields.get("日期", {})
+    period_field = global_fields.get("时段") or account_fields.get("时段", {})
+    return date_field or {}, period_field or {}
+
+
 def _range_contains(cell_range: dict[str, int], row: int, col: int) -> bool:
     return (
         int(cell_range["min_row"]) <= row <= int(cell_range["max_row"])
@@ -233,8 +241,7 @@ def mock_write_excel(
     for account, values in mock_data.items():
         account_meta = structure["accounts"].get(account, {})
         fields = account_meta.get("fields", {})
-        date_field = fields.get("日期", {})
-        period_field = fields.get("时段", {})
+        date_field, period_field = _resolve_global_row_fields(structure, account_meta)
         row = _find_target_row(
             ws,
             int(date_field.get("header_col", 0)),
@@ -425,8 +432,7 @@ def write_merged_hourly_data(
         account_meta = structure["accounts"].get(account, {})
         fields = account_meta.get("fields", {})
         account_report = {"target_row": None, "writes": [], "errors": []}
-        date_field = fields.get("日期", {})
-        period_field = fields.get("时段", {})
+        date_field, period_field = _resolve_global_row_fields(structure, account_meta)
         if not date_field.get("found"):
             account_report["errors"].append("找不到字段：日期")
         if not period_field.get("found"):

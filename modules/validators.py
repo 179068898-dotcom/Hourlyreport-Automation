@@ -50,6 +50,29 @@ def validate_excel_report(report: dict[str, Any], required_accounts: list[str] |
     return errors
 
 
+def validate_excel_report_v2(report: dict[str, Any], required_accounts: list[str] | None = None) -> list[str]:
+    errors: list[str] = []
+    if not report.get("sheet_found"):
+        errors.append("未找到目标 sheet")
+        return errors
+
+    global_fields = report.get("global_fields", {})
+    for field in ["日期", "时段"]:
+        if field not in global_fields or not global_fields[field].get("found"):
+            errors.append(f"未找到全局字段：{field}")
+
+    accounts = report.get("accounts", {})
+    for account in (required_accounts or REQUIRED_ACCOUNTS):
+        if account not in accounts or not accounts[account].get("found"):
+            errors.append(f"未识别到账户区域：{account}")
+            continue
+        fields = accounts[account].get("fields", {})
+        for field in BAIDU_ACCOUNT_FIELDS:
+            if field not in fields or not fields[field].get("found"):
+                errors.append(f"账户 {account} 未找到字段：{field}")
+    return errors
+
+
 def validate_kst_counts(row: dict[str, int]) -> list[str]:
     errors = []
     total = int(row.get("总对话", 0) or 0)

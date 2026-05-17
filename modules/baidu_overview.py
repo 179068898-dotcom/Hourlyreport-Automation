@@ -161,6 +161,62 @@ def validate_overview_parse_ready(root: Path, config: dict[str, Any]) -> dict[st
     }
 
 
+def validate_overview_parse_ready_v2(root: Path, config: dict[str, Any]) -> dict[str, Any]:
+    debug = _load_table_parse_debug(root)
+    if not debug:
+        if not config.get("accounts"):
+            return {
+                "passed": True,
+                "checks": {"debug_report_present": False, "skipped_without_accounts": True},
+                "debug": {},
+                "errors": [],
+            }
+        return {
+            "passed": False,
+            "checks": {"debug_report_present": False},
+            "debug": {},
+            "errors": ["百度搜索推广账户表格未完整加载或列解析异常，请刷新后重试"],
+        }
+
+    normalized_headers = {normalize_text(item) for item in debug.get("detected_headers", [])}
+    required = {name: normalize_text(name) for name in ["账户", "展现", "点击", "消费"]}
+    required_account_count = len(debug.get("required_accounts") or [])
+    parsed_account_count = int(debug.get("parsed_account_count", 0) or 0)
+    missing_accounts = list(debug.get("missing_accounts") or [])
+    non_numeric_fields = list(debug.get("non_numeric_fields") or [])
+    percent_misalignment = bool(debug.get("percent_misalignment"))
+    extraction_method = str(debug.get("extraction_method") or "")
+
+    checks = {
+        "required_headers_detected": all(value in normalized_headers for value in required.values()),
+        "parsed_account_count_matches_required": parsed_account_count >= required_account_count if required_account_count else parsed_account_count >= 1,
+        "all_required_accounts_detected": not missing_accounts,
+        "non_numeric_fields_empty": not non_numeric_fields,
+        "visible_text_percent_misalignment": extraction_method == "visible_text" and percent_misalignment,
+    }
+
+    errors: list[str] = []
+    if not checks["required_headers_detected"]:
+        errors.append("百度搜索推广账户表格未完整加载或列解析异常，请刷新后重试")
+    if (
+        not checks["parsed_account_count_matches_required"]
+        or not checks["all_required_accounts_detected"]
+        or not checks["non_numeric_fields_empty"]
+        or checks["visible_text_percent_misalignment"]
+    ):
+        if "百度搜索推广账户表格未完整加载或列解析异常，请刷新后重试" not in errors:
+            errors.append("百度搜索推广账户表格未完整加载或列解析异常，请刷新后重试")
+    if checks["visible_text_percent_misalignment"]:
+        errors.append("百度表格列解析疑似错位，请检查 DOM 表格提取。")
+
+    return {
+        "passed": not errors,
+        "checks": checks,
+        "debug": debug,
+        "errors": errors,
+    }
+
+
 def overview_text_has_account_table(visible_text: str, config: dict[str, Any]) -> bool:
     normalized_text = normalize_text(visible_text)
     required_headers = ["账户", "展现", "点击", "消费"]
@@ -633,7 +689,7 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
     text_path = root / "reports" / "baidu_visible_text.txt"
     visible_text = text_path.read_text(encoding="utf-8") if text_path.exists() else ""
     ready = validate_overview_ready(visible_text, report["target_date"], config)
-    parse_ready = validate_overview_parse_ready(root, config)
+    parse_ready = validate_overview_parse_ready_v2(root, config)
     report["ready_check"] = ready
     report["parse_check"] = parse_ready
     report["errors"].extend(error for error in ready["errors"] if error not in report["errors"])
@@ -653,7 +709,7 @@ def baidu_prepare_overview(config: dict[str, Any], root: Path, logger) -> dict[s
         if not retry_open.get("errors"):
             retry_text = text_path.read_text(encoding="utf-8") if text_path.exists() else ""
             ready = validate_overview_ready(retry_text, report["target_date"], config)
-            parse_ready = validate_overview_parse_ready(root, config)
+            parse_ready = validate_overview_parse_ready_v2(root, config)
             report["ready_check"] = ready
             report["parse_check"] = parse_ready
             report["errors"].extend(ready.get("errors", []))
