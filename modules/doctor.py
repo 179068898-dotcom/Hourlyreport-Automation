@@ -43,6 +43,45 @@ def _resolve(root: Path, value: str | Path | None) -> Path | None:
     return path if path.is_absolute() else root / path
 
 
+def _similar_excel_names(excel_path: Path | None) -> list[str]:
+    if not excel_path:
+        return []
+    parent = excel_path.parent
+    if not parent.exists():
+        return []
+    keywords = [item for item in ["竞价数据", "长沙", "npx", excel_path.suffix.lower()] if item]
+    matches: list[str] = []
+    for candidate in parent.iterdir():
+        if not candidate.is_file():
+            continue
+        name = candidate.name
+        lowered = name.lower()
+        if candidate == excel_path:
+            continue
+        if any(keyword == excel_path.suffix.lower() and lowered.endswith(keyword) or keyword in name for keyword in keywords):
+            matches.append(name)
+    return sorted(set(matches))[:20]
+
+
+def _build_missing_excel_message(excel_path: Path | None, project_id: str) -> tuple[str, dict[str, Any]]:
+    if not excel_path:
+        hint = f"请修改 configs/projects/{project_id}.json 的 excel.path" if project_id else "请在项目配置中设置 excel.path"
+        return hint, {"excel_path": None, "parent_exists": False, "similar_files": []}
+    similar_files = _similar_excel_names(excel_path)
+    detail = {
+        "excel_path": str(excel_path),
+        "parent": str(excel_path.parent),
+        "parent_exists": excel_path.parent.exists(),
+        "similar_files": similar_files,
+    }
+    message = f"找不到目标 Excel：{excel_path}"
+    if excel_path.parent.exists():
+        message += f"；父目录存在：{excel_path.parent}"
+    if similar_files:
+        message += f"；相似文件：{', '.join(similar_files)}"
+    return message, detail
+
+
 def _check_python() -> dict[str, Any]:
     version = platform.python_version()
     if sys.version_info >= (3, 10):
@@ -241,10 +280,18 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     pid = str(config.get("project_id") or project.get("project_id", ""))
     excel_path = _runtime_excel_path(root_path, config, project)
     if excel_path and excel_path.exists():
-        checks["target_excel"] = _ok(f"已找到：{excel_path.name}")
+        checks["target_excel"] = _ok(
+            f"已找到：{excel_path.name}",
+            {
+                "project_id": pid,
+                "excel_path": str(excel_path),
+                "hourly_sheet": str(config.get("sheet_name") or get_project_sheet_name(project, "hourly") if project else "时段数据"),
+                "daily_sheet": str(config.get("daily_sheet_name") or get_project_sheet_name(project, "daily") if project else "百度"),
+            },
+        )
     else:
-        hint = f"请修改 configs/projects/{pid}.json 的 excel.path" if pid else "请在项目配置中设置 excel.path"
-        checks["target_excel"] = _warn(hint)
+        message, detail = _build_missing_excel_message(excel_path, pid)
+        checks["target_excel"] = _warn(message, detail)
 
     if excel_engine == "openpyxl" and checks.get("target_excel", {}).get("passed"):
         save_test = test_openpyxl_save_copy(excel_path, root_path) if excel_path else {"passed": False, "message": "目标 Excel 未配置"}

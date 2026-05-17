@@ -61,7 +61,7 @@ from modules.excel_writer import _find_target_row, _normalize_period_for_excel, 
 from modules.daily_excel_inspector import inspect_daily_worksheet
 from modules.data_merger import build_merged_daily_data, build_merged_hourly_data
 from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data
-from modules.baidu_parser import _parse_number, extract_baidu_rows_from_visible_text, parse_baidu_table
+from modules.baidu_parser import _build_account_map, _build_parse_debug, _map_account, _parse_number, extract_baidu_rows_from_visible_text, parse_baidu_table
 from modules.baidu_browser import _extract_selected_date_from_text, _write_debug_artifacts
 from modules.baidu_detector import classify_baidu_page
 from modules.baidu_overview import is_search_promotion_overview, overview_text_has_account_table, should_open_cas_login, validate_overview_ready
@@ -972,6 +972,88 @@ def test_parse_baidu_table_maps_accounts_and_numeric_fields():
     assert parsed["accounts"]["银康01"]["展现"] == 1001
     assert parsed["accounts"]["银康银屑02"]["点击"] == 62
     assert parsed["accounts"]["银康03"]["消费"] == 503.39
+
+
+def test_map_account_requires_exact_match_for_ningbo_suffix_accounts():
+    config = {
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+            "宁波博润13": {"baidu_name": "宁波博润13", "aliases": ["宁波博润13"]},
+        }
+    }
+    account_map = _build_account_map(config)
+
+    assert _map_account("宁波博润12", account_map) == "宁波博润12"
+    assert _map_account("宁波博润1", account_map) == "宁波博润1"
+    assert _map_account(" 宁波博润1 ", account_map) == "宁波博润1"
+
+
+def test_map_account_does_not_fallback_to_contains_match():
+    config = {
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+        }
+    }
+    account_map = _build_account_map(config)
+
+    assert _map_account("宁波博润12", account_map) is None
+
+
+def test_parse_baidu_table_treats_unconfigured_suffix_account_as_unknown():
+    config = {
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+        }
+    }
+    rows = [
+        {"账户": "宁波博润12", "展现": "100", "点击": "10", "消费": "20.5"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert "宁波博润1" not in parsed["accounts"]
+    assert parsed["unknown_accounts"][0]["account_name"] == "宁波博润12"
+
+
+def test_parse_baidu_table_distinguishes_changsha_accounts_by_exact_name():
+    config = {
+        "accounts": {
+            "竞网CS博润241209": {"baidu_name": "竞网CS博润241209", "aliases": ["竞网CS博润241209"]},
+            "竞网CS博润240304": {"baidu_name": "竞网CS博润240304", "aliases": ["竞网CS博润240304"]},
+            "竞网CS博润251218": {"baidu_name": "竞网CS博润251218", "aliases": ["竞网CS博润251218"]},
+        }
+    }
+    rows = [
+        {"账户": "竞网CS博润241209", "展现": "100", "点击": "10", "消费": "20.5"},
+        {"账户": "竞网CS博润240304", "展现": "200", "点击": "20", "消费": "30.5"},
+        {"账户": "竞网CS博润251218", "展现": "300", "点击": "30", "消费": "40.5"},
+    ]
+
+    parsed = parse_baidu_table(rows, config)
+
+    assert parsed["errors"] == []
+    assert parsed["accounts"]["竞网CS博润241209"]["展现"] == 100
+    assert parsed["accounts"]["竞网CS博润240304"]["展现"] == 200
+    assert parsed["accounts"]["竞网CS博润251218"]["展现"] == 300
+
+
+def test_build_parse_debug_records_only_exact_account_matches():
+    config = {
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        }
+    }
+    rows = [
+        {"账户": " 宁波博润1 ", "展现": "100", "点击": "10", "消费": "20.5"},
+        {"账户": "宁波博润12", "展现": "200", "点击": "20", "消费": "30.5"},
+    ]
+
+    debug = _build_parse_debug(rows, config, "dom")
+
+    assert [item["matched_account"] for item in debug["account_match_details"]] == ["宁波博润1", "宁波博润12"]
+    assert all(item["match_type"] == "exact" for item in debug["account_match_details"])
 
 
 def test_browser_settings_default_to_chrome_without_edge_fallback():
@@ -5239,6 +5321,145 @@ def test_doctor_uses_runtime_excel_path_when_project_file_is_stale(tmp_path):
 
     assert report["checks"]["target_excel"]["passed"] is True
     assert "actual.xlsx" in report["checks"]["target_excel"]["message"]
+
+
+def test_build_runtime_config_and_doctor_resolve_same_changsha_excel_path(tmp_path):
+    from openpyxl import Workbook
+    from modules.project_config import load_project_config, build_runtime_config_from_project
+    from modules.doctor import _runtime_excel_path
+
+    configs_dir = tmp_path / "configs"
+    projects_dir = configs_dir / "projects"
+    projects_dir.mkdir(parents=True)
+    (configs_dir / "app_config.json").write_text(
+        json.dumps(
+            {"default_project_id": "changsha_niu", "projects_dir": "configs/projects", "secrets_file": "secrets/secrets.json"},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    excel_path = tmp_path / "长沙" / "【长沙npx】2026竞价数据.xlsx"
+    excel_path.parent.mkdir(parents=True)
+    wb = Workbook()
+    wb.active.title = "时段数据"
+    wb.create_sheet("百度")
+    wb.save(excel_path)
+    (projects_dir / "changsha_niu.json").write_text(
+        json.dumps(
+            {
+                "project_id": "changsha_niu",
+                "project_name": "长沙牛",
+                "excel": {"path": str(excel_path), "hourly_sheet": "时段数据", "daily_sheet": "百度", "engine": "openpyxl"},
+                "kst": {"export_dir": "kst_exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+                "baidu": {"credential_profile": "changsha_niu_baidu", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+                "accounts": [
+                    {"standard_name": "A", "baidu_names": ["A"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+                    {"standard_name": "B", "baidu_names": ["B"], "excel_name": "B", "kst_ids": ["2"], "kst_names": ["B"]},
+                    {"standard_name": "C", "baidu_names": ["C"], "excel_name": "C", "kst_ids": ["3"], "kst_names": ["C"]},
+                ],
+                "hourly": {"periods": ["11点", "15点", "18点"]},
+                "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    project = load_project_config(tmp_path, "changsha_niu")
+    runtime = build_runtime_config_from_project(project, {})
+    doctor_path = _runtime_excel_path(tmp_path, runtime, project)
+
+    assert runtime["excel_path"] == str(excel_path)
+    assert str(doctor_path) == str(excel_path)
+
+
+def test_doctor_reports_full_missing_excel_path(tmp_path):
+    configs_dir = tmp_path / "configs"
+    projects_dir = configs_dir / "projects"
+    projects_dir.mkdir(parents=True)
+    (configs_dir / "app_config.json").write_text(
+        json.dumps(
+            {"default_project_id": "changsha_niu", "projects_dir": "configs/projects", "secrets_file": "secrets/secrets.json"},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    missing_path = tmp_path / "missing-dir" / "【长沙npx】2026竞价数据.xlsx"
+    (projects_dir / "changsha_niu.json").write_text(
+        json.dumps(
+            {
+                "project_id": "changsha_niu",
+                "project_name": "长沙牛",
+                "excel": {"path": str(missing_path), "hourly_sheet": "时段数据", "daily_sheet": "百度", "engine": "openpyxl"},
+                "kst": {"export_dir": "kst_exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+                "baidu": {"credential_profile": "changsha_niu_baidu", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+                "accounts": [
+                    {"standard_name": "A", "baidu_names": ["A"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+                    {"standard_name": "B", "baidu_names": ["B"], "excel_name": "B", "kst_ids": ["2"], "kst_names": ["B"]},
+                    {"standard_name": "C", "baidu_names": ["C"], "excel_name": "C", "kst_ids": ["3"], "kst_names": ["C"]},
+                ],
+                "hourly": {"periods": ["11点", "15点", "18点"]},
+                "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_doctor(tmp_path, {"browser": {"cdp_endpoint": "http://127.0.0.1:9", "auto_start_debug_chrome": False}, "kst": {}})
+
+    assert report["checks"]["target_excel"]["passed"] is False
+    assert str(missing_path) in report["checks"]["target_excel"]["message"]
+
+
+def test_doctor_suggests_similar_excel_filenames_when_parent_exists(tmp_path):
+    from openpyxl import Workbook
+
+    configs_dir = tmp_path / "configs"
+    projects_dir = configs_dir / "projects"
+    projects_dir.mkdir(parents=True)
+    (configs_dir / "app_config.json").write_text(
+        json.dumps(
+            {"default_project_id": "changsha_niu", "projects_dir": "configs/projects", "secrets_file": "secrets/secrets.json"},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    target_dir = tmp_path / "长沙"
+    target_dir.mkdir(parents=True)
+    similar_file = target_dir / "【长沙npx】2026竞价数据.xlsx"
+    wb = Workbook()
+    wb.active.title = "时段数据"
+    wb.create_sheet("百度")
+    wb.save(similar_file)
+    missing_path = target_dir / "【长沙N】2026竞价数据.xlsx"
+    (projects_dir / "changsha_niu.json").write_text(
+        json.dumps(
+            {
+                "project_id": "changsha_niu",
+                "project_name": "长沙牛",
+                "excel": {"path": str(missing_path), "hourly_sheet": "时段数据", "daily_sheet": "百度", "engine": "openpyxl"},
+                "kst": {"export_dir": "kst_exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+                "baidu": {"credential_profile": "changsha_niu_baidu", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+                "accounts": [
+                    {"standard_name": "A", "baidu_names": ["A"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+                    {"standard_name": "B", "baidu_names": ["B"], "excel_name": "B", "kst_ids": ["2"], "kst_names": ["B"]},
+                    {"standard_name": "C", "baidu_names": ["C"], "excel_name": "C", "kst_ids": ["3"], "kst_names": ["C"]},
+                ],
+                "hourly": {"periods": ["11点", "15点", "18点"]},
+                "daily": {"write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"], "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_doctor(tmp_path, {"browser": {"cdp_endpoint": "http://127.0.0.1:9", "auto_start_debug_chrome": False}, "kst": {}})
+
+    detail = report["checks"]["target_excel"]["detail"]
+    assert report["checks"]["target_excel"]["passed"] is False
+    assert detail["parent_exists"] is True
+    assert "【长沙npx】2026竞价数据.xlsx" in detail["similar_files"]
 
 
 def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp_path):

@@ -105,12 +105,7 @@ def _map_account(raw_account: Any, account_map: dict[str, str]) -> str | None:
     raw = normalize_text(raw_account)
     if not raw:
         return None
-    if raw in account_map:
-        return account_map[raw]
-    for alias, standard_name in account_map.items():
-        if alias and alias in raw:
-            return standard_name
-    return None
+    return account_map.get(raw)
 
 
 def _normalize_row(row: dict[str, Any], source: str, row_index: int) -> dict[str, Any]:
@@ -338,6 +333,7 @@ def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dic
         "exceptions": [],
         "errors": [],
         "non_numeric_fields": [],
+        "account_match_details": [],
     }
     account_map = _build_account_map(config)
 
@@ -368,6 +364,15 @@ def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dic
                 }
             )
             continue
+
+        result["account_match_details"].append(
+            {
+                "raw_account": "" if raw_account is None else str(raw_account),
+                "normalized_account": normalize_text(raw_account),
+                "matched_account": standard_account,
+                "match_type": "exact",
+            }
+        )
 
         parsed_row: dict[str, Any] = {"source_account": raw_account}
         for field, aliases in FIELD_ALIASES.items():
@@ -437,6 +442,7 @@ def _build_parse_debug(rows: list[dict[str, Any]], config: dict[str, Any], extra
         "parsed_account_count": len(parsed_accounts),
         "parsed_accounts": parsed_accounts,
         "missing_accounts": missing_accounts,
+        "account_match_details": parsed.get("account_match_details", []),
         "non_numeric_fields": parsed.get("non_numeric_fields", []),
         "percent_misalignment": percent_misalignment,
         "failure_reasons": failure_reasons,
