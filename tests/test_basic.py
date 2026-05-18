@@ -576,7 +576,7 @@ def test_doctor_openpyxl_mode_skips_excel_com_only_requirements(tmp_path, monkey
 def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("main.py")) is True
     assert should_include_file(Path("modules") / "doctor.py") is True
-    assert should_include_file(Path("reports") / ".gitkeep") is True
+    assert should_include_file(Path("reports") / ".gitkeep") is False
     assert should_include_file(Path("reports") / "final_run_report.json") is False
     assert should_include_file(Path("logs") / "run.log") is False
     assert should_include_file(Path("backups") / "target.xlsx") is False

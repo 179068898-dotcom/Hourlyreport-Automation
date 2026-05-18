@@ -1,109 +1,372 @@
-# 夏思道使用说明
+# 夏思道脚本操作手册
 
-## 1. 脚本信息
+## 1. 系统概述：1 分钟搞懂
 
-脚本名：百度竞价日报 / 小时报自动化助手
+一句话：自动读取百度消费、展现、点击，解析商务通导出文件，合并后写入对应项目 Excel。
 
-文件位置：`D:\自动化脚本\hourly_report_bot_release_v0.4.4`
+- 当前版本：`v0.4.18-C 多项目可用发布版`
+- 项目路径：`D:\自动化脚本\hourly_report_bot_release_v0.4.4`
+- 核心依赖：
+  - Python 虚拟环境：`.venv`
+  - Chrome 调试端口：`9222`
+  - 百度营销后台登录态
+  - 商务通导出文件
+  - 各项目目标 Excel
+  - `configs/projects/*.json` 项目配置
+- 支持任务：
+  - 小时报：`11点`、`15点`、`18点`
+  - 日报：默认昨天，也可指定日期
+  - 文件合格校验 / `doctor`
+  - 项目切换 / 项目查看
+  - Excel 结构扫描
+  - 百度退出诊断
 
-默认启动：`run_menu.bat`
+## 2. 执行前检查清单
 
-运行依赖：
-- 已完成 `install_env.bat` 环境安装
-- Chrome 调试端口由菜单自动启动
-- 内部包已包含四项目配置和百度凭据
-- WPS/Excel 可打开目标表格
+| 序号 | 检查项 | 判定标准 | 不通过怎么办 |
+|---|---|---|---|
+| 1 | Chrome 调试端口 `9222` | 已启动，可连接 | 运行 `start_chrome_debug.bat`，或重新打开 Chrome 调试模式 |
+| 2 | 当前项目是否正确 | `configs/app_config.json` 的 `default_project_id` 是目标项目 | 用菜单切换项目，或按配置规则修改 `default_project_id` |
+| 3 | 商务通数据是否已导出 | 对应项目 `kst.export_dir` 下有最新导出文件 | 先让人工从商务通导出，不要自己乱找文件 |
+| 4 | 目标 Excel 是否关闭 | WPS / Excel 没有打开目标文件 | 关闭目标 Excel 后重跑 |
+| 5 | 百度账号是否匹配项目 | 程序会自动判断；账号不匹配会尝试退出重登 | 若提示无法自动退出旧账号，需要人工手动退出后重试 |
+| 6 | 当前时段是否可执行 | 日报通常做昨天；小时报只做已经到点的时段 | 不要提前跑未来时段 |
 
-用途：自动读取百度展现/点击/消费，解析商务通导出表，并写入对应项目的日报或小时报 Excel。
+## 3. 完整命令速查表
 
-## 2. 日常执行入口
+以下内容就是夏思道日常最常用的执行命令速查表，也可以视为命令行参数表。
 
-```
+所有命令都先进入项目目录：
+
+```cmd
 cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
+```
+
+### 3.1 诊断命令
+
+```cmd
+.venv\Scripts\python.exe main.py --mode doctor
+```
+
+说明：全量环境自检，检查 Chrome、项目配置、Excel 路径、sheet、快商通目录等。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode validate-project
+```
+
+说明：校验当前项目配置是否完整。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode list-projects
+```
+
+说明：列出当前内置项目。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode show-project
+```
+
+说明：查看当前项目详情。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode inspect-excel
+```
+
+说明：扫描当前项目小时报 Excel 结构。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode inspect-daily-excel
+```
+
+说明：扫描当前项目日报 Excel 结构。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode test-baidu-logout
+```
+
+说明：手动打开百度搜索推广页并保持登录后，用它诊断是否能自动退出百度账号。
+
+### 3.2 小时报一键流
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 11点 --yes
+```
+
+说明：执行 `11点` 小时报。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 15点 --yes
+```
+
+说明：执行 `15点` 小时报。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 18点 --yes
+```
+
+说明：执行 `18点` 小时报。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 15点 --file "D:\某个商务通导出文件.xlsx" --yes
+```
+
+说明：当自动识别最新商务通导出文件不准确时，用 `--file` 指定。
+
+### 3.3 日报一键流
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run-daily
+```
+
+说明：默认执行昨天日报。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run-daily --date 2026-05-14
+```
+
+说明：执行指定日期日报。
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run-daily --date 2026-05-14 --yes
+```
+
+说明：命令行接受该参数；当前日报流程本身没有运行前确认，因此加不加 `--yes` 结果一致，可统一保留。
+
+### 3.4 菜单入口
+
+```cmd
 run_menu.bat
 ```
 
-进入菜单后按编号执行：
+说明：人工操作时用菜单入口；AI / 夏思道自动执行时优先用命令行。
 
-1. 小时报
-2. 日报
-3. 项目列表
-4. 项目信息
-5. 文件合格校验
-0. 退出
+### 3.5 分步调试
 
-## 3. 参数表
+当前版本支持以下分步命令。
 
-| 参数 | 含义 | 来源 | 示例 |
-|---|---|---|---|
-| 当前项目 | 本次要写入哪个项目 | 菜单项目列表 | 昆明牛 |
-| 时段 | 小时报时段 | 菜单选择 | 11点 / 15点 / 18点 |
-| 日报日期 | 日报写入日期 | 程序默认取昨天 | 2026-05-13 |
-| 百度数据 | 展现、点击、消费 | 百度营销后台 | 展现 1958、点击 206、消费 2339.88 |
-| 商务通数据 | 对话、有效、转潜 | 商务通导出表 | 数据统计_网页记录_xxx.xlsx |
-| Excel 路径 | 写入目标表 | `configs/projects/项目ID.json` 的 `excel.path` | `D:\...` |
-| 商务通目录 | 导出表目录 | `configs/projects/项目ID.json` 的 `kst.export_dir` | `D:\商务通数据\昆明牛` |
+小时报分步：
 
-## 4. 执行流程
-
-1. 双击 `run_menu.bat` → 打开菜单
-2. 选择 3. 项目列表 → 确认当前项目
-3. 选择 5. 文件合格校验 → 确认 Excel、商务通目录、百度凭据都通过
-4. 选择 1. 小时报 或 2. 日报 → 按提示执行
-5. 写入成功后自动打开 Excel → 人工检查数据
-6. 菜单显示完成时间 → 说明本次任务已完成
-
-## 5. 执行命令
-
-日常只用这一条：
-
-```
-cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4 && run_menu.bat
+```cmd
+.venv\Scripts\python.exe main.py --mode fetch-baidu-auto --period 15点
+.venv\Scripts\python.exe main.py --mode parse-kst-export --period 15点
+.venv\Scripts\python.exe main.py --mode merge-data --period 15点
+.venv\Scripts\python.exe main.py --mode write-excel --period 15点
 ```
 
-如果要单独检查环境：
+日报分步：
 
+```cmd
+.venv\Scripts\python.exe main.py --mode fetch-baidu-daily --date 2026-05-14
+.venv\Scripts\python.exe main.py --mode parse-kst-daily --date 2026-05-14
+.venv\Scripts\python.exe main.py --mode merge-daily --date 2026-05-14
+.venv\Scripts\python.exe main.py --mode write-daily --date 2026-05-14
 ```
-cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4 && .\.venv\Scripts\python.exe main.py --mode doctor
+
+## 4. 日报 SOP
+
+1. 确认 Chrome `9222` 已启动。
+2. 确认当前项目正确。
+3. 确认目标 Excel 已关闭。
+4. 进入项目目录：
+
+```cmd
+cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
 ```
 
-## 6. 验证标准
+5. 执行日报：
 
-日报验证：
-- 菜单显示"日报 [已完成] 完成于 HH:mm"
-- Excel 自动打开
-- 百度 sheet 对应日期行已写入展现、点击、消费、有效对话、无效对话、一般有效对话、有效转潜、总转潜
-- 总对话、预约、到诊不由程序写入
+```cmd
+.venv\Scripts\python.exe main.py --mode run-daily --yes
+```
 
-小时报验证：
-- 菜单对应时段显示"已完成"
-- Excel 自动打开
-- 时段数据 sheet 对应日期和时段已写入展现、点击、消费、对话相关字段
+6. 等待程序完成。
+7. 确认终端显示通过，Excel 自动弹出或目标文件已保存。
+8. 查看 `reports/daily_final_run_report.json` 和 `logs/run.log` 是否显示成功。
+9. 记录三个账户消费合计。
+10. 告知姜老师消费总数，询问当天到诊数。
+11. 如果存在外部脚本 `D:\xia_sidao\tools\fill_daily_visit.py`，则执行：
 
-文件合格校验验证：
-- Excel 文件已找到
-- 日报 sheet 已找到
-- 小时报 sheet 已找到
-- 商务通目录已找到
-- 百度凭据已找到
-- 找到最新商务通导出表
+```cmd
+python D:\xia_sidao\tools\fill_daily_visit.py <总消费> <到诊数>
+```
 
-## 7. 避坑
+说明：这是外部工具，不是本项目内置脚本，需确认存在后再执行。
 
-- 不要手动编百度消费、点击、展现，必须以百度后台抓取为准
-- 不要把普通包当内部包用；内部包才带 `secrets.json`
-- 不要把 `secrets/secrets.json` 发到外部
-- 不要删除 `configs/projects/*.json`
-- 如果 Excel 路径不对，只改 `configs/projects/项目ID.json` 里的 `excel.path`
-- 如果商务通目录不对，只改 `configs/projects/项目ID.json` 里的 `kst.export_dir`
-- 如果发现未知百度账户有数据，先按提示单独处理，再考虑补项目配置和 Excel 区域
-- 如果切换项目后百度账号不对，需要退出当前百度账号并重新登录当前项目账号
+12. 在 `memory/当天日期.md` 或用户指定记录位置，记录日报结果。
+13. 如果姜老师未给到诊数，不要乱填，先等待确认。
 
-## 8. 当前内置项目
+## 5. 小时报 SOP
 
-| 项目 | project_id | 说明 |
+1. 确认 Chrome `9222` 已启动。
+2. 确认当前项目正确。
+3. 确认商务通已导出最新文件。
+4. 确认目标 Excel 已关闭。
+5. 进入项目目录：
+
+```cmd
+cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
+```
+
+6. 按时段执行：
+
+`11点`
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 11点 --yes
+```
+
+`15点`
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 15点 --yes
+```
+
+`18点`
+
+```cmd
+.venv\Scripts\python.exe main.py --mode run --period 18点 --yes
+```
+
+7. 等待完成。
+8. 检查终端是否显示通过。
+9. 检查 Excel 对应日期、对应时段是否写入。
+10. 如果提示覆盖旧值，确认是用户允许重跑该时段后再执行。
+11. 小时报完成后通常无需额外操作。
+
+## 6. 项目配置一览表
+
+| 项目ID | 项目名 | 百度账户 | Excel 文件 | 小时报 sheet | 日报 sheet | 商务通目录 | credential_profile |
+|---|---|---|---|---|---|---|---|
+| `kunming_niu` | 昆明牛 | `银康01 / 银康银屑02 / baidu-银康03 / 银康03` | `D:\Seafile\【竞价】\【❤昆明牛】\【2026年】【昆明牛】竞价数据\【昆明npx】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\昆明牛` | `kunming_niu_baidu` |
+| `nanjing_niu` | 南京牛 | `华厦npx1 / 华厦npx3 / 华厦npx5` | `D:\Seafile\【竞价】\【❤南京牛】\【2026年】【南京牛】竞价数据\【南京华夏yxb】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\南京牛` | `nanjing_niu_baidu` |
+| `ningbo_niu` | 宁波牛 | `宁波博润1 / 宁波博润2 / 宁波博润12` | `D:\Seafile\【竞价】\【❤宁波牛】\【2026年】【宁波牛】竞价数据\【宁波YXB】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\宁波牛` | `ningbo_niu_baidu` |
+| `changsha_niu` | 长沙牛 | `竞网CS博润241209 / 竞网CS博润240304 / 竞网CS博润251218` | `D:\Seafile\【竞价】\【❤长沙牛】\【2026年】【长沙牛】竞价数据\【长沙】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\长沙牛` | `changsha_niu_baidu` |
+
+说明：`demo_project.json` 和 `project_template.json` 仅用于演示/模板，不属于正式生产项目。
+
+## 7. 切换项目操作
+
+方式 A：菜单切换
+
+```cmd
+run_menu.bat
+```
+
+然后选择：
+
+`3. 项目列表`
+
+再选择目标项目编号。
+
+方式 B：配置切换
+
+编辑：
+
+`configs/app_config.json`
+
+修改：
+
+`default_project_id`
+
+项目可选值：
+
+- `kunming_niu`
+- `nanjing_niu`
+- `ningbo_niu`
+- `changsha_niu`
+
+重要说明：
+
+1. 切换项目后，百度账号也要匹配对应项目。
+2. 程序会自动判断右上角百度管家账号。
+3. 如果账号不匹配，会尝试自动退出旧账号并登录当前项目账号。
+4. 如果自动退出失败，程序会停止并提示手动退出，不会强行进入 CAS。
+5. 切换项目后建议先跑：
+
+```cmd
+.venv\Scripts\python.exe main.py --mode show-project
+.venv\Scripts\python.exe main.py --mode doctor
+```
+
+## 8. 常见坑与修复
+
+| 现象 | 常见原因 | 修复方式 |
 |---|---|---|
-| 昆明牛 | kunming_niu | 默认项目 |
-| 南京牛 | nanjing_niu | 内置项目 |
-| 宁波牛 | ningbo_niu | 内置项目 |
-| 长沙牛 | changsha_niu | 内置项目 |
+| 默认项目变成宁波牛 / 长沙牛 | 菜单切换项目后 `app_config.json` 改了 `default_project_id` | 切回目标项目；提交代码前不要把 `app_config` 本地状态提交 |
+| Chrome `9222` 连接失败 | Chrome 调试端口未启动 | 运行 `start_chrome_debug.bat`，或关闭旧 Chrome 后重启调试 Chrome |
+| 百度账号不匹配 | 当前浏览器登录了其他项目百度管家账号 | 程序会自动退出重登；若提示无法退出，手动退出后重试 |
+| 百度 report 页面列解析异常 | 百度虚拟 grid 表格结构变化、列顺序漂移、`visible_text` 错位 | 查看 `reports/baidu_table_parse_debug_latest.json` 和 `reports/baidu_table_candidates_latest.json` |
+| 出现“读取 0 个账户 / 读取 1 个账户” | 未正确解析百度 report 表格，或账户名未完整匹配 | 先看 `baidu_table_parse_debug`；不要手动改数据 |
+| 点击 / 消费不是数字，`raw_value` 是百分比 | 列错位，把点击率 / 消费占比当成点击 / 消费 | 这是 parser 问题，不要把百分比当数字写入 |
+| 商务通导出文件未找到 | 商务通未导出，或导出目录不对 | 让人工导出；必要时用 `--file` 指定导出文件 |
+| Excel 找不到目标文件 | 配置路径与真实文件名不一致 | 看 doctor 提示的相似文件名，核对 `configs/projects/*.json` 的 `excel.path` |
+| Excel 打不开 / 写入失败 | WPS / Excel 正在打开目标文件 | 关闭目标 Excel 后重跑 |
+| 南京牛小时报找不到账块 | 首航小时报模板没有账户名，日报模板有账户名 | 这是模板适配问题，暂时不要归因百度抓数 |
+| 日报到诊数不知道 | 到诊数由姜老师确认 | 日报完成后询问姜老师，不要自己填 |
+| 覆盖旧值提示 | 同一日期 / 时段已经写入过 | 确认是重跑覆盖后再继续 |
+
+## 9. 输出验证标准
+
+日报：
+
+- 终端显示成功
+- `reports/daily_final_run_report.json` 结果为通过
+- 目标 Excel 对应日期已写入
+- 消费不为 `0`
+- 三个账户有数据
+- 有效、无效、一般有效、有效转潜、总转潜字段符合预期
+- 预约 / 到诊如规则要求手动填，则不要乱填
+
+小时报：
+
+- 终端显示成功
+- 当前时段对应行写入
+- 展现 / 点击 / 消费不是空
+- 商务通转化字段不是异常 `0`
+- Excel 自动保存
+- 如果覆盖旧值，`reports/write_report.json` 中能看到覆盖说明
+
+## 10. 日志与回溯
+
+- 运行日志：`logs/run.log`
+- 小时报最终报告：`reports/final_run_report.json`
+- 日报最终报告：`reports/daily_final_run_report.json`
+- 百度抓数报告：
+  - `reports/baidu_account_data.json`
+  - `reports/baidu_open_overview_report.json`
+  - `reports/baidu_prepare_overview_report.json`
+  - `reports/baidu_daily_data.json`
+- 百度表格解析调试：
+  - `reports/baidu_table_parse_debug_latest.json`
+  - `reports/baidu_table_candidates_latest.json`
+  - `reports/baidu_table_parse_debug_{project_id}_{timestamp}.json`
+  - `reports/baidu_table_candidates_{project_id}_{timestamp}.json`
+- 商务通解析报告：
+  - 小时报：`reports/kst_dialog_data.json`、`reports/kst_parse_report.json`、`reports/kst_unmatched_rows.json`、`reports/kst_account_dialog_details.json`
+  - 日报：`reports/kst_daily_data.json`、`reports/kst_daily_parse_report.json`、`reports/kst_daily_unmatched_rows.json`、`reports/kst_daily_account_dialog_details.json`
+- 合并校验：
+  - 小时报：`reports/merged_hourly_data.json`、`reports/merge_validate_report.json`
+  - 日报：`reports/merged_daily_data.json`、`reports/daily_merge_validate_report.json`
+- 写入报告：
+  - 小时报：`reports/write_report.json`
+  - 日报：`reports/daily_write_report.json`
+- 其他常用报告：
+  - `reports/doctor_report.json`
+  - `reports/excel_structure_report.json`
+  - `reports/daily_excel_structure_report.json`
+
+## 11. 发布说明
+
+本说明适用于：
+
+`v0.4.18-C 多项目可用发布版`
+
+最近关键能力：
+
+- 百度登录状态机闭环
+- 百度 report DOM / grid 优先解析
+- 账户名完整匹配，禁止模糊匹配
+- 百度表格错位提前拦截
+- 多项目 Excel path / doctor 诊断增强
+- 南京牛日期 / 时段全局字段定位
+- 夏思道命令行 SOP

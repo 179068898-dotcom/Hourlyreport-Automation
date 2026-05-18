@@ -8,9 +8,10 @@ from pathlib import Path
 
 DEFAULT_VERSION = "0.4.4"
 EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "dist"}
-RUNTIME_KEEP_DIRS = {"reports", "logs", "backups", "kst_exports"}
+EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
+RUNTIME_KEEP_DIRS = {"kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak"}
-EXCLUDE_FILES = {"config.json", "credentials.local.json"}
+EXCLUDE_FILES = {"config.json", "credentials.local.json", ".ignore"}
 EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json", "unknown_baidu_accounts.json"}
 
 REQUIRED_INTERNAL_PROFILES = [
@@ -47,6 +48,8 @@ def should_include_file(path: Path, internal: bool = False) -> bool:
             return True
         if path.name == "secrets.json":
             return internal
+        return False
+    if parts and parts[0] in EXCLUDE_RUNTIME_DIRS:
         return False
     # 运行时目录只保留 .gitkeep
     if parts and parts[0] in RUNTIME_KEEP_DIRS:
