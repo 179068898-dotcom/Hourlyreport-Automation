@@ -5261,6 +5261,254 @@ def test_extract_baidu_rows_from_page_supports_grid_rows_for_ningbo_accounts():
     assert parsed["errors"] == []
 
 
+def test_extract_baidu_rows_from_page_ignores_total_row_like_header_candidate_and_uses_split_grid_candidate():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return "数据报告 搜索推广"
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return {
+                "table_like_found": True,
+                "candidates": [
+                    {
+                        "table_root_selector": "div.summary-grid",
+                        "header_source": "row",
+                        "header_cells": ["总计-5", "7,908", "3,379.4", "9.57%"],
+                        "body_rows": [["总计-5", "7,908", "3,379.4", "9.57%"]],
+                        "body_row_count": 1,
+                    },
+                    {
+                        "table_root_selector": "div.report-grid",
+                        "header_source": "split_grid",
+                        "header_cells": ["账户", "展现", "点击", "消费"],
+                        "body_rows": [
+                            ["竞网CS博润241209", "1,234", "56", "123.45"],
+                            ["竞网CS博润240304", "2,345", "67", "234.56"],
+                            ["竞网CS博润251218", "3,456", "78", "345.67"],
+                        ],
+                        "body_row_count": 3,
+                        "scroll_attempts": 1,
+                        "accounts_seen_each_scroll": [["竞网CS博润241209", "竞网CS博润240304", "竞网CS博润251218"]],
+                        "reached_bottom": False,
+                    },
+                ],
+            }
+
+    config = {
+        "project_id": "changsha_niu",
+        "accounts": {
+            "竞网CS博润241209": {"baidu_name": "竞网CS博润241209", "aliases": ["竞网CS博润241209"]},
+            "竞网CS博润240304": {"baidu_name": "竞网CS博润240304", "aliases": ["竞网CS博润240304"]},
+            "竞网CS博润251218": {"baidu_name": "竞网CS博润251218", "aliases": ["竞网CS博润251218"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+
+    assert result["extraction_method"] == "dom"
+    assert result["debug"]["table_root_selector"] == "div.report-grid"
+    assert result["debug"]["header_source"] == "split_grid"
+    assert result["debug"]["header_cells"] == ["账户", "展现", "点击", "消费"]
+    assert result["debug"]["missing_accounts"] == []
+    assert any(
+        attempt.get("header_cells") == ["总计-5", "7,908", "3,379.4", "9.57%"] and attempt.get("header_valid") is False
+        for attempt in result["debug"]["dom_attempts"]
+    )
+
+
+def test_extract_baidu_rows_from_page_supports_scroll_aggregated_accounts_for_ningbo():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return "数据报告 搜索推广"
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return {
+                "table_like_found": True,
+                "candidates": [
+                    {
+                        "table_root_selector": "div.virtual-grid",
+                        "header_source": "columnheader",
+                        "header_cells": ["账户", "展现", "点击", "消费"],
+                        "body_rows": [
+                            ["宁波博润1", "1,111", "11", "111.11"],
+                            ["宁波博润2", "2,222", "22", "222.22"],
+                            ["宁波博润12", "3,333", "33", "333.33"],
+                        ],
+                        "body_row_count": 3,
+                        "scroll_attempts": 3,
+                        "accounts_seen_each_scroll": [
+                            ["宁波博润1"],
+                            ["宁波博润1", "宁波博润2"],
+                            ["宁波博润1", "宁波博润2", "宁波博润12"],
+                        ],
+                        "reached_bottom": True,
+                    }
+                ],
+            }
+
+    config = {
+        "project_id": "ningbo_niu",
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润2": {"baidu_name": "宁波博润2", "aliases": ["宁波博润2"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+
+    assert result["extraction_method"] == "dom"
+    assert result["debug"]["scroll_attempts"] == 3
+    assert result["debug"]["accounts_seen_each_scroll"][-1] == ["宁波博润1", "宁波博润2", "宁波博润12"]
+    assert result["debug"]["required_accounts_found"] == ["宁波博润1", "宁波博润2", "宁波博润12"]
+    assert result["debug"]["missing_accounts"] == []
+
+
+def test_extract_baidu_rows_from_page_does_not_treat_rate_or_ratio_columns_as_click_or_cost():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return "数据报告 搜索推广"
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return {
+                "table_like_found": True,
+                "candidates": [
+                    {
+                        "table_root_selector": "div.bad-grid",
+                        "header_source": "columnheader",
+                        "header_cells": ["账户", "展现", "点击率", "消费占比"],
+                        "body_rows": [["宁波博润1", "1,111", "8.86%", "11.08%"]],
+                        "body_row_count": 1,
+                    }
+                ],
+            }
+
+    config = {
+        "project_id": "ningbo_niu",
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润2": {"baidu_name": "宁波博润2", "aliases": ["宁波博润2"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+
+    assert result["extraction_method"] == "fallback_failed"
+    assert result["debug"]["header_valid"] is False
+    assert result["debug"]["invalid_header_reason"] in {"missing_required_headers", "invalid_metric_columns"}
+
+
+def test_extract_baidu_rows_from_page_rejects_visible_text_fallback_when_accounts_incomplete_or_percent_misaligned():
+    from modules.baidu_parser import extract_baidu_rows_from_page
+
+    text = """
+数据报告
+搜索推广
+账户
+账户ID
+展现
+点击
+消费
+总计-3
+-
+-
+-
+-
+宁波博润1
+1001
+1,001
+8.86%
+101.50
+宁波博润2
+1002
+2,002
+22
+11.08%
+20条/页
+"""
+
+    class FakeLocator:
+        def inner_text(self, timeout=None):
+            return text
+
+    class FakePage:
+        def locator(self, selector):
+            assert selector == "body"
+            return FakeLocator()
+
+        def evaluate(self, script):
+            return []
+
+    config = {
+        "project_id": "ningbo_niu",
+        "accounts": {
+            "宁波博润1": {"baidu_name": "宁波博润1", "aliases": ["宁波博润1"]},
+            "宁波博润2": {"baidu_name": "宁波博润2", "aliases": ["宁波博润2"]},
+            "宁波博润12": {"baidu_name": "宁波博润12", "aliases": ["宁波博润12"]},
+        },
+    }
+
+    result = extract_baidu_rows_from_page(FakePage(), config)
+
+    assert result["extraction_method"] == "fallback_failed"
+    assert result["debug"]["extraction_method"] == "fallback_failed"
+    assert result["debug"]["percent_misalignment"] is True
+    assert "宁波博润12" in result["debug"]["missing_accounts"]
+
+
+def test_write_table_parse_artifacts_writes_latest_and_timestamped_files(tmp_path):
+    from modules.baidu_overview import _write_table_parse_artifacts
+
+    extraction = {
+        "extraction_method": "dom",
+        "rows": [{"账户": "宁波博润1", "展现": "1,111", "点击": "11", "消费": "111.11"}],
+        "detected_headers": ["账户", "展现", "点击", "消费"],
+        "debug": {
+            "project_id": "ningbo_niu",
+            "required_accounts": ["宁波博润1", "宁波博润2", "宁波博润12"],
+            "extraction_method": "dom",
+            "detected_headers": ["账户", "展现", "点击", "消费"],
+            "parsed_account_count": 1,
+            "parsed_accounts": ["宁波博润1"],
+            "missing_accounts": ["宁波博润2", "宁波博润12"],
+            "non_numeric_fields": [],
+            "parse_ready": False,
+        },
+    }
+
+    _write_table_parse_artifacts(tmp_path, extraction)
+
+    reports_dir = tmp_path / "reports"
+    assert (reports_dir / "baidu_table_parse_debug.json").exists()
+    assert (reports_dir / "baidu_table_parse_debug_latest.json").exists()
+    assert len(list(reports_dir.glob("baidu_table_parse_debug_ningbo_niu_*.json"))) == 1
+    assert (reports_dir / "baidu_table_candidates.json").exists()
+    assert (reports_dir / "baidu_table_candidates_latest.json").exists()
+    assert len(list(reports_dir.glob("baidu_table_candidates_ningbo_niu_*.json"))) == 1
+
+
 def test_doctor_uses_runtime_excel_path_when_project_file_is_stale(tmp_path):
     from openpyxl import Workbook
 

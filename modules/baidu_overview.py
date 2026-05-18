@@ -64,17 +64,29 @@ def _table_candidates_path(root: Path) -> Path:
     return root / "reports" / "baidu_table_candidates.json"
 
 
+def _timestamped_report_path(root: Path, stem: str, project_id: str | None) -> Path:
+    safe_project_id = re.sub(r"[^0-9a-zA-Z_-]+", "_", str(project_id or "unknown"))
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return root / "reports" / f"{stem}_{safe_project_id}_{timestamp}.json"
+
+
 def _write_table_parse_artifacts(root: Path, extraction: dict[str, Any]) -> None:
-    _write_json(_table_parse_debug_path(root), extraction.get("debug", {}))
-    _write_json(
-        _table_candidates_path(root),
-        {
-            "source": extraction.get("extraction_method"),
-            "rows": extraction.get("rows", []),
-            "row_count": len(extraction.get("rows", [])),
-            "detected_headers": extraction.get("detected_headers", []),
-        },
-    )
+    debug_data = extraction.get("debug", {})
+    candidate_data = {
+        "source": extraction.get("extraction_method"),
+        "rows": extraction.get("rows", []),
+        "row_count": len(extraction.get("rows", [])),
+        "detected_headers": extraction.get("detected_headers", []),
+    }
+    project_id = debug_data.get("project_id")
+
+    _write_json(_table_parse_debug_path(root), debug_data)
+    _write_json(root / "reports" / "baidu_table_parse_debug_latest.json", debug_data)
+    _write_json(_timestamped_report_path(root, "baidu_table_parse_debug", project_id), debug_data)
+
+    _write_json(_table_candidates_path(root), candidate_data)
+    _write_json(root / "reports" / "baidu_table_candidates_latest.json", candidate_data)
+    _write_json(_timestamped_report_path(root, "baidu_table_candidates", project_id), candidate_data)
 
 
 def _load_table_parse_debug(root: Path) -> dict[str, Any]:
