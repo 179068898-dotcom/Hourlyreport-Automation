@@ -508,12 +508,25 @@ def write_merged_hourly_data(
 
     for op in planned_writes:
         ws[op["cell"]].value = op["new_value"]
+    # 保存前恢复 AutoFilter，防止 openpyxl 写丢失筛选
+    auto_filter_ref = ws.auto_filter.ref if hasattr(ws, 'auto_filter') and ws.auto_filter.ref else None
     try:
         wb.save(excel_path)
     except OSError as exc:
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("保存小时报 Excel 失败：%s", exc)
         return finish()
+    # 保存后再补一次 AutoFilter，确保筛选可用
+    if auto_filter_ref:
+        try:
+            wb2 = load_workbook(excel_path)
+            for ws2 in wb2.worksheets:
+                if ws2.auto_filter and not ws2.auto_filter.ref:
+                    ws2.auto_filter.ref = auto_filter_ref
+            wb2.save(excel_path)
+            wb2.close()
+        except Exception:
+            pass
     logger.info("合并数据已写入并保存：%s", excel_path)
 
     verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
@@ -691,12 +704,25 @@ def write_merged_daily_data(
 
     for op in planned_writes:
         ws[op["cell"]].value = op["new_value"]
+    # 保存前恢复 AutoFilter，防止 openpyxl 写丢失筛选
+    auto_filter_ref = ws.auto_filter.ref if hasattr(ws, 'auto_filter') and ws.auto_filter.ref else None
     try:
         wb.save(excel_path)
     except OSError as exc:
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("保存日报 Excel 失败：%s", exc)
         return finish()
+    # 保存后再补一次 AutoFilter
+    if auto_filter_ref:
+        try:
+            wb2 = load_workbook(excel_path)
+            for ws2 in wb2.worksheets:
+                if ws2.auto_filter and not ws2.auto_filter.ref:
+                    ws2.auto_filter.ref = auto_filter_ref
+            wb2.save(excel_path)
+            wb2.close()
+        except Exception:
+            pass
     logger.info("日报合并数据已写入并保存：%s", excel_path)
 
     verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
