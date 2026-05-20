@@ -208,6 +208,46 @@ def _ensure_search_promotion_before_daily_date(page, config: dict[str, Any], log
     return False, visible_text
 
 
+def _is_baidu_login_page(page) -> bool:
+    url = (getattr(page, "url", "") or "").lower()
+    return "login" in url or "cas.baidu.com" in url or "qingge.baidu.com" in url
+
+
+def _prepare_baidu_daily_report_page(
+    page,
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    report: dict[str, Any],
+) -> bool:
+    # 日报定时任务常见于隔夜 session 过期，必须先做账号守卫，再进入报表页。
+    from modules.baidu_session import ensure_baidu_profile_session
+
+    session_result = ensure_baidu_profile_session(root, config, page, logger, task="run-daily")
+    report["session_check"] = {
+        "passed": session_result.get("passed"),
+        "decision": session_result.get("decision"),
+        "reason": session_result.get("reason"),
+    }
+    if not session_result.get("passed"):
+        report["errors"].append("百度账号切换未完成或用户取消")
+        return False
+
+    if _goto_report_page(page, logger, root=root, config=config):
+        return True
+
+    if _is_baidu_login_page(page):
+        logger.info("百度日报打开 report 后进入登录页，尝试自动登录后重试 report")
+        if not _auto_login_if_needed(page, root, config, logger):
+            report["errors"].append(build_login_failure_message(config))
+            return False
+        if _goto_report_page(page, logger, root=root, config=config):
+            return True
+
+    report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
+    return False
+
+
 def fetch_baidu_daily(
     config: dict[str, Any],
     root: Path,
@@ -251,6 +291,11 @@ def fetch_baidu_daily(
             _write_json(output_path, report)
             return report
         page.bring_to_front()
+        if not _prepare_baidu_daily_report_page(page, config, root, logger, report):
+            _write_debug_artifacts(root, page, report, include_screenshot=bool(baidu_config.get("debug_screenshot", False)))
+            report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+            _write_json(output_path, report)
+            return report
         if not _goto_report_page(page, logger, root=root, config=config):
             report["errors"].append("百度报告页打开失败，请检查网络或百度页面状态")
             report["finished_at"] = datetime.now().isoformat(timespec="seconds")

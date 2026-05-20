@@ -4823,6 +4823,77 @@ def test_session_detected_none_logged_in_uses_tentative_bypass(tmp_path, monkeyp
     assert relogin_calls == []
 
 
+def test_prepare_baidu_daily_report_page_checks_session_before_goto(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_daily import _prepare_baidu_daily_report_page
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    page = MagicMock()
+    page.url = "https://cc.baidu.com/homepage"
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    report = {"errors": []}
+    calls = []
+
+    def fake_session(root, config, page, logger, task=None):
+        calls.append("session")
+        return {"passed": True, "decision": "relogin", "reason": "state_unknown"}
+
+    def fake_goto(page, logger, root=None, config=None):
+        calls.append("goto")
+        return True
+
+    monkeypatch.setattr("modules.baidu_session.ensure_baidu_profile_session", fake_session)
+    monkeypatch.setattr("modules.baidu_daily._goto_report_page", fake_goto)
+
+    ok = _prepare_baidu_daily_report_page(page, config, tmp_path, logging.getLogger("test"), report)
+
+    assert ok is True
+    assert calls == ["session", "goto"]
+    assert report["session_check"]["decision"] == "relogin"
+    assert report["errors"] == []
+
+
+def test_prepare_baidu_daily_report_page_retries_after_cas_redirect(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_daily import _prepare_baidu_daily_report_page
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    page = MagicMock()
+    page.url = "https://cc.baidu.com/homepage"
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    report = {"errors": []}
+    calls = []
+
+    monkeypatch.setattr(
+        "modules.baidu_session.ensure_baidu_profile_session",
+        lambda root, config, page, logger, task=None: calls.append("session") or {"passed": True, "decision": "tentative_bypass"},
+    )
+
+    def fake_goto(page, logger, root=None, config=None):
+        calls.append("goto")
+        if calls.count("goto") == 1:
+            page.url = "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport"
+            return False
+        page.url = "https://cc.baidu.com/report"
+        return True
+
+    def fake_login(page, root, config, logger):
+        calls.append("login")
+        page.url = "https://cc.baidu.com/report"
+        return True
+
+    monkeypatch.setattr("modules.baidu_daily._goto_report_page", fake_goto)
+    monkeypatch.setattr("modules.baidu_daily._auto_login_if_needed", fake_login)
+
+    ok = _prepare_baidu_daily_report_page(page, config, tmp_path, logging.getLogger("test"), report)
+
+    assert ok is True
+    assert calls == ["session", "goto", "login", "goto"]
+    assert report["errors"] == []
+
+
 def test_goto_report_homepage_failure_returns_false_without_parse(monkeypatch):
     from unittest.mock import MagicMock
     from modules.baidu_overview import _goto_report_page
