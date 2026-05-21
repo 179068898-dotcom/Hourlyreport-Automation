@@ -9,6 +9,9 @@ class BrowserLaunchError(RuntimeError):
     pass
 
 
+DEFAULT_BAIDU_START_URL = "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport"
+
+
 CONNECT_EXISTING_HELP = (
     '请先用常用 Google Chrome 启动远程调试端口。\n'
     '注意：如果已经打开 Chrome，新启动参数可能会被旧实例忽略，导致 9222 端口没有监听。'
@@ -17,7 +20,8 @@ CONNECT_EXISTING_HELP = (
     '请先关闭所有 Chrome 窗口，或运行项目里的 start_chrome_debug.bat。\n'
     '手动启动命令：\n'
     '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
-    '--remote-debugging-port=9222 --profile-directory="Default" https://yingxiao.baidu.com/'
+    '--remote-debugging-port=9222 --profile-directory="Default" '
+    f'{DEFAULT_BAIDU_START_URL}'
 )
 
 
@@ -48,7 +52,12 @@ def get_browser_settings(config: dict[str, Any]) -> dict[str, Any]:
     auto_start = browser.get("auto_start_debug_chrome", True)
     remote_debugging_host = browser.get("remote_debugging_host", "127.0.0.1")
     remote_debugging_port = int(browser.get("remote_debugging_port", legacy_port))
-    startup_url = browser.get("startup_url", config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/") if isinstance(config.get("baidu"), dict) else "https://yingxiao.baidu.com/")
+    startup_url = browser.get(
+        "startup_url",
+        config.get("baidu", {}).get("start_url", DEFAULT_BAIDU_START_URL)
+        if isinstance(config.get("baidu"), dict)
+        else DEFAULT_BAIDU_START_URL,
+    )
     allow_kill = bool(browser.get("allow_kill_existing_chrome", False))
 
     return {
@@ -167,7 +176,7 @@ def connect_existing_chrome(playwright, config: dict[str, Any]):
     settings = get_browser_settings(config)
     _ensure_chrome_only(settings)
     endpoint = settings["cdp_endpoint"]
-    start_url = config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/")
+    start_url = config.get("baidu", {}).get("start_url", settings["startup_url"])
 
     try:
         browser = playwright.chromium.connect_over_cdp(endpoint)
@@ -273,7 +282,7 @@ def test_browser_connect(config: dict[str, Any], root: Path, logger) -> dict[str
 
         report["connected"] = True
         report["browser_version"] = browser.version
-        context, page = _select_context_and_page(browser, config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/"))
+        context, page = _select_context_and_page(browser, config.get("baidu", {}).get("start_url", settings["startup_url"]))
         report["closed_extra_tab_urls"] = cleanup_extra_tabs(context, page, settings["max_tabs"])
         pages = _all_pages(browser)
         report["page_urls"] = [page.url for page in pages]

@@ -9,7 +9,7 @@ from typing import Any, Callable
 from modules.baidu_browser import _write_debug_artifacts
 from modules.baidu_detector import classify_baidu_page
 from modules.baidu_parser import extract_baidu_rows_from_page
-from modules.browser_manager import BrowserLaunchError, get_browser_settings, launch_chrome_context
+from modules.browser_manager import BrowserLaunchError, DEFAULT_BAIDU_START_URL, get_browser_settings, launch_chrome_context
 from modules.credential_manager import build_login_failure_message, load_project_credentials
 from modules.text_normalizer import normalize_text
 
@@ -263,7 +263,7 @@ def _ensure_baidu_home_rendered(page, config: dict[str, Any], logger) -> str:
     visible_text = _read_page_text(page)
     if visible_text.strip():
         return visible_text
-    start_url = config.get("baidu", {}).get("start_url", "https://yingxiao.baidu.com/")
+    start_url = config.get("baidu", {}).get("start_url", DEFAULT_BAIDU_START_URL)
     home_url = start_url.rstrip("/") + "/home" if start_url.rstrip("/") == "https://yingxiao.baidu.com" else start_url
     logger.info("当前百度页面可见文本为空，尝试打开首页：%s", home_url)
     try:

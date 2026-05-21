@@ -7,10 +7,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from modules.browser_manager import DEFAULT_BAIDU_START_URL
+
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9222
-DEFAULT_STARTUP_URL = "https://yingxiao.baidu.com/"
+DEFAULT_STARTUP_URL = DEFAULT_BAIDU_START_URL
 DEFAULT_PROFILE_DIR = "browser_profile/chrome"
 
 CHROME_CANDIDATES = [

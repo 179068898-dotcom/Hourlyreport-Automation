@@ -7,10 +7,12 @@ import time
 import json
 from pathlib import Path
 
+from modules.browser_manager import DEFAULT_BAIDU_START_URL
+
 
 ROOT = Path(__file__).resolve().parents[1]
 CHROME_EXE = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
-START_URL = "https://yingxiao.baidu.com/"
+START_URL = DEFAULT_BAIDU_START_URL
 DEBUG_PORT = 9222
 
 

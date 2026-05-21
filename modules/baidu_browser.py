@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from modules.baidu_parser import extract_baidu_rows_from_visible_text, parse_baidu_table
-from modules.browser_manager import BrowserLaunchError, launch_chrome_context
+from modules.browser_manager import BrowserLaunchError, DEFAULT_BAIDU_START_URL, launch_chrome_context
 from modules.validators import get_required_accounts, validate_baidu_report
 
 
@@ -141,7 +141,7 @@ def fetch_baidu_account_report(
         return report
 
     report["self_check"]["playwright_available"] = True
-    start_url = baidu_config.get("start_url", "https://yingxiao.baidu.com/")
+    start_url = baidu_config.get("start_url", DEFAULT_BAIDU_START_URL)
 
     with sync_playwright() as playwright:
         context = None

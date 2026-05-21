@@ -1218,6 +1218,23 @@ def test_connect_existing_help_mentions_running_chrome_blocks_debug_port():
     assert "chrome_debug" in CONNECT_EXISTING_HELP
     assert "关闭所有 Chrome" in CONNECT_EXISTING_HELP
     assert "--remote-debugging-port=9222" in CONNECT_EXISTING_HELP
+    assert "cas.baidu.com" in CONNECT_EXISTING_HELP
+    assert "yingxiao.baidu.com" not in CONNECT_EXISTING_HELP
+
+
+def test_default_chrome_startup_url_is_cas_login():
+    from modules.browser_manager import get_browser_settings
+    from modules.chrome_debug import DEFAULT_STARTUP_URL
+    from modules.chrome_debug_launcher import START_URL
+
+    settings = get_browser_settings({})
+
+    assert "cas.baidu.com" in settings["startup_url"]
+    assert "cas.baidu.com" in DEFAULT_STARTUP_URL
+    assert "cas.baidu.com" in START_URL
+    assert "yingxiao.baidu.com" not in settings["startup_url"]
+    assert "yingxiao.baidu.com" not in DEFAULT_STARTUP_URL
+    assert "yingxiao.baidu.com" not in START_URL
 
 
 def test_cleanup_extra_tabs_keeps_baidu_page_and_limits_to_three():
