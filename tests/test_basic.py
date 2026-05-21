@@ -1223,18 +1223,98 @@ def test_connect_existing_help_mentions_running_chrome_blocks_debug_port():
 
 
 def test_default_chrome_startup_url_is_cas_login():
+    import json
+
     from modules.browser_manager import get_browser_settings
     from modules.chrome_debug import DEFAULT_STARTUP_URL
     from modules.chrome_debug_launcher import START_URL
 
     settings = get_browser_settings({})
+    example_config = json.loads((Path(__file__).resolve().parents[1] / "config.example.json").read_text(encoding="utf-8"))
+    example_settings = get_browser_settings(example_config)
 
     assert "cas.baidu.com" in settings["startup_url"]
+    assert "cas.baidu.com" in example_settings["startup_url"]
+    assert "cas.baidu.com" in example_config["baidu"]["start_url"]
+    assert "cas.baidu.com" in example_config["baidu"]["login_url"]
     assert "cas.baidu.com" in DEFAULT_STARTUP_URL
     assert "cas.baidu.com" in START_URL
     assert "yingxiao.baidu.com" not in settings["startup_url"]
+    assert "yingxiao.baidu.com" not in example_settings["startup_url"]
+    assert "yingxiao.baidu.com" not in example_config["browser"]["startup_url"]
+    assert "qingge.baidu.com" not in example_config["baidu"]["login_url"]
     assert "yingxiao.baidu.com" not in DEFAULT_STARTUP_URL
     assert "yingxiao.baidu.com" not in START_URL
+
+
+def test_select_context_repoints_legacy_yingxiao_page_to_cas():
+    from modules.browser_manager import DEFAULT_BAIDU_START_URL, _select_context_and_page
+
+    class FakePage:
+        def __init__(self, url):
+            self.url = url
+            self.goto_calls = []
+            self.front = False
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.goto_calls.append(url)
+            self.url = url
+
+        def bring_to_front(self):
+            self.front = True
+
+    class FakeContext:
+        def __init__(self, pages):
+            self.pages = pages
+
+        def new_page(self):
+            page = FakePage("about:blank")
+            self.pages.append(page)
+            return page
+
+    class FakeBrowser:
+        def __init__(self, contexts):
+            self.contexts = contexts
+
+    legacy_page = FakePage("https://yingxiao.baidu.com/home")
+    context, page = _select_context_and_page(FakeBrowser([FakeContext([legacy_page])]), DEFAULT_BAIDU_START_URL)
+
+    assert page is legacy_page
+    assert context.pages == [legacy_page]
+    assert legacy_page.goto_calls == [DEFAULT_BAIDU_START_URL]
+    assert legacy_page.front is True
+
+
+def test_select_context_keeps_existing_cc_report_page():
+    from modules.browser_manager import DEFAULT_BAIDU_START_URL, _select_context_and_page
+
+    class FakePage:
+        def __init__(self, url):
+            self.url = url
+            self.goto_calls = []
+            self.front = False
+
+        def goto(self, url, wait_until=None, timeout=None):
+            self.goto_calls.append(url)
+            self.url = url
+
+        def bring_to_front(self):
+            self.front = True
+
+    class FakeContext:
+        def __init__(self, pages):
+            self.pages = pages
+
+    class FakeBrowser:
+        def __init__(self, contexts):
+            self.contexts = contexts
+
+    report_page = FakePage("https://cc.baidu.com/report")
+    context, page = _select_context_and_page(FakeBrowser([FakeContext([report_page])]), DEFAULT_BAIDU_START_URL)
+
+    assert page is report_page
+    assert report_page.goto_calls == []
+    assert report_page.front is True
 
 
 def test_cleanup_extra_tabs_keeps_baidu_page_and_limits_to_three():

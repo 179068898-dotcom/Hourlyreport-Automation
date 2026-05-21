@@ -100,11 +100,33 @@ def _is_baidu_backend_url(url: str) -> bool:
     return any(domain in normalized for domain in ["cc.baidu.com", "yingxiao.baidu.com", "qingge.baidu.com", "cas.baidu.com"])
 
 
+def _is_legacy_baidu_login_entry(url: str) -> bool:
+    normalized = (url or "").lower()
+    return "yingxiao.baidu.com" in normalized or "qingge.baidu.com" in normalized
+
+
+def _should_repoint_legacy_baidu_page(url: str, start_url: str) -> bool:
+    return _is_legacy_baidu_login_entry(url) and "cas.baidu.com" in (start_url or "").lower()
+
+
+def _open_start_url(page, start_url: str):
+    if _should_repoint_legacy_baidu_page(getattr(page, "url", ""), start_url):
+        page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
+    page.bring_to_front()
+    return page
+
+
 def find_baidu_page(context, start_url: str):
+    legacy_page = None
     for page in context.pages:
-        if _is_baidu_backend_url(page.url):
+        if not _is_baidu_backend_url(page.url):
+            continue
+        if not _is_legacy_baidu_login_entry(page.url):
             page.bring_to_front()
             return page
+        legacy_page = legacy_page or page
+    if legacy_page:
+        return _open_start_url(legacy_page, start_url)
     page = context.new_page()
     page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
     page.bring_to_front()
@@ -116,11 +138,19 @@ def _select_context_and_page(browser, start_url: str):
     if not contexts:
         contexts = [browser.new_context()]
 
+    legacy_candidate = None
     for context in contexts:
         for page in context.pages:
-            if _is_baidu_backend_url(page.url):
+            if not _is_baidu_backend_url(page.url):
+                continue
+            if not _is_legacy_baidu_login_entry(page.url):
                 page.bring_to_front()
                 return context, page
+            legacy_candidate = legacy_candidate or (context, page)
+
+    if legacy_candidate:
+        context, page = legacy_candidate
+        return context, _open_start_url(page, start_url)
 
     context = contexts[0]
     page = context.new_page()
@@ -316,7 +346,7 @@ def test_browser_launch(config: dict[str, Any], root: Path, logger, hold_seconds
         write_browser_test_report(root, report)
         return report
 
-    start_url = config.get("baidu", {}).get("start_url", "about:blank")
+    start_url = config.get("baidu", {}).get("start_url", settings["startup_url"])
     with sync_playwright() as playwright:
         try:
             context, page = launch_chrome_context(playwright, config, root)
@@ -328,7 +358,7 @@ def test_browser_launch(config: dict[str, Any], root: Path, logger, hold_seconds
 
         report["chrome_started"] = settings["mode"] == "launch_managed"
         try:
-            if "yingxiao.baidu.com" not in page.url:
+            if page.url != start_url:
                 page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
             report["opened_url"] = page.url
             logger.info("Chrome 浏览器测试页面：%s", page.url)

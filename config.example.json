@@ -17,7 +17,7 @@
     "remote_debugging_host": "127.0.0.1",
     "remote_debugging_port": 9222,
     "profile_dir": "browser_profile/chrome",
-    "startup_url": "https://yingxiao.baidu.com/",
+    "startup_url": "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport",
     "allow_kill_existing_chrome": false,
     "debug_profile_dir": "browser_profile/chrome_debug",
     "managed": {
@@ -57,8 +57,8 @@
     }
   },
   "baidu": {
-    "start_url": "https://cc.baidu.com/report",
-    "login_url": "https://qingge.baidu.com/login",
+    "start_url": "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport",
+    "login_url": "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport",
     "cas_login_url": "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport",
     "report_url": "https://cc.baidu.com/report",
     "credential_project": "yunnan_yinkang",
