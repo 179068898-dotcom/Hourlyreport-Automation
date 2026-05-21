@@ -32,6 +32,32 @@
 | 5 | 百度账号是否匹配项目 | 程序会自动判断；账号不匹配会尝试退出重登 | 若提示无法自动退出旧账号，需要人工手动退出后重试 |
 | 6 | 当前时段是否可执行 | 日报通常做昨天；小时报只做已经到点的时段 | 不要提前跑未来时段 |
 
+## 2.1 OpenClaw 定时任务同步记录
+
+以下是给 OpenClaw 执行小时报自动化定时任务时需要同步的局部行为变化：
+
+1. Chrome 调试浏览器首次打开页已改为 CAS 登录页。
+   - 默认启动 URL：`https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport`
+   - 影响入口：`start_chrome_debug.bat`、自动启动调试 Chrome、连接已有 Chrome 时新建百度页。
+   - 目的：绕过 `yingxiao.baidu.com` / `qingge.baidu.com` 再点击登录的等待，首次未登录时直接进入账号密码页。
+   - 注意：如果项目配置里显式写了 `browser.startup_url` 或 `baidu.start_url`，仍按配置优先；不要误判为代码未生效。
+
+2. 日报登录守卫已恢复，但流程已去重。
+   - 现在顺序是：先确认当前 Chrome 是否为本项目百度账号，再进入 `cc.baidu.com/report`。
+   - 如果进入 report 后跳到 CAS 登录页，才自动登录并重试一次 report。
+   - 后续“搜索推广”检查不再重复调用 `_goto_report_page`，避免日期筛选前页面被重新打开导致流程断裂。
+   - 这主要影响日报；小时报仍按原一键流执行。
+
+3. Excel 写入后会恢复筛选/保护 UI 元数据。
+   - 小时报和日报写入前仍会先备份 Excel。
+   - 写入保存后会从备份恢复目标 sheet 的筛选/保护元数据，避免 openpyxl 保存后让 WPS/Excel 的筛选状态异常。
+   - 这一步不改单元格值、公式和无关 sheet；如果恢复失败，会写入报告字段 `filter_ui_metadata_restored=false`，需要人工检查目标 Excel。
+
+4. `inspect-excel` 已修复局部导入导致的终端退出错误。
+   - OpenClaw 定时任务异常时，可以先跑：
+     ` .venv\Scripts\python.exe main.py --mode inspect-excel`
+   - 该命令只识别结构，不写入 Excel。
+
 ## 3. 完整命令速查表
 
 以下内容就是夏思道日常最常用的执行命令速查表，也可以视为命令行参数表。
