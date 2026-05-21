@@ -45,6 +45,75 @@ def _kunming_niu_runtime_config() -> dict:
         },
     }
 
+
+def _replace_xlsx_text(path: Path, member: str, old: str, new: str) -> None:
+    from zipfile import ZIP_DEFLATED, ZipFile
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    with ZipFile(path, "r") as source, ZipFile(tmp_path, "w", ZIP_DEFLATED) as target:
+        for item in source.infolist():
+            data = source.read(item.filename)
+            if item.filename == member:
+                data = data.decode("utf-8").replace(old, new).encode("utf-8")
+            target.writestr(item, data)
+    tmp_path.replace(path)
+
+
+def test_restore_sheet_filter_protection_metadata_keeps_original_protection_attrs(tmp_path):
+    from zipfile import ZipFile
+
+    from openpyxl import Workbook, load_workbook
+
+    class Logger:
+        def info(self, *args, **kwargs):
+            pass
+
+        def warning(self, *args, **kwargs):
+            pass
+
+    excel_path = tmp_path / "current.xlsx"
+    backup_path = tmp_path / "backup.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "时段数据"
+    ws["A3"] = "日期"
+    ws["B3"] = "时段"
+    ws.auto_filter.ref = "A3:B10"
+    ws.protection.sheet = True
+    ws.protection.autoFilter = False
+    ws.protection.sort = True
+    wb.save(backup_path)
+    wb.save(excel_path)
+
+    with ZipFile(backup_path) as zf:
+        original_xml = zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    original_node_start = original_xml.index("<sheetProtection")
+    original_node_end = original_xml.index("/>", original_node_start) + 2
+    original_node = original_xml[original_node_start:original_node_end]
+    rich_node = (
+        '<sheetProtection selectLockedCells="0" selectUnlockedCells="0" '
+        'algorithmName="SHA-512" sheet="1" objects="1" insertRows="1" '
+        'autoFilter="0" scenarios="0" formatColumns="0" sort="1" />'
+    )
+    dropped_node = '<sheetProtection sheet="1" formatColumns="0" autoFilter="0" objects="1"/>'
+    _replace_xlsx_text(backup_path, "xl/worksheets/sheet1.xml", original_node, rich_node)
+    _replace_xlsx_text(excel_path, "xl/worksheets/sheet1.xml", original_node, dropped_node)
+
+    restored = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        ["时段数据"],
+        Logger(),
+    )
+
+    assert restored is True
+    with ZipFile(excel_path) as zf:
+        restored_xml = zf.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert rich_node in restored_xml
+    assert dropped_node not in restored_xml
+    assert load_workbook(excel_path)["时段数据"]["A3"].value == "日期"
+
 from modules.kst_export_parser import parse_kst_export_file
 from modules.kst_daily_parser import classify_daily_dialog_by_tags, parse_kst_daily_file
 from modules.kst_parser import aggregate_kst_export_rows, classify_dialog_by_tags, has_visitor_dialog
@@ -57,7 +126,12 @@ from modules.excel_inspector import (
     _get_merged_value,
     _scan_non_empty_cells,
 )
-from modules.excel_writer import _find_target_row, _normalize_period_for_excel, _validate_write_target
+from modules.excel_writer import (
+    _find_target_row,
+    _normalize_period_for_excel,
+    _restore_sheet_filter_protection_metadata,
+    _validate_write_target,
+)
 from modules.daily_excel_inspector import inspect_daily_worksheet
 from modules.data_merger import build_merged_daily_data, build_merged_hourly_data
 from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data
@@ -4869,6 +4943,102 @@ def test_baidu_prepare_overview_does_not_write_state_when_validate_fails(tmp_pat
     report = baidu_prepare_overview(config, tmp_path, logger=logging.getLogger("test"))
     assert report["errors"]
     assert mark_calls == []
+
+
+def test_prepare_baidu_daily_report_page_checks_session_before_single_goto(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+
+    from modules.baidu_daily import _prepare_baidu_daily_report_page
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    page = MagicMock()
+    page.url = "https://cc.baidu.com/homepage"
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    report = {"errors": []}
+    calls = []
+
+    def fake_session(root, config, page, logger, task=None):
+        calls.append("session")
+        return {"passed": True, "decision": "relogin", "reason": "state_unknown"}
+
+    def fake_goto(page, logger, root=None, config=None):
+        calls.append("goto")
+        page.url = "https://cc.baidu.com/report"
+        return True
+
+    monkeypatch.setattr("modules.baidu_session.ensure_baidu_profile_session", fake_session)
+    monkeypatch.setattr("modules.baidu_daily._goto_report_page", fake_goto)
+
+    ok = _prepare_baidu_daily_report_page(page, config, tmp_path, logging.getLogger("test"), report)
+
+    assert ok is True
+    assert calls == ["session", "goto"]
+    assert report["session_check"]["decision"] == "relogin"
+    assert report["errors"] == []
+
+
+def test_prepare_baidu_daily_report_page_retries_once_after_login_redirect(tmp_path, monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+
+    from modules.baidu_daily import _prepare_baidu_daily_report_page
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    page = MagicMock()
+    page.url = "https://cc.baidu.com/homepage"
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    report = {"errors": []}
+    calls = []
+
+    monkeypatch.setattr(
+        "modules.baidu_session.ensure_baidu_profile_session",
+        lambda root, config, page, logger, task=None: calls.append("session") or {"passed": True, "decision": "tentative_bypass"},
+    )
+
+    def fake_goto(page, logger, root=None, config=None):
+        calls.append("goto")
+        if calls.count("goto") == 1:
+            page.url = "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport"
+            return False
+        page.url = "https://cc.baidu.com/report"
+        return True
+
+    def fake_login(page, root, config, logger):
+        calls.append("login")
+        page.url = "https://cc.baidu.com/report"
+        return True
+
+    monkeypatch.setattr("modules.baidu_daily._goto_report_page", fake_goto)
+    monkeypatch.setattr("modules.baidu_daily._auto_login_if_needed", fake_login)
+
+    ok = _prepare_baidu_daily_report_page(page, config, tmp_path, logging.getLogger("test"), report)
+
+    assert ok is True
+    assert calls == ["session", "goto", "login", "goto"]
+    assert report["errors"] == []
+
+
+def test_daily_search_promotion_check_does_not_navigate_report_again(monkeypatch):
+    import logging
+    from unittest.mock import MagicMock
+
+    from modules.baidu_daily import _ensure_search_promotion_before_daily_date
+
+    page = MagicMock()
+    page.url = "https://cc.baidu.com/report"
+    monkeypatch.setattr("modules.baidu_daily._read_page_text", lambda page: "数据报告 搜索推广 账户 展现 点击 消费")
+    monkeypatch.setattr("modules.baidu_daily.classify_baidu_page", lambda url, text: {"page_type": "搜索推广数据页"})
+    monkeypatch.setattr("modules.baidu_daily.is_search_promotion_overview", lambda classification: True)
+    monkeypatch.setattr(
+        "modules.baidu_daily._goto_report_page",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不应重复打开 report")),
+    )
+
+    ok, visible_text = _ensure_search_promotion_before_daily_date(page, {}, logging.getLogger("test"), root=".")
+
+    assert ok is True
+    assert "搜索推广" in visible_text
 
 
 def test_extract_baidu_rows_from_page_prefers_dom_table_and_parses_currency_formats():

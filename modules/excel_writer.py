@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zipfile import ZIP_DEFLATED, ZipFile
+import re
+import xml.etree.ElementTree as ET
 
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
@@ -130,6 +134,91 @@ def _make_backup(excel_path: Path, root: Path) -> Path:
     return backup_path
 
 
+def _sheet_xml_path(zf: ZipFile, sheet_name: str) -> str | None:
+    workbook_root = ET.fromstring(zf.read("xl/workbook.xml"))
+    rels_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+    rel_targets = {rel.attrib["Id"]: rel.attrib["Target"] for rel in rels_root}
+    for sheet in workbook_root.findall(".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"):
+        if sheet.attrib.get("name") != sheet_name:
+            continue
+        rel_id = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+        if not rel_id or rel_id not in rel_targets:
+            return None
+        target = rel_targets[rel_id].lstrip("/")
+        if target.startswith("xl/"):
+            return target
+        return f"xl/{target}"
+    return None
+
+
+def _replace_xml_node(xml: str, tag: str, replacement: str | None) -> tuple[str, bool]:
+    pattern = re.compile(rf"<{tag}\b[^>]*(?:/>|>.*?</{tag}>)", re.S)
+    if replacement:
+        if pattern.search(xml):
+            return pattern.sub(replacement, xml, count=1), True
+        insert_before = re.search(r"<sheetViews\b", xml)
+        if tag == "sheetProtection":
+            insert_after = re.search(r"</sheetViews>", xml)
+            if insert_after:
+                pos = insert_after.end()
+                return xml[:pos] + replacement + xml[pos:], True
+        if insert_before:
+            pos = insert_before.start()
+            return xml[:pos] + replacement + xml[pos:], True
+        return xml, False
+    return pattern.sub("", xml, count=1), bool(pattern.search(xml))
+
+
+def _restore_sheet_filter_protection_metadata(
+    excel_path: Path,
+    backup_path: Path,
+    sheet_names: list[str],
+    logger,
+) -> bool:
+    """恢复 openpyxl 保存时容易丢失的保护/筛选 UI 元数据。
+
+    只替换目标 sheet 的 sheetProtection 节点，不改任何单元格值、公式、样式或其他 sheet。
+    """
+    if not backup_path.exists() or not excel_path.exists():
+        return False
+
+    changed_files: dict[str, bytes] = {}
+    try:
+        with ZipFile(backup_path, "r") as backup_zip, ZipFile(excel_path, "r") as current_zip:
+            for sheet_name in sheet_names:
+                backup_sheet_path = _sheet_xml_path(backup_zip, sheet_name)
+                current_sheet_path = _sheet_xml_path(current_zip, sheet_name)
+                if not backup_sheet_path or not current_sheet_path:
+                    continue
+
+                backup_xml = backup_zip.read(backup_sheet_path).decode("utf-8")
+                current_xml = current_zip.read(current_sheet_path).decode("utf-8")
+                backup_protection_match = re.search(
+                    r"<sheetProtection\b[^>]*(?:/>|>.*?</sheetProtection>)",
+                    backup_xml,
+                    re.S,
+                )
+                replacement = backup_protection_match.group(0) if backup_protection_match else None
+                restored_xml, changed = _replace_xml_node(current_xml, "sheetProtection", replacement)
+                if changed and restored_xml != current_xml:
+                    changed_files[current_sheet_path] = restored_xml.encode("utf-8")
+
+            if not changed_files:
+                return False
+
+            with tempfile.NamedTemporaryFile(delete=False, suffix=excel_path.suffix) as tmp:
+                tmp_path = Path(tmp.name)
+            with ZipFile(tmp_path, "w", ZIP_DEFLATED) as out_zip:
+                for item in current_zip.infolist():
+                    out_zip.writestr(item, changed_files.get(item.filename, current_zip.read(item.filename)))
+        shutil.move(str(tmp_path), excel_path)
+        logger.info("已恢复 Excel 筛选/保护 UI 元数据：%s", ", ".join(sheet_names))
+        return True
+    except Exception as exc:
+        logger.warning("恢复 Excel 筛选/保护 UI 元数据失败：%s", exc)
+        return False
+
+
 def _parse_report_date(value: Any) -> date:
     if isinstance(value, datetime):
         return value.date()
@@ -205,6 +294,7 @@ def mock_write_excel(
             "backup_created": False,
             "structure_passed": False,
             "wrote_protected_region": False,
+            "filter_ui_metadata_restored": False,
             "verification_passed": False,
         },
     }
@@ -296,6 +386,12 @@ def mock_write_excel(
         logger.error("模拟保存 Excel 失败：%s", exc)
         out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return report
+    report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        [sheet_name],
+        logger,
+    )
     logger.info("模拟数据已写入并保存：%s", excel_path)
 
     verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
@@ -350,6 +446,7 @@ def write_merged_hourly_data(
             "structure_passed": False,
             "backup_created": False,
             "wrote_protected_region": False,
+            "filter_ui_metadata_restored": False,
             "verification_passed": False,
         },
     }
@@ -527,6 +624,12 @@ def write_merged_hourly_data(
             wb2.close()
         except Exception:
             pass
+    report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        [sheet_name],
+        logger,
+    )
     logger.info("合并数据已写入并保存：%s", excel_path)
 
     verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
@@ -576,6 +679,7 @@ def write_merged_daily_data(
             "structure_passed": False,
             "backup_created": False,
             "wrote_forbidden_field": False,
+            "filter_ui_metadata_restored": False,
             "verification_passed": False,
         },
     }
@@ -723,6 +827,12 @@ def write_merged_daily_data(
             wb2.close()
         except Exception:
             pass
+    report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        [daily_sheet_name],
+        logger,
+    )
     logger.info("日报合并数据已写入并保存：%s", excel_path)
 
     verify_wb = load_workbook(excel_path, data_only=False, read_only=False)

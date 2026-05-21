@@ -175,7 +175,6 @@ def main() -> None:
     if args.mode == "test-baidu-logout":
         from modules.browser_manager import connect_existing_chrome
         from modules.baidu_session import logout_baidu_account
-        from modules.console_ui import print_success, print_error, verbose_print
         from modules.chrome_debug import ensure_chrome_debug_ready
 
         if not ensure_chrome_debug_ready(ROOT, config).get("ready"):
