@@ -6016,10 +6016,24 @@ def test_shenyang_niu_config_resolves_two_baidu_sources():
         "shenyang_niu_zhongya_baidu",
         "shenyang_niu_yinkang_baidu",
     ]
-    assert set(runtime["accounts"]) == {"沈阳中亚01", "沈阳中亚02", "沈阳中亚03", "沈阳银康01", "沈阳银康02", "沈阳银康03"}
+    assert list(runtime["accounts"]) == ["沈阳中亚02", "沈阳银康01", "沈阳中亚01"]
+    assert [account["standard_name"] for account in project["excel_accounts"]] == ["沈阳中亚02", "沈阳银康01", "沈阳中亚01"]
+    assert [account["standard_name"] for source in sources for account in source["accounts"]] == [
+        "沈阳中亚01",
+        "沈阳中亚02",
+        "沈阳中亚03",
+        "沈阳银康01",
+        "沈阳银康02",
+        "沈阳银康03",
+    ]
     assert runtime["kst"]["promotion_id_accounts"]["37084684"] == "沈阳中亚01"
-    assert runtime["kst"]["promotion_id_accounts"]["47190275"] == "沈阳银康03"
-    assert runtime["accounts"]["沈阳银康03"]["baidu_name"] == "沈阳银康银屑病3"
+    assert runtime["kst"]["promotion_id_accounts"] == {
+        "37084945": "沈阳中亚02",
+        "47190166": "沈阳银康01",
+        "37084684": "沈阳中亚01",
+    }
+    assert sources[1]["accounts"][2]["kst_ids"] == ["47190275"]
+    assert sources[1]["accounts"][2]["baidu_names"] == ["沈阳银康银屑病3"]
 
 
 def test_validate_project_config_rejects_duplicate_baidu_name_inside_same_source():
@@ -6105,6 +6119,57 @@ def test_aggregate_baidu_source_reports_sums_metrics_and_keeps_source_details():
     assert len(report["source_reports"]) == 2
 
 
+def test_aggregate_baidu_source_reports_outputs_only_excel_accounts_and_classifies_candidate_only_rows():
+    from modules.baidu_multi_source import aggregate_baidu_source_reports
+
+    config = {
+        "project_id": "shenyang_niu",
+        "accounts": {
+            "沈阳中亚02": {},
+            "沈阳银康01": {},
+            "沈阳中亚01": {},
+        },
+    }
+    reports = [
+        {
+            "source_id": "shenyang_niu_zhongya",
+            "source_name": "沈阳中亚",
+            "report": {
+                "date": "2026-05-22",
+                "period": "15点",
+                "accounts": {
+                    "沈阳中亚01": {"展现": 1, "点击": 2, "消费": 3},
+                    "沈阳中亚02": {"展现": 4, "点击": 5, "消费": 6},
+                    "沈阳中亚03": {"展现": 0, "点击": 0, "消费": 0},
+                },
+                "errors": [],
+            },
+        },
+        {
+            "source_id": "shenyang_niu_yinkang",
+            "source_name": "沈阳银康",
+            "report": {
+                "date": "2026-05-22",
+                "period": "15点",
+                "accounts": {
+                    "沈阳银康01": {"展现": 7, "点击": 8, "消费": 9},
+                    "沈阳银康02": {"展现": 10, "点击": 0, "消费": 0},
+                    "沈阳银康03": {"展现": 0, "点击": 0, "消费": 0},
+                },
+                "errors": [],
+            },
+        },
+    ]
+
+    report = aggregate_baidu_source_reports(config, reports, period="15点")
+
+    assert list(report["accounts"]) == ["沈阳中亚01", "沈阳中亚02", "沈阳银康01"]
+    assert set(report["accounts"]) == {"沈阳中亚02", "沈阳银康01", "沈阳中亚01"}
+    assert [item["account_name"] for item in report["ignored_inactive_accounts"]] == ["沈阳中亚03", "沈阳银康03"]
+    assert [item["account_name"] for item in report["skipped_unmapped_accounts"]] == ["沈阳银康02"]
+    assert report["errors"] == []
+
+
 def test_aggregate_baidu_source_reports_fails_when_any_source_failed():
     from modules.baidu_multi_source import aggregate_baidu_source_reports
 
@@ -6162,6 +6227,18 @@ def test_doctor_reports_multi_baidu_sources_and_secret_profiles(tmp_path, monkey
     assert secrets["passed"] is True
     assert "user-a" not in json.dumps(report, ensure_ascii=False)
     assert "pass-a" not in json.dumps(report, ensure_ascii=False)
+
+
+def test_doctor_baidu_source_detail_marks_candidate_only_accounts_for_shenyang():
+    from modules.project_config import load_project_config
+    from modules.doctor import _check_baidu_sources
+
+    project = load_project_config(Path.cwd(), "shenyang_niu")
+    report = _check_baidu_sources(project)
+
+    assert report["passed"] is True
+    assert report["detail"]["excel_accounts"] == ["沈阳中亚02", "沈阳银康01", "沈阳中亚01"]
+    assert report["detail"]["candidate_only_accounts"] == ["沈阳中亚03", "沈阳银康02", "沈阳银康03"]
 
 
 def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp_path):

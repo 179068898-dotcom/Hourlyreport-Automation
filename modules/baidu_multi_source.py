@@ -100,6 +100,14 @@ def _with_source(item: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _is_zero_metrics(row: dict[str, Any]) -> bool:
+    for field in BAIDU_ACCOUNT_FIELDS:
+        value = row.get(field, 0)
+        if not isinstance(value, int | float) or isinstance(value, bool) or value != 0:
+            return False
+    return True
+
+
 def aggregate_baidu_source_reports(
     config: dict[str, Any],
     source_reports: list[dict[str, Any]],
@@ -113,6 +121,8 @@ def aggregate_baidu_source_reports(
     errors: list[str] = []
     unknown_accounts: list[dict[str, Any]] = []
     ignored_unknown_accounts: list[dict[str, Any]] = []
+    ignored_inactive_accounts: list[dict[str, Any]] = []
+    skipped_unmapped_accounts: list[dict[str, Any]] = []
 
     for item in source_reports:
         source = {
@@ -138,6 +148,8 @@ def aggregate_baidu_source_reports(
             "source_reports": source_reports,
             "unknown_accounts": unknown_accounts,
             "ignored_unknown_accounts": ignored_unknown_accounts,
+            "ignored_inactive_accounts": ignored_inactive_accounts,
+            "skipped_unmapped_accounts": skipped_unmapped_accounts,
             "errors": errors,
             "self_check": {"all_sources_passed": False, "wrote_excel": False},
             "started_at": started_at,
@@ -150,6 +162,19 @@ def aggregate_baidu_source_reports(
         report_date = report_date or str(report.get("date") or "")
         for account, row in (report.get("accounts") or {}).items():
             if account not in required_accounts:
+                detail = {
+                    "account_name": account,
+                    "展现": row.get("展现", 0) or 0,
+                    "点击": row.get("点击", 0) or 0,
+                    "消费": row.get("消费", 0) or 0,
+                    "source_id": str(item.get("source_id") or ""),
+                    "source_name": str(item.get("source_name") or item.get("source_id") or ""),
+                    "reason": "候选账户不属于 Excel 实际写入账户",
+                }
+                if _is_zero_metrics(row):
+                    ignored_inactive_accounts.append({**detail, "reason": "候选账户展点消均为 0，视为未启用"})
+                else:
+                    skipped_unmapped_accounts.append(detail)
                 continue
             target = accounts.setdefault(account, {field: 0 for field in BAIDU_ACCOUNT_FIELDS})
             for field in BAIDU_ACCOUNT_FIELDS:
@@ -168,6 +193,8 @@ def aggregate_baidu_source_reports(
         "source_reports": source_reports,
         "unknown_accounts": unknown_accounts,
         "ignored_unknown_accounts": ignored_unknown_accounts,
+        "ignored_inactive_accounts": ignored_inactive_accounts,
+        "skipped_unmapped_accounts": skipped_unmapped_accounts,
         "exceptions": [],
         "errors": [],
         "self_check": {

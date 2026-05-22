@@ -187,6 +187,12 @@ def _check_baidu_sources(project: dict[str, Any]) -> dict[str, Any]:
     sources = resolve_baidu_sources(project) if project else []
     details = []
     errors: list[str] = []
+    excel_accounts = [
+        str(account.get("standard_name") or "")
+        for account in project.get("excel_accounts", []) or project.get("accounts", [])
+        if account.get("standard_name")
+    ]
+    candidate_names: list[str] = []
     for source in sources:
         source_id = str(source.get("source_id") or "")
         accounts = source.get("accounts") or []
@@ -195,6 +201,8 @@ def _check_baidu_sources(project: dict[str, Any]) -> dict[str, Any]:
         missing_kst_ids = []
         for account in accounts:
             standard = str(account.get("standard_name") or "")
+            if standard:
+                candidate_names.append(standard)
             if not account.get("kst_ids"):
                 missing_kst_ids.append(standard)
             for baidu_name in account.get("baidu_names") or []:
@@ -219,7 +227,13 @@ def _check_baidu_sources(project: dict[str, Any]) -> dict[str, Any]:
             "duplicate_baidu_names": duplicate_names,
             "missing_kst_ids": missing_kst_ids,
         })
-    detail = {"source_count": len(sources), "sources": details}
+    candidate_only = [name for name in dict.fromkeys(candidate_names) if name not in set(excel_accounts)]
+    detail = {
+        "source_count": len(sources),
+        "sources": details,
+        "excel_accounts": excel_accounts,
+        "candidate_only_accounts": candidate_only,
+    }
     if errors:
         return _warn("百度来源配置不完整：" + "；".join(errors), detail)
     return _ok(f"百度来源配置通过：{len(sources)} 个", detail)

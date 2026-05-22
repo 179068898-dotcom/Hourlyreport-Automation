@@ -161,6 +161,7 @@ def normalize_project_config(project: dict[str, Any]) -> dict[str, Any]:
         project["baidu_sources"] = normalized_sources
         if not project["accounts"]:
             project["accounts"] = _flatten_source_accounts(normalized_sources)
+    project["excel_accounts"] = _normalize_excel_accounts(project)
     return project
 
 
@@ -190,6 +191,24 @@ def _flatten_source_accounts(sources: list[dict[str, Any]]) -> list[dict[str, An
                 accounts.append(dict(account))
                 seen.add(standard_name)
     return accounts
+
+
+def _normalize_excel_accounts(project: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_excel_accounts = project.get("excel_accounts")
+    if not isinstance(raw_excel_accounts, list) or not raw_excel_accounts:
+        return [{"standard_name": account.get("standard_name")} for account in project.get("accounts", []) if account.get("standard_name")]
+    account_by_name = {str(account.get("standard_name") or ""): account for account in project.get("accounts", [])}
+    normalized = []
+    for item in raw_excel_accounts:
+        if isinstance(item, str):
+            standard_name = item
+            source = account_by_name.get(standard_name, {"standard_name": standard_name})
+        else:
+            standard_name = str(item.get("standard_name") or "")
+            source = dict(account_by_name.get(standard_name, {}), **dict(item))
+        if standard_name:
+            normalized.append({"standard_name": standard_name, **{k: v for k, v in source.items() if k != "standard_name"}})
+    return normalized
 
 
 def get_project_accounts(project: dict[str, Any]) -> list[str]:
@@ -294,8 +313,11 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     kst["promotion_id_accounts"] = alias_maps["kst_id_to_account"]
     config["kst"] = kst
 
+    excel_account_names = [str(item.get("standard_name") or "") for item in project.get("excel_accounts", []) if item.get("standard_name")]
+    account_by_name = {str(account.get("standard_name") or ""): account for account in project.get("accounts", [])}
     accounts: dict[str, Any] = {}
-    for account in project.get("accounts", []):
+    for standard in excel_account_names or list(account_by_name):
+        account = account_by_name.get(standard, {"standard_name": standard})
         standard_name = account["standard_name"]
         baidu_names = list(account.get("baidu_names", []))
         aliases = []
@@ -313,6 +335,7 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
             "aliases": [str(alias) for alias in dict.fromkeys(aliases) if alias],
         }
     config["accounts"] = accounts
+    config["excel_accounts"] = [{"standard_name": name} for name in accounts]
     if isinstance(project.get("baidu_sources"), list):
         config["baidu_sources"] = [
             {
