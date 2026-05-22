@@ -148,21 +148,48 @@ def normalize_project_config(project: dict[str, Any]) -> dict[str, Any]:
 
     normalized_accounts = []
     for account in project.get("accounts", []) or []:
-        item = dict(account)
-        if "baidu_names" not in item:
-            item["baidu_names"] = list(item.get("baidu_aliases") or [])
-        if "kst_ids" not in item:
-            value = item.get("kst_promotion_id")
-            item["kst_ids"] = [str(value)] if value not in (None, "") else []
-        if "kst_names" not in item:
-            item["kst_names"] = list(item.get("kst_aliases") or [])
-        item["baidu_aliases"] = list(item.get("baidu_names") or [])
-        item["kst_aliases"] = list(item.get("kst_names") or [])
-        if item.get("kst_ids"):
-            item["kst_promotion_id"] = str(item["kst_ids"][0])
-        normalized_accounts.append(item)
+        normalized_accounts.append(_normalize_account(account))
     project["accounts"] = normalized_accounts
+
+    if isinstance(project.get("baidu_sources"), list):
+        normalized_sources = []
+        for source in project.get("baidu_sources") or []:
+            item = dict(source)
+            item["accounts"] = [_normalize_account(account) for account in item.get("accounts", []) or []]
+            item.setdefault("required", True)
+            normalized_sources.append(item)
+        project["baidu_sources"] = normalized_sources
+        if not project["accounts"]:
+            project["accounts"] = _flatten_source_accounts(normalized_sources)
     return project
+
+
+def _normalize_account(account: dict[str, Any]) -> dict[str, Any]:
+    item = dict(account)
+    if "baidu_names" not in item:
+        item["baidu_names"] = list(item.get("baidu_aliases") or [])
+    if "kst_ids" not in item:
+        value = item.get("kst_promotion_id")
+        item["kst_ids"] = [str(value)] if value not in (None, "") else []
+    if "kst_names" not in item:
+        item["kst_names"] = list(item.get("kst_aliases") or [])
+    item["baidu_aliases"] = list(item.get("baidu_names") or [])
+    item["kst_aliases"] = list(item.get("kst_names") or [])
+    if item.get("kst_ids"):
+        item["kst_promotion_id"] = str(item["kst_ids"][0])
+    return item
+
+
+def _flatten_source_accounts(sources: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    accounts: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for source in sources:
+        for account in source.get("accounts", []) or []:
+            standard_name = str(account.get("standard_name") or "")
+            if standard_name and standard_name not in seen:
+                accounts.append(dict(account))
+                seen.add(standard_name)
+    return accounts
 
 
 def get_project_accounts(project: dict[str, Any]) -> list[str]:
@@ -252,6 +279,7 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
 
     baidu = dict(config.get("baidu", {}))
     baidu["credential_project"] = get_credential_profile(project)
+    baidu["credential_profile"] = get_credential_profile(project)
     config["baidu"] = baidu
 
     app_config = project.get("_app_config", {})
@@ -285,6 +313,14 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
             "aliases": [str(alias) for alias in dict.fromkeys(aliases) if alias],
         }
     config["accounts"] = accounts
+    if isinstance(project.get("baidu_sources"), list):
+        config["baidu_sources"] = [
+            {
+                **{key: value for key, value in source.items() if key != "accounts"},
+                "accounts": [dict(account) for account in source.get("accounts", []) or []],
+            }
+            for source in project.get("baidu_sources", [])
+        ]
     return config
 
 
@@ -308,7 +344,9 @@ def validate_project_config(project: dict[str, Any]) -> list[str]:
     _require_nested(errors, project, "kst", "export_dir")
     _require_nested(errors, project, "kst", "auto_pick_latest")
     _require_nested(errors, project, "kst", "max_file_age_hours")
-    _require_nested(errors, project, "baidu", "credential_profile")
+    has_sources = isinstance(project.get("baidu_sources"), list) and bool(project.get("baidu_sources"))
+    if not has_sources:
+        _require_nested(errors, project, "baidu", "credential_profile")
     excel = project.get("excel")
     if isinstance(excel, dict):
         if excel.get("engine") not in (None, "", "openpyxl", "excel_com"):
@@ -334,9 +372,12 @@ def validate_project_config(project: dict[str, Any]) -> list[str]:
     if daily.get("do_not_write_fields") != REQUIRED_DAILY_FORBIDDEN_FIELDS:
         errors.append("daily.do_not_write_fields 必须为：总对话、预约、到诊、就诊")
 
+    if has_sources:
+        errors.extend(_validate_baidu_sources(project))
+
     accounts = project.get("accounts")
-    if not isinstance(accounts, list) or len(accounts) != 3:
-        errors.append("账户数量必须为 3")
+    if not isinstance(accounts, list) or (not has_sources and len(accounts) != 3) or (has_sources and len(accounts) < 1):
+        errors.append("账户数量必须为 3" if not has_sources else "多百度来源项目至少需要 1 个账户")
         return errors
 
     promotion_ids = set()
@@ -360,4 +401,38 @@ def validate_project_config(project: dict[str, Any]) -> list[str]:
             errors.append(f"{prefix}.kst_ids 必须是列表")
         if not isinstance(account.get("kst_names"), list):
             errors.append(f"{prefix}.kst_names 必须是列表")
+    return errors
+
+
+def _validate_baidu_sources(project: dict[str, Any]) -> list[str]:
+    errors: list[str] = []
+    sources = project.get("baidu_sources")
+    if not isinstance(sources, list) or not sources:
+        return errors
+    seen_source_ids: set[str] = set()
+    for source_index, source in enumerate(sources, start=1):
+        source_id = str(source.get("source_id") or f"baidu_sources[{source_index}]")
+        if source_id in seen_source_ids:
+            errors.append(f"百度来源 ID 重复：{source_id}")
+        seen_source_ids.add(source_id)
+        for field in ["source_id", "source_name", "credential_profile", "accounts"]:
+            if field not in source or source.get(field) in (None, "", []):
+                errors.append(f"缺少字段：baidu_sources[{source_index}].{field}")
+        accounts = source.get("accounts")
+        if not isinstance(accounts, list) or not accounts:
+            errors.append(f"{source_id} accounts 未配置")
+            continue
+        baidu_name_owner: dict[str, str] = {}
+        for account_index, account in enumerate(accounts, start=1):
+            prefix = f"baidu_sources[{source_index}].accounts[{account_index}]"
+            standard_name = str(account.get("standard_name") or "")
+            for field in ["standard_name", "baidu_names", "excel_name", "kst_ids", "kst_names"]:
+                if field not in account or account.get(field) in (None, "", []):
+                    errors.append(f"缺少字段：{prefix}.{field}")
+            for baidu_name in account.get("baidu_names") or []:
+                name = str(baidu_name)
+                if name in baidu_name_owner:
+                    errors.append(f"{source_id} 百度账户名重复：{name} 同时属于 {baidu_name_owner[name]} 和 {standard_name}")
+                else:
+                    baidu_name_owner[name] = standard_name
     return errors

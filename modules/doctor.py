@@ -19,6 +19,7 @@ from modules.excel_engine import (
 from modules.excel_inspector import inspect_excel_structure
 from modules.kst_export_parser import find_latest_kst_export
 from modules.project_config import get_current_project, load_app_config, validate_project_config
+from modules.baidu_multi_source import resolve_baidu_sources
 
 
 REQUIREMENT_NAME_MAP = {
@@ -161,17 +162,67 @@ def _check_openpyxl_installed() -> dict[str, Any]:
 
 
 def _check_secret_profile(secrets_file: Path | None, project: dict[str, Any]) -> dict[str, Any]:
-    profile = project.get("baidu", {}).get("credential_profile")
+    sources = resolve_baidu_sources(project) if project else []
+    profiles = [str(source.get("credential_profile") or "") for source in sources if source.get("credential_profile")]
     if not secrets_file or not secrets_file.exists():
         return _warn("百度账号未配置，如需自动登录请联系管理员")
     try:
         data = json.loads(secrets_file.read_text(encoding="utf-8-sig"))
     except Exception:
         return _warn("百度凭据文件无法读取")
-    item = data.get("baidu", {}).get(profile)
-    if isinstance(item, dict) and item.get("username") and item.get("password"):
-        return _ok(f"已配置：{profile}")
-    return _warn(f"百度账号未配置：{profile}")
+    missing = []
+    configured = []
+    for profile in profiles:
+        item = data.get("baidu", {}).get(profile)
+        if isinstance(item, dict) and item.get("username") and item.get("password"):
+            configured.append(profile)
+        else:
+            missing.append(profile)
+    if missing:
+        return _warn(f"百度账号未配置：{', '.join(missing)}", {"configured_profiles": configured, "missing_profiles": missing})
+    return _ok(f"百度账号已配置：{', '.join(configured)}", {"configured_profiles": configured})
+
+
+def _check_baidu_sources(project: dict[str, Any]) -> dict[str, Any]:
+    sources = resolve_baidu_sources(project) if project else []
+    details = []
+    errors: list[str] = []
+    for source in sources:
+        source_id = str(source.get("source_id") or "")
+        accounts = source.get("accounts") or []
+        baidu_name_owner: dict[str, str] = {}
+        duplicate_names = []
+        missing_kst_ids = []
+        for account in accounts:
+            standard = str(account.get("standard_name") or "")
+            if not account.get("kst_ids"):
+                missing_kst_ids.append(standard)
+            for baidu_name in account.get("baidu_names") or []:
+                name = str(baidu_name)
+                if name in baidu_name_owner:
+                    duplicate_names.append({"baidu_name": name, "first": baidu_name_owner[name], "second": standard})
+                else:
+                    baidu_name_owner[name] = standard
+        if not source.get("credential_profile"):
+            errors.append(f"{source_id} 缺少 credential_profile")
+        if not accounts:
+            errors.append(f"{source_id} accounts 未配置")
+        if duplicate_names:
+            errors.append(f"{source_id} 存在重复 baidu_name")
+        if missing_kst_ids:
+            errors.append(f"{source_id} 缺少商务通推广备注 ID：{', '.join(missing_kst_ids)}")
+        details.append({
+            "source_id": source_id,
+            "source_name": source.get("source_name"),
+            "credential_profile": source.get("credential_profile"),
+            "account_count": len(accounts),
+            "duplicate_baidu_names": duplicate_names,
+            "missing_kst_ids": missing_kst_ids,
+        })
+    detail = {"source_count": len(sources), "sources": details}
+    if errors:
+        return _warn("百度来源配置不完整：" + "；".join(errors), detail)
+    return _ok(f"百度来源配置通过：{len(sources)} 个", detail)
 
 
 def _check_chrome(config: dict[str, Any]) -> dict[str, Any]:
@@ -266,6 +317,7 @@ def run_doctor(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
             checks["project_config"] = _warn("当前项目配置不完整", errors)
         else:
             checks["project_config"] = _ok(f"当前项目配置完整：{project.get('project_id')} - {project.get('project_name')}")
+        checks["baidu_sources"] = _check_baidu_sources(project)
     except Exception as exc:
         checks["project_config"] = _warn(f"项目配置读取失败：{exc}")
 
@@ -357,6 +409,7 @@ _DOCTOR_CHECK_LABELS = {
     "chrome_debug_port": "Chrome 调试端口",
     "app_config": "应用配置",
     "project_config": "项目配置",
+    "baidu_sources": "百度来源配置",
     "requirements": "依赖包",
     "excel_engine": "Excel 写入引擎",
     "openpyxl": "openpyxl 安装",

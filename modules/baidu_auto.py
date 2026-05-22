@@ -85,7 +85,7 @@ def build_baidu_auto_report_from_visible_text(
     )
 
 
-def fetch_baidu_auto(
+def _fetch_baidu_auto_single(
     config: dict[str, Any],
     root: Path,
     logger,
@@ -196,3 +196,22 @@ def fetch_baidu_auto(
         "通过" if validate_report.get("passed") else "失败",
     )
     return report
+
+
+def fetch_baidu_auto(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    period: str | None = None,
+) -> dict[str, Any]:
+    from modules.baidu_multi_source import fetch_baidu_multi_source, is_multi_baidu_source
+
+    if is_multi_baidu_source(config):
+        return fetch_baidu_multi_source(
+            config=config,
+            root=root,
+            logger=logger,
+            period=period,
+            fetch_source_func=_fetch_baidu_auto_single,
+        )
+    return _fetch_baidu_auto_single(config=config, root=root, logger=logger, period=period)

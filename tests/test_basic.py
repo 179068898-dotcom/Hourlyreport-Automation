@@ -5977,6 +5977,193 @@ def test_doctor_suggests_similar_excel_filenames_when_parent_exists(tmp_path):
     assert "【长沙npx】2026竞价数据.xlsx" in detail["similar_files"]
 
 
+def test_resolve_baidu_sources_wraps_legacy_project_as_single_source():
+    from modules.baidu_multi_source import resolve_baidu_sources
+
+    project = {
+        "project_id": "legacy",
+        "project_name": "旧项目",
+        "baidu": {"credential_profile": "legacy_baidu"},
+        "accounts": [
+            {"standard_name": "A", "baidu_names": ["BA"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+        ],
+    }
+
+    sources = resolve_baidu_sources(project)
+
+    assert sources == [
+        {
+            "source_id": "default",
+            "source_name": "旧项目",
+            "credential_profile": "legacy_baidu",
+            "accounts": project["accounts"],
+            "required": True,
+        }
+    ]
+
+
+def test_shenyang_niu_config_resolves_two_baidu_sources():
+    from modules.project_config import build_runtime_config_from_project, load_project_config
+    from modules.baidu_multi_source import resolve_baidu_sources
+
+    project = load_project_config(Path.cwd(), "shenyang_niu")
+    runtime = build_runtime_config_from_project(project, {})
+    sources = resolve_baidu_sources(runtime)
+
+    assert project["project_id"] == "shenyang_niu"
+    assert [source["source_id"] for source in sources] == ["shenyang_niu_zhongya", "shenyang_niu_yinkang"]
+    assert [source["credential_profile"] for source in sources] == [
+        "shenyang_niu_zhongya_baidu",
+        "shenyang_niu_yinkang_baidu",
+    ]
+    assert set(runtime["accounts"]) == {"沈阳中亚01", "沈阳中亚02", "沈阳中亚03", "沈阳银康01", "沈阳银康02", "沈阳银康03"}
+    assert runtime["kst"]["promotion_id_accounts"]["37084684"] == "沈阳中亚01"
+    assert runtime["kst"]["promotion_id_accounts"]["47190275"] == "沈阳银康03"
+    assert runtime["accounts"]["沈阳银康03"]["baidu_name"] == "沈阳银康银屑病3"
+
+
+def test_validate_project_config_rejects_duplicate_baidu_name_inside_same_source():
+    from modules.project_config import validate_project_config
+
+    project = {
+        "project_id": "bad_multi",
+        "project_name": "坏多来源",
+        "excel": {"path": "target.xlsx", "hourly_sheet": "时段数据", "daily_sheet": "百度", "engine": "openpyxl"},
+        "kst": {"export_dir": "exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+        "baidu": {"credential_profile": "unused", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+        "baidu_sources": [
+            {
+                "source_id": "source_a",
+                "source_name": "来源A",
+                "credential_profile": "profile_a",
+                "accounts": [
+                    {"standard_name": "A", "baidu_names": ["重复账户"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+                    {"standard_name": "B", "baidu_names": ["重复账户"], "excel_name": "B", "kst_ids": ["2"], "kst_names": ["B"]},
+                ],
+            }
+        ],
+        "accounts": [
+            {"standard_name": "A", "baidu_names": ["重复账户"], "excel_name": "A", "kst_ids": ["1"], "kst_names": ["A"]},
+            {"standard_name": "B", "baidu_names": ["重复账户"], "excel_name": "B", "kst_ids": ["2"], "kst_names": ["B"]},
+        ],
+        "hourly": {"periods": ["11点", "15点", "18点"]},
+        "daily": {
+            "write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"],
+            "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"],
+        },
+    }
+
+    errors = validate_project_config(project)
+
+    assert any("source_a 百度账户名重复" in error for error in errors)
+
+
+def test_aggregate_baidu_source_reports_sums_metrics_and_keeps_source_details():
+    from modules.baidu_multi_source import aggregate_baidu_source_reports
+
+    config = {"project_id": "demo", "project_name": "演示", "accounts": {"A": {}, "B": {}}}
+    reports = [
+        {
+            "source_id": "source_a",
+            "source_name": "来源A",
+            "report": {
+                "date": "2026-05-22",
+                "period": "15点",
+                "accounts": {
+                    "A": {"展现": 10, "点击": 1, "消费": 2.5},
+                    "B": {"展现": 20, "点击": 2, "消费": 3.5},
+                },
+                "unknown_accounts": [{"account_name": "未知", "展现": 99, "点击": 9, "消费": 9}],
+                "ignored_unknown_accounts": [{"account_name": "空账户", "展现": 0, "点击": 0, "消费": 0}],
+                "errors": [],
+            },
+        },
+        {
+            "source_id": "source_b",
+            "source_name": "来源B",
+            "report": {
+                "date": "2026-05-22",
+                "period": "15点",
+                "accounts": {
+                    "A": {"展现": 3, "点击": 4, "消费": 5.25},
+                },
+                "unknown_accounts": [],
+                "ignored_unknown_accounts": [],
+                "errors": [],
+            },
+        },
+    ]
+
+    report = aggregate_baidu_source_reports(config, reports, period="15点")
+
+    assert report["accounts"]["A"]["展现"] == 13
+    assert report["accounts"]["A"]["点击"] == 5
+    assert report["accounts"]["A"]["消费"] == 7.75
+    assert report["accounts"]["B"]["展现"] == 20
+    assert report["unknown_accounts"] == [{"account_name": "未知", "展现": 99, "点击": 9, "消费": 9, "source_id": "source_a", "source_name": "来源A"}]
+    assert "未知" not in report["accounts"]
+    assert len(report["source_reports"]) == 2
+
+
+def test_aggregate_baidu_source_reports_fails_when_any_source_failed():
+    from modules.baidu_multi_source import aggregate_baidu_source_reports
+
+    config = {"project_id": "demo", "accounts": {"A": {}}}
+    reports = [
+        {"source_id": "source_a", "source_name": "来源A", "report": {"accounts": {"A": {"展现": 1, "点击": 1, "消费": 1}}, "errors": []}},
+        {"source_id": "source_b", "source_name": "来源B", "report": {"accounts": {}, "errors": ["登录失败"]}},
+    ]
+
+    report = aggregate_baidu_source_reports(config, reports, period="15点")
+
+    assert report["accounts"] == {}
+    assert any("source_b" in error and "登录失败" in error for error in report["errors"])
+
+
+def test_doctor_reports_multi_baidu_sources_and_secret_profiles(tmp_path, monkeypatch):
+    import modules.doctor as doctor
+    from modules.project_config import load_project_config, build_runtime_config_from_project
+
+    configs_dir = tmp_path / "configs"
+    projects_dir = configs_dir / "projects"
+    secrets_dir = tmp_path / "secrets"
+    projects_dir.mkdir(parents=True)
+    secrets_dir.mkdir()
+    (configs_dir / "app_config.json").write_text(
+        json.dumps({"default_project_id": "shenyang_niu", "projects_dir": "configs/projects", "secrets_file": "secrets/secrets.json"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    source_project = Path.cwd() / "configs" / "projects" / "shenyang_niu.json"
+    (projects_dir / "shenyang_niu.json").write_text(source_project.read_text(encoding="utf-8"), encoding="utf-8")
+    (secrets_dir / "secrets.json").write_text(
+        json.dumps(
+            {
+                "baidu": {
+                    "shenyang_niu_zhongya_baidu": {"username": "user-a", "password": "pass-a"},
+                    "shenyang_niu_yinkang_baidu": {"username": "user-b", "password": "pass-b"},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(doctor, "_check_cdp", lambda root, config: {"passed": True, "level": "ok", "message": "skip"})
+    monkeypatch.setattr(doctor, "_check_chrome", lambda config: {"passed": True, "level": "ok", "message": "skip"})
+    monkeypatch.setattr(doctor, "_check_hourly_structure", lambda root, config, excel_path: {"passed": True, "level": "ok", "message": "skip"})
+
+    project = load_project_config(tmp_path, "shenyang_niu")
+    config = build_runtime_config_from_project(project, {"browser": {"auto_start_debug_chrome": False}})
+    report = run_doctor(tmp_path, config)
+
+    baidu_sources = report["checks"]["baidu_sources"]
+    secrets = report["checks"]["secrets_json"]
+    assert baidu_sources["passed"] is True
+    assert baidu_sources["detail"]["source_count"] == 2
+    assert secrets["passed"] is True
+    assert "user-a" not in json.dumps(report, ensure_ascii=False)
+    assert "pass-a" not in json.dumps(report, ensure_ascii=False)
+
+
 def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp_path):
     import logging
     from openpyxl import Workbook
