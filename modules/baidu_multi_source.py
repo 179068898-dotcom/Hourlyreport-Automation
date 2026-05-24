@@ -50,7 +50,7 @@ def is_multi_baidu_source(config: dict[str, Any]) -> bool:
     return len(resolve_baidu_sources(config)) > 1
 
 
-def build_source_runtime_config(config: dict[str, Any], source: dict[str, Any]) -> dict[str, Any]:
+def build_source_runtime_config(config: dict[str, Any], source: dict[str, Any], task: str = "hourly") -> dict[str, Any]:
     source_config = deepcopy(config)
     source_id = str(source.get("source_id") or "default")
     profile = str(source.get("credential_profile") or "")
@@ -83,6 +83,11 @@ def build_source_runtime_config(config: dict[str, Any], source: dict[str, Any]) 
     baidu["credential_project"] = profile
     baidu["output_path"] = f"reports/baidu_account_data_{source_id}.json"
     baidu["allow_missing_candidate_accounts"] = True
+    if task == "daily":
+        baidu["daily_output_path"] = f"reports/baidu_daily_data_{source_id}.json"
+        baidu["daily_validate_output_path"] = f"reports/baidu_daily_validate_report_{source_id}.json"
+        baidu["daily_text_output_path"] = f"reports/baidu_daily_page_text_dump_{source_id}.txt"
+        baidu["daily_candidates_output_path"] = f"reports/baidu_daily_table_candidates_{source_id}.json"
     source_config["baidu"] = baidu
     return source_config
 
@@ -180,6 +185,9 @@ def build_baidu_multi_source_markdown(report: dict[str, Any]) -> str:
         "# 多百度来源抓数报告",
         "",
         f"项目：{report.get('project_name') or report.get('project_id') or ''}",
+        f"任务：{'日报' if report.get('task') == 'daily' else '小时报'}",
+        f"日期：{report.get('date') or ''}",
+        f"时段：{report.get('period') or '无'}",
         f"执行时间：{report.get('finished_at') or report.get('started_at') or ''}",
         f"百度来源数：{len(report.get('source_reports') or [])}",
         f"最终写入账户数：{len(report.get('accounts') or {})}",
@@ -206,6 +214,7 @@ def aggregate_baidu_source_reports(
     period: str | None = None,
     target_date: str | None = None,
     output_source: str = "baidu_multi_source",
+    task: str = "hourly",
 ) -> dict[str, Any]:
     started_at = datetime.now().isoformat(timespec="seconds")
     required_accounts = get_required_accounts(config)
@@ -215,6 +224,8 @@ def aggregate_baidu_source_reports(
     ignored_unknown_accounts: list[dict[str, Any]] = []
     ignored_inactive_accounts: list[dict[str, Any]] = []
     skipped_unmapped_accounts: list[dict[str, Any]] = []
+    report_period = None if task == "daily" else period or "15点"
+    report_date = target_date or ""
 
     for item in source_reports:
         source = {
@@ -233,8 +244,11 @@ def aggregate_baidu_source_reports(
         return {
             "project_id": config.get("project_id"),
             "project_name": config.get("project_name"),
+            "task": task,
+            "multi_source": True,
             "date": target_date or date.today().isoformat(),
-            "period": period or "15点",
+            **({"target_date": target_date or date.today().isoformat()} if task == "daily" else {}),
+            "period": report_period,
             "source": output_source,
             "accounts": {},
             "source_reports": source_reports,
@@ -252,7 +266,6 @@ def aggregate_baidu_source_reports(
             "finished_at": datetime.now().isoformat(timespec="seconds"),
         }
 
-    report_date = target_date or ""
     source_total_cost_sum = 0.0
     for item in source_reports:
         report = item.get("report") or {}
@@ -285,8 +298,11 @@ def aggregate_baidu_source_reports(
     result = {
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),
+        "task": task,
+        "multi_source": True,
         "date": report_date or date.today().isoformat(),
-        "period": period or "15点",
+        **({"target_date": report_date or date.today().isoformat()} if task == "daily" else {}),
+        "period": report_period,
         "source": output_source,
         "parse_source": "multi_source",
         "accounts": accounts,
@@ -318,17 +334,24 @@ def fetch_baidu_multi_source(
     config: dict[str, Any],
     root: Path,
     logger,
-    period: str | None,
-    fetch_source_func: FetchSourceFunc,
+    period: str | None = None,
+    fetch_source_func: FetchSourceFunc | None = None,
+    task: str = "hourly",
+    target_date: str | None = None,
 ) -> dict[str, Any]:
+    if fetch_source_func is None:
+        raise ValueError("多百度来源抓数缺少 source 抓取函数")
     sources = resolve_baidu_sources(config)
     source_reports: list[dict[str, Any]] = []
     for source in sources:
         source_id = str(source.get("source_id") or "default")
         logger.info("开始读取百度来源：%s", source_id)
-        source_config = build_source_runtime_config(config, source)
+        source_config = build_source_runtime_config(config, source, task=task)
         try:
-            report = fetch_source_func(config=source_config, root=root, logger=logger, period=period)
+            if task == "daily":
+                report = fetch_source_func(config=source_config, root=root, logger=logger, target_date=target_date)
+            else:
+                report = fetch_source_func(config=source_config, root=root, logger=logger, period=period)
         except Exception as exc:
             report = {"accounts": {}, "errors": [str(exc)]}
         source_reports.append(
@@ -341,17 +364,36 @@ def fetch_baidu_multi_source(
             }
         )
 
-    report = aggregate_baidu_source_reports(config, source_reports, period=period)
+    output_source = "baidu_daily_report" if task == "daily" else "baidu_multi_source"
+    report = aggregate_baidu_source_reports(
+        config,
+        source_reports,
+        period=period,
+        target_date=target_date,
+        output_source=output_source,
+        task=task,
+    )
     multi_path = root / "reports" / "baidu_multi_source_report.json"
     markdown_path = root / "reports" / "baidu_multi_source_report.md"
-    account_path = root / "reports" / "baidu_account_data.json"
+    account_path = root / "reports" / ("baidu_daily_data.json" if task == "daily" else "baidu_account_data.json")
     report["outputs"] = {
         "multi_source_report": str(multi_path),
         "multi_source_markdown": str(markdown_path),
-        "account_data": str(account_path),
+        "daily_data" if task == "daily" else "account_data": str(account_path),
     }
+    if task == "daily":
+        validate_path = root / "reports" / "baidu_daily_validate_report.json"
+        report["outputs"]["validate_report"] = str(validate_path)
+        _write_json(validate_path, {
+            "passed": not report.get("errors"),
+            "date": report.get("date"),
+            "source_path": str(account_path),
+            "expected_accounts": get_required_accounts(config),
+            "actual_accounts": list(report.get("accounts", {}).keys()),
+            "errors": report.get("errors", []),
+        })
     _write_json(multi_path, report)
     _write_json(account_path, report)
     markdown_path.write_text(build_baidu_multi_source_markdown(report), encoding="utf-8")
-    logger.info("多百度来源聚合已输出：%s；统一百度报告：%s", multi_path, account_path)
+    logger.info("多百度来源聚合已输出：%s；统一百度%s报告：%s", multi_path, "日报" if task == "daily" else "", account_path)
     return report

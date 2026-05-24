@@ -78,7 +78,8 @@ def build_baidu_daily_report_from_visible_text(
         report["errors"].append("当前百度日报页面不是搜索推广数据，禁止作为日报百度数据使用")
     if not rows:
         report["errors"].append("未能从百度日报页面可见文本中识别账户表格")
-    report["errors"].extend(error for error in validate_baidu_report(report, get_required_accounts(config)) if error not in report["errors"])
+    if not config.get("baidu", {}).get("allow_missing_candidate_accounts"):
+        report["errors"].extend(error for error in validate_baidu_report(report, get_required_accounts(config)) if error not in report["errors"])
     return report
 
 
@@ -245,7 +246,7 @@ def _prepare_baidu_daily_report_page(
     return False
 
 
-def fetch_baidu_daily(
+def _fetch_baidu_daily_single(
     config: dict[str, Any],
     root: Path,
     logger,
@@ -253,11 +254,11 @@ def fetch_baidu_daily(
 ) -> dict[str, Any]:
     target_date = target_date or default_daily_date()
     started_at = datetime.now().isoformat(timespec="seconds")
-    output_path = root / "reports" / "baidu_daily_data.json"
-    validate_path = root / "reports" / "baidu_daily_validate_report.json"
-    text_path = root / "reports" / "baidu_daily_page_text_dump.txt"
-    candidates_path = root / "reports" / "baidu_daily_table_candidates.json"
     baidu_config = config.get("baidu", {})
+    output_path = root / baidu_config.get("daily_output_path", "reports/baidu_daily_data.json")
+    validate_path = root / baidu_config.get("daily_validate_output_path", "reports/baidu_daily_validate_report.json")
+    text_path = root / baidu_config.get("daily_text_output_path", "reports/baidu_daily_page_text_dump.txt")
+    candidates_path = root / baidu_config.get("daily_candidates_output_path", "reports/baidu_daily_table_candidates.json")
 
     report: dict[str, Any] = {
         "date": target_date,
@@ -353,3 +354,23 @@ def fetch_baidu_daily(
     _write_json(validate_path, validate)
     logger.info("百度日报抓取报告已输出：%s；结果：%s", output_path, "通过" if validate["passed"] else "失败")
     return report
+
+
+def fetch_baidu_daily(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    from modules.baidu_multi_source import fetch_baidu_multi_source, is_multi_baidu_source
+
+    if is_multi_baidu_source(config):
+        return fetch_baidu_multi_source(
+            config=config,
+            root=root,
+            logger=logger,
+            task="daily",
+            target_date=target_date or default_daily_date(),
+            fetch_source_func=_fetch_baidu_daily_single,
+        )
+    return _fetch_baidu_daily_single(config=config, root=root, logger=logger, target_date=target_date)

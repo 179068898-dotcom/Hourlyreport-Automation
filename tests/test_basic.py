@@ -6400,6 +6400,8 @@ def test_baidu_multi_source_writes_human_readable_markdown_report(tmp_path):
     assert report["errors"] == []
     assert md_path.exists()
     assert "沈阳牛" in markdown
+    assert "日期：2026-05-24" in markdown
+    assert "时段：15点" in markdown
     assert "## 来源摘要" in markdown
     assert "## 最终写入账户" in markdown
     assert "## 被忽略的未启用账户" in markdown
@@ -6538,6 +6540,197 @@ def test_inspect_excel_structure_writes_excel_account_regions_report(tmp_path):
     assert report["configured_excel_accounts"] == ["项目甲"]
     assert report["missing_configured_accounts"] == []
     assert report["detected_account_regions"] == [{"account_name": "项目甲", "row": 2, "column": 4, "title_cell": "D2"}]
+
+
+def test_fetch_baidu_daily_single_source_keeps_existing_single_fetch_path(tmp_path, monkeypatch):
+    import logging
+    import modules.baidu_daily as daily
+
+    seen = []
+
+    def fake_single(**kwargs):
+        seen.append(kwargs["target_date"])
+        return {"date": kwargs["target_date"], "accounts": {"A": {}}, "errors": []}
+
+    monkeypatch.setattr(daily, "_fetch_baidu_daily_single", fake_single)
+    report = daily.fetch_baidu_daily(
+        config={"project_id": "legacy", "accounts": {"A": {}}},
+        root=tmp_path,
+        logger=logging.getLogger("test"),
+        target_date="2026-05-23",
+    )
+
+    assert seen == ["2026-05-23"]
+    assert report["date"] == "2026-05-23"
+
+
+def test_build_baidu_daily_report_allows_missing_multi_source_candidate_account(monkeypatch):
+    import modules.baidu_daily as daily
+
+    monkeypatch.setattr(
+        daily,
+        "extract_baidu_rows_from_visible_text",
+        lambda text: [{"账户": "百度A", "展现": "1", "点击": "1", "消费": "1"}],
+    )
+    monkeypatch.setattr(daily, "_extract_selected_date_from_text", lambda text: "2026-05-23")
+
+    report = daily.build_baidu_daily_report_from_visible_text(
+        "数据报告 搜索推广",
+        {
+            "baidu": {"allow_missing_candidate_accounts": True},
+            "accounts": {"写入A": {"baidu_name": "百度A"}, "候选B": {"baidu_name": "百度B"}},
+        },
+        "2026-05-23",
+    )
+
+    assert report["accounts"]["写入A"]["消费"] == 1
+    assert report["errors"] == []
+
+
+def test_fetch_baidu_daily_multi_source_uses_shared_aggregation_and_is_merge_compatible(tmp_path, monkeypatch):
+    import logging
+
+    import modules.baidu_daily as daily
+    from modules.data_merger import merge_daily_files
+
+    config = {
+        "project_id": "shenyang_niu",
+        "project_name": "沈阳牛",
+        "accounts": {"写入A": {}, "写入B": {}},
+        "baidu_sources": [
+            {
+                "source_id": "source_a",
+                "source_name": "来源A",
+                "credential_profile": "secret_a",
+                "accounts": [{"standard_name": "写入A"}, {"standard_name": "候选零"}],
+            },
+            {
+                "source_id": "source_b",
+                "source_name": "来源B",
+                "credential_profile": "secret_b",
+                "accounts": [{"standard_name": "写入B"}, {"standard_name": "候选有量"}],
+            },
+        ],
+    }
+
+    def fake_daily_single(*, config, root, logger, target_date):
+        assert target_date == "2026-05-23"
+        assert config["baidu"]["daily_output_path"].endswith(f"{config['baidu_source']['source_id']}.json")
+        if config["baidu_source"]["source_id"] == "source_a":
+            return {
+                "date": target_date,
+                "accounts": {
+                    "写入A": {"展现": 10, "点击": 2, "消费": 3.5},
+                    "候选零": {"展现": 0, "点击": 0, "消费": 0},
+                },
+                "unknown_accounts": [{"account_name": "未知账户", "展现": 1, "点击": 0, "消费": 0}],
+                "ignored_unknown_accounts": [],
+                "errors": [],
+            }
+        return {
+            "date": target_date,
+            "accounts": {
+                "写入B": {"展现": 20, "点击": 4, "消费": 6.5},
+                "候选有量": {"展现": 1, "点击": 1, "消费": 1},
+            },
+            "unknown_accounts": [],
+            "ignored_unknown_accounts": [{"account_name": "空账户", "展现": 0, "点击": 0, "消费": 0}],
+            "errors": [],
+        }
+
+    monkeypatch.setattr(daily, "_fetch_baidu_daily_single", fake_daily_single)
+    report = daily.fetch_baidu_daily(config, tmp_path, logging.getLogger("test"), "2026-05-23")
+
+    assert report["task"] == "daily"
+    assert report["target_date"] == "2026-05-23"
+    assert report["period"] is None
+    assert report["multi_source"] is True
+    assert report["accounts"] == {
+        "写入A": {"展现": 10, "点击": 2, "消费": 3.5},
+        "写入B": {"展现": 20, "点击": 4, "消费": 6.5},
+    }
+    assert [row["account_name"] for row in report["ignored_inactive_accounts"]] == ["候选零"]
+    assert [row["account_name"] for row in report["skipped_unmapped_accounts"]] == ["候选有量"]
+    assert report["unknown_accounts"][0]["source_id"] == "source_a"
+    assert report["ignored_unknown_accounts"][0]["source_name"] == "来源B"
+    assert report["source_total_cost_sum"] == 10
+    assert report["final_total_cost"] == 10
+    assert report["errors"] == []
+    assert (tmp_path / "reports" / "baidu_daily_data.json").exists()
+    assert (tmp_path / "reports" / "baidu_daily_validate_report.json").exists()
+    markdown = (tmp_path / "reports" / "baidu_multi_source_report.md").read_text(encoding="utf-8")
+    assert "日报" in markdown
+    assert "日期：2026-05-23" in markdown
+    assert "时段：无" in markdown
+    assert "secret_a" not in markdown
+
+    reports = tmp_path / "reports"
+    (reports / "kst_daily_data.json").write_text(
+        json.dumps({
+            "date": "2026-05-23",
+            "accounts": {
+                "写入A": {"总对话": 1, "有效对话": 1, "无效对话": 0, "一般有效对话": 0, "有效转潜": 1, "总转潜": 1},
+                "写入B": {"总对话": 0, "有效对话": 0, "无效对话": 0, "一般有效对话": 0, "有效转潜": 0, "总转潜": 0},
+            },
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    merged = merge_daily_files(config, tmp_path, logging.getLogger("test"), "2026-05-23")
+    assert merged["validate_report"]["passed"] is True
+    assert merged["merged"]["accounts"]["写入A"]["展现"] == 10
+
+
+def test_fetch_baidu_daily_multi_source_fails_when_any_source_fails(tmp_path, monkeypatch):
+    import logging
+
+    import modules.baidu_daily as daily
+
+    config = {
+        "accounts": {"A": {}},
+        "baidu_sources": [
+            {"source_id": "source_a", "source_name": "来源A", "accounts": [{"standard_name": "A"}]},
+            {"source_id": "source_b", "source_name": "来源B", "accounts": [{"standard_name": "B"}]},
+        ],
+    }
+
+    def fake_daily_single(*, config, root, logger, target_date):
+        if config["baidu_source"]["source_id"] == "source_b":
+            return {"date": target_date, "accounts": {}, "errors": ["登录失败"]}
+        return {"date": target_date, "accounts": {"A": {"展现": 1, "点击": 1, "消费": 1}}, "errors": []}
+
+    monkeypatch.setattr(daily, "_fetch_baidu_daily_single", fake_daily_single)
+    report = daily.fetch_baidu_daily(config, tmp_path, logging.getLogger("test"), "2026-05-23")
+
+    assert report["accounts"] == {}
+    assert any("source_b" in error and "登录失败" in error for error in report["errors"])
+    assert report["self_check"]["all_sources_passed"] is False
+
+
+def test_run_daily_pipeline_stops_when_multi_source_baidu_step_fails(tmp_path):
+    import logging
+
+    export = tmp_path / "daily.xlsx"
+    export.write_text("placeholder", encoding="utf-8")
+
+    def bad_baidu(**kwargs):
+        return {"date": "2026-05-23", "multi_source": True, "errors": ["source_b: 登录失败"]}
+
+    def should_not_parse(*args, **kwargs):
+        raise AssertionError("百度多来源失败后不应解析商务通日报")
+
+    report = run_daily_pipeline(
+        config={"excel_path": "target.xlsx"},
+        root=tmp_path,
+        logger=logging.getLogger("test"),
+        target_date="2026-05-23",
+        kst_file=export,
+        fetch_baidu_func=bad_baidu,
+        parse_kst_func=should_not_parse,
+    )
+
+    assert report["passed"] is False
+    assert report["failed_step"] == "fetch-baidu-daily"
+    assert report["errors"] == ["source_b: 登录失败"]
 
 
 def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp_path):
