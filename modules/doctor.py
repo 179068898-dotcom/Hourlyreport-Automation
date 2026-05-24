@@ -223,16 +223,23 @@ def _check_baidu_sources(project: dict[str, Any]) -> dict[str, Any]:
             "source_id": source_id,
             "source_name": source.get("source_name"),
             "credential_profile": source.get("credential_profile"),
+            "credential_profile_exists": bool(source.get("credential_profile")),
             "account_count": len(accounts),
+            "candidate_accounts_count": len(accounts),
+            "has_duplicate_baidu_name": bool(duplicate_names),
             "duplicate_baidu_names": duplicate_names,
             "missing_kst_ids": missing_kst_ids,
         })
     candidate_only = [name for name in dict.fromkeys(candidate_names) if name not in set(excel_accounts)]
     detail = {
         "source_count": len(sources),
+        "baidu_sources_count": len(sources),
+        "excel_accounts_count": len(excel_accounts),
+        "baidu_candidate_accounts_count": len(dict.fromkeys(candidate_names)),
         "sources": details,
         "excel_accounts": excel_accounts,
         "candidate_only_accounts": candidate_only,
+        "candidate_only_note": "候选账户不在 Excel 中，不算错误。",
     }
     if errors:
         return _warn("百度来源配置不完整：" + "；".join(errors), detail)

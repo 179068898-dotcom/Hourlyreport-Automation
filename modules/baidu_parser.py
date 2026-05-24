@@ -166,7 +166,8 @@ def extract_baidu_rows_from_visible_text(text: str) -> list[dict[str, Any]]:
     if not total_candidates:
         return []
 
-    total_index = lines.index(total_candidates[0])
+    total_marker = total_candidates[0]
+    total_index = lines.index(total_marker)
     header_start = None
     for index in range(total_index - 1, -1, -1):
         if normalize_text(lines[index]) == normalize_text("账户"):
@@ -187,14 +188,60 @@ def extract_baidu_rows_from_visible_text(text: str) -> list[dict[str, Any]]:
             break
 
     values = lines[total_index:end_index]
+    account_count_match = re.match(r"^总计-(\d+)$", total_marker)
+    if not account_count_match:
+        return []
+    expected_row_count = int(account_count_match.group(1)) + 1
+    if expected_row_count <= 1 or not values or len(values) % expected_row_count != 0:
+        return []
+
+    width = len(values) // expected_row_count
+    if width < 4 or width > len(headers):
+        return []
+
+    critical_header_indexes = [
+        index
+        for index, header in enumerate(headers)
+        if _header_matches_account(header) or any(_header_matches_metric(field, header) for field in FIELD_ALIASES)
+    ]
+    if critical_header_indexes and max(critical_header_indexes) >= width:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for start in range(0, len(values), width):
+        chunk = values[start:start + width]
+        row = {headers[column_index]: chunk[column_index] for column_index in range(width)}
+        rows.append(_normalize_row(row, "visible_text", len(rows) + 1))
+    return rows
+
+
+def _extract_baidu_rows_for_diagnostics(text: str) -> list[dict[str, Any]]:
+    """按可见表头宽度读取样本，仅用于解释严格解析拒绝的页面文本。"""
+    lines = [line.strip() for line in text.replace("\r", "\n").split("\n") if line.strip()]
+    total_index = next((index for index, line in enumerate(lines) if re.match(r"^总计-\d+$", line)), None)
+    if total_index is None:
+        return []
+    header_start = next(
+        (index for index in range(total_index - 1, -1, -1) if normalize_text(lines[index]) == normalize_text("账户")),
+        None,
+    )
+    if header_start is None:
+        return []
+    headers = lines[header_start:total_index]
+    if len(headers) < 4:
+        return []
+    end_index = next(
+        (index for index in range(total_index + 1, len(lines)) if "条/页" in normalize_text(lines[index]) or normalize_text(lines[index]) == normalize_text("确定")),
+        len(lines),
+    )
+    values = lines[total_index:end_index]
     width = len(headers)
     rows: list[dict[str, Any]] = []
     for start in range(0, len(values), width):
         chunk = values[start:start + width]
         if len(chunk) != width:
             continue
-        row = {headers[column_index]: chunk[column_index] for column_index in range(width)}
-        rows.append(_normalize_row(row, "visible_text", len(rows) + 1))
+        rows.append(_normalize_row({headers[index]: chunk[index] for index in range(width)}, "visible_text_diagnostic", len(rows) + 1))
     return rows
 
 
@@ -618,7 +665,8 @@ def parse_baidu_table(rows: list[dict[str, Any]], config: dict[str, Any]) -> dic
             continue
         result["accounts"][standard_account] = parsed_row
 
-    result["errors"].extend(validate_baidu_report(result, get_required_accounts(config)))
+    if not config.get("baidu", {}).get("allow_missing_candidate_accounts"):
+        result["errors"].extend(validate_baidu_report(result, get_required_accounts(config)))
     return result
 
 
@@ -646,7 +694,8 @@ def _build_parse_debug(
         failure_reasons.append("no_header")
     if rows and not has_required_headers:
         failure_reasons.append("no_required_headers")
-    if missing_accounts:
+    allow_missing_candidate_accounts = bool(config.get("baidu", {}).get("allow_missing_candidate_accounts"))
+    if missing_accounts and not allow_missing_candidate_accounts:
         failure_reasons.append("missing_required_accounts")
     if parsed.get("non_numeric_fields"):
         failure_reasons.append("non_numeric_fields")
@@ -682,7 +731,8 @@ def _build_parse_debug(
         "row_cell_count": row_cell_count,
         "row_field_count_stable": bool(row_cell_count) and len(set(row_cell_count)) == 1,
         "has_required_headers": has_required_headers,
-        "parse_ready": has_required_headers and not missing_accounts and not parsed.get("non_numeric_fields"),
+        "allow_missing_candidate_accounts": allow_missing_candidate_accounts,
+        "parse_ready": has_required_headers and (allow_missing_candidate_accounts or not missing_accounts) and not parsed.get("non_numeric_fields"),
     }
     if extras:
         debug.update(extras)
@@ -789,7 +839,8 @@ def extract_baidu_rows_from_page(page, config: dict[str, Any]) -> dict[str, Any]
 
     visible_text = page.locator("body").inner_text(timeout=10000)
     text_rows = extract_baidu_rows_from_visible_text(visible_text)
-    text_debug = _build_parse_debug(text_rows, config, "visible_text")
+    diagnostic_rows = text_rows or _extract_baidu_rows_for_diagnostics(visible_text)
+    text_debug = _build_parse_debug(diagnostic_rows, config, "visible_text")
     text_debug["header_valid"] = bool(text_debug.get("has_required_headers"))
     text_debug["invalid_header_reason"] = None if text_debug["header_valid"] else "missing_required_headers"
 

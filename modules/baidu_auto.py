@@ -64,7 +64,8 @@ def _build_baidu_auto_report(
         report["errors"].append(f"百度页面选择日期不是今天：页面日期 {selected_date}，今天 {date.today().isoformat()}")
     if not rows:
         report["errors"].append("未能从百度搜索推广页面识别到账户表格")
-    report["errors"].extend(error for error in validate_baidu_report(report, get_required_accounts(config)) if error not in report["errors"])
+    if not config.get("baidu", {}).get("allow_missing_candidate_accounts"):
+        report["errors"].extend(error for error in validate_baidu_report(report, get_required_accounts(config)) if error not in report["errors"])
     return report
 
 

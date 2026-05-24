@@ -82,6 +82,7 @@ def build_source_runtime_config(config: dict[str, Any], source: dict[str, Any]) 
     baidu["credential_profile"] = profile
     baidu["credential_project"] = profile
     baidu["output_path"] = f"reports/baidu_account_data_{source_id}.json"
+    baidu["allow_missing_candidate_accounts"] = True
     source_config["baidu"] = baidu
     return source_config
 
@@ -108,6 +109,97 @@ def _is_zero_metrics(row: dict[str, Any]) -> bool:
     return True
 
 
+def build_cost_validation(source_total_cost_sum: float, final_total_cost: float, tolerance: float = 0.01) -> dict[str, Any]:
+    source_total = round(float(source_total_cost_sum), 2)
+    final_total = round(float(final_total_cost), 2)
+    diff = round(source_total - final_total, 2)
+    passed = abs(diff) <= tolerance
+    errors = [] if passed else [f"多百度来源聚合消费校验失败：来源合计 {source_total}，最终合计 {final_total}，差额 {diff}"]
+    return {
+        "passed": passed,
+        "source_total_cost_sum": source_total,
+        "final_total_cost": final_total,
+        "diff": diff,
+        "cost_validation_passed": passed,
+        "errors": errors,
+    }
+
+
+def _metric(value: Any) -> int | float:
+    return value if isinstance(value, int | float) and not isinstance(value, bool) else 0
+
+
+def _markdown_table(headers: list[str], rows: list[list[Any]]) -> list[str]:
+    if not rows:
+        return ["无", ""]
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "| " + " | ".join("--" if index == 0 else "--:" for index in range(len(headers))) + " |",
+    ]
+    for row in rows:
+        lines.append("| " + " | ".join(str(value).replace("|", "\\|") for value in row) + " |")
+    lines.append("")
+    return lines
+
+
+def build_baidu_multi_source_markdown(report: dict[str, Any]) -> str:
+    required_accounts = set((report.get("accounts") or {}).keys())
+    source_rows: list[list[Any]] = []
+    for source in report.get("source_reports") or []:
+        source_report = source.get("report") or {}
+        source_id = source.get("source_id")
+        write_count = sum(1 for account in source_report.get("accounts", {}) if account in required_accounts)
+        source_rows.append([
+            source.get("source_name") or source_id or "",
+            "失败" if source_report.get("errors") else "成功",
+            len(source_report.get("accounts") or {}),
+            write_count,
+            sum(1 for item in report.get("ignored_inactive_accounts", []) if item.get("source_id") == source_id),
+            sum(1 for item in report.get("skipped_unmapped_accounts", []) if item.get("source_id") == source_id),
+            len(source_report.get("unknown_accounts") or []),
+        ])
+
+    final_rows: list[list[Any]] = []
+    for account, totals in (report.get("accounts") or {}).items():
+        details = []
+        for source in report.get("source_reports") or []:
+            row = (source.get("report") or {}).get("accounts", {}).get(account)
+            if row:
+                details.append(
+                    f"{source.get('source_name')}: 展现 {_metric(row.get('展现'))} / 点击 {_metric(row.get('点击'))} / 消费 {_metric(row.get('消费'))}"
+                )
+        final_rows.append([account, _metric(totals.get("展现")), _metric(totals.get("点击")), _metric(totals.get("消费")), "；".join(details) or "无"])
+
+    def diagnostic_rows(name: str) -> list[list[Any]]:
+        return [
+            [item.get("source_name", ""), item.get("account_name", ""), _metric(item.get("展现")), _metric(item.get("点击")), _metric(item.get("消费")), item.get("reason", "")]
+            for item in report.get(name) or []
+        ]
+
+    lines = [
+        "# 多百度来源抓数报告",
+        "",
+        f"项目：{report.get('project_name') or report.get('project_id') or ''}",
+        f"执行时间：{report.get('finished_at') or report.get('started_at') or ''}",
+        f"百度来源数：{len(report.get('source_reports') or [])}",
+        f"最终写入账户数：{len(report.get('accounts') or {})}",
+        f"消费校验：来源合计 {report.get('source_total_cost_sum', 0)} / 最终合计 {report.get('final_total_cost', 0)} / 差额 {report.get('diff', 0)}",
+        "",
+        "## 来源摘要",
+        "",
+    ]
+    lines.extend(_markdown_table(["来源", "状态", "抓到账户数", "写入账户数", "忽略未启用", "跳过未映射", "unknown"], source_rows))
+    lines.extend(["## 最终写入账户", ""])
+    lines.extend(_markdown_table(["账户", "展现", "点击", "消费", "来源明细"], final_rows))
+    lines.extend(["## 被忽略的未启用账户", ""])
+    lines.extend(_markdown_table(["来源", "账户", "展现", "点击", "消费", "原因"], diagnostic_rows("ignored_inactive_accounts")))
+    lines.extend(["## 被跳过的未映射账户", ""])
+    lines.extend(_markdown_table(["来源", "账户", "展现", "点击", "消费", "原因"], diagnostic_rows("skipped_unmapped_accounts")))
+    lines.extend(["## unknown_accounts", ""])
+    lines.extend(_markdown_table(["来源", "账户", "展现", "点击", "消费", "原因"], diagnostic_rows("unknown_accounts")))
+    return "\n".join(lines).rstrip() + "\n"
+
+
 def aggregate_baidu_source_reports(
     config: dict[str, Any],
     source_reports: list[dict[str, Any]],
@@ -132,10 +224,10 @@ def aggregate_baidu_source_reports(
         report = item.get("report") or {}
         if report.get("errors"):
             errors.extend(_source_errors(str(item.get("source_id") or ""), report))
-        for unknown in report.get("unknown_accounts") or []:
-            unknown_accounts.append(_with_source(unknown, source))
-        for ignored in report.get("ignored_unknown_accounts") or []:
-            ignored_unknown_accounts.append(_with_source(ignored, source))
+        report["unknown_accounts"] = [_with_source(unknown, source) for unknown in report.get("unknown_accounts") or []]
+        report["ignored_unknown_accounts"] = [_with_source(ignored, source) for ignored in report.get("ignored_unknown_accounts") or []]
+        unknown_accounts.extend(report["unknown_accounts"])
+        ignored_unknown_accounts.extend(report["ignored_unknown_accounts"])
 
     if errors:
         return {
@@ -150,6 +242,10 @@ def aggregate_baidu_source_reports(
             "ignored_unknown_accounts": ignored_unknown_accounts,
             "ignored_inactive_accounts": ignored_inactive_accounts,
             "skipped_unmapped_accounts": skipped_unmapped_accounts,
+            "source_total_cost_sum": 0,
+            "final_total_cost": 0,
+            "diff": 0,
+            "cost_validation_passed": False,
             "errors": errors,
             "self_check": {"all_sources_passed": False, "wrote_excel": False},
             "started_at": started_at,
@@ -157,6 +253,7 @@ def aggregate_baidu_source_reports(
         }
 
     report_date = target_date or ""
+    source_total_cost_sum = 0.0
     for item in source_reports:
         report = item.get("report") or {}
         report_date = report_date or str(report.get("date") or "")
@@ -181,7 +278,10 @@ def aggregate_baidu_source_reports(
                 value = row.get(field, 0)
                 if isinstance(value, int | float) and not isinstance(value, bool):
                     target[field] += value
+            source_total_cost_sum += float(_metric(row.get("消费")))
 
+    final_total_cost = sum(float(_metric(row.get("消费"))) for row in accounts.values())
+    cost_validation = build_cost_validation(source_total_cost_sum, final_total_cost)
     result = {
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),
@@ -195,8 +295,12 @@ def aggregate_baidu_source_reports(
         "ignored_unknown_accounts": ignored_unknown_accounts,
         "ignored_inactive_accounts": ignored_inactive_accounts,
         "skipped_unmapped_accounts": skipped_unmapped_accounts,
+        "source_total_cost_sum": cost_validation["source_total_cost_sum"],
+        "final_total_cost": cost_validation["final_total_cost"],
+        "diff": cost_validation["diff"],
+        "cost_validation_passed": cost_validation["cost_validation_passed"],
         "exceptions": [],
-        "errors": [],
+        "errors": list(cost_validation["errors"]),
         "self_check": {
             "all_sources_passed": True,
             "source_count": len(source_reports),
@@ -239,12 +343,15 @@ def fetch_baidu_multi_source(
 
     report = aggregate_baidu_source_reports(config, source_reports, period=period)
     multi_path = root / "reports" / "baidu_multi_source_report.json"
+    markdown_path = root / "reports" / "baidu_multi_source_report.md"
     account_path = root / "reports" / "baidu_account_data.json"
     report["outputs"] = {
         "multi_source_report": str(multi_path),
+        "multi_source_markdown": str(markdown_path),
         "account_data": str(account_path),
     }
     _write_json(multi_path, report)
     _write_json(account_path, report)
+    markdown_path.write_text(build_baidu_multi_source_markdown(report), encoding="utf-8")
     logger.info("多百度来源聚合已输出：%s；统一百度报告：%s", multi_path, account_path)
     return report

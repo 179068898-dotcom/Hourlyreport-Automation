@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,35 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.text_normalizer import normalize_for_display, normalize_text
 from modules.validators import validate_excel_report, validate_excel_report_v2
+
+
+def _write_excel_account_regions_report(config: dict[str, Any], root: Path, structure_report: dict[str, Any]) -> dict[str, Any]:
+    configured_accounts = list((config.get("accounts") or {}).keys())
+    detected_regions = []
+    for account_name, meta in (structure_report.get("accounts") or {}).items():
+        if not meta.get("found"):
+            continue
+        detected_regions.append({
+            "account_name": account_name,
+            "row": meta.get("title_row"),
+            "column": meta.get("title_col"),
+            "title_cell": meta.get("title_cell"),
+        })
+    detected_names = [item["account_name"] for item in detected_regions]
+    report = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "excel_path": structure_report.get("excel_path") or config.get("excel_path"),
+        "sheet_name": structure_report.get("sheet_name") or config.get("sheet_name", "时段数据"),
+        "detected_account_regions": detected_regions,
+        "configured_excel_accounts": configured_accounts,
+        "missing_configured_accounts": [name for name in configured_accounts if name not in detected_names],
+        "extra_detected_accounts": [name for name in detected_names if name not in configured_accounts],
+    }
+    path = root / "reports" / "excel_account_regions.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report
 
 
 def _build_merged_value_map(ws: Worksheet) -> dict[tuple[int, int], Any]:
@@ -356,12 +386,14 @@ def inspect_excel_structure(config: dict[str, Any], root: Path, logger) -> dict[
     }
     if not excel_path.exists():
         report["errors"].append(f"找不到 Excel 文件：{excel_path}")
+        _write_excel_account_regions_report(config, root, report)
         return report
 
     wb = load_workbook(excel_path, data_only=False, read_only=False)
     report["available_sheets"] = wb.sheetnames
     if sheet_name not in wb.sheetnames:
         report["errors"].append(f"找不到 sheet：{sheet_name}")
+        _write_excel_account_regions_report(config, root, report)
         return report
 
     ws = wb[sheet_name]
@@ -384,6 +416,7 @@ def inspect_excel_structure(config: dict[str, Any], root: Path, logger) -> dict[
     report["global_fields"] = _find_global_fields(ws, config, merged_values)
     report["suspicious_titles"] = _find_suspicious_titles(rows, config)
     report["errors"].extend(validate_excel_report_v2(report, required_accounts=list(accounts.keys())))
+    _write_excel_account_regions_report(config, root, report)
 
     if report["errors"]:
         logger.warning("Excel 结构识别存在问题：%s", report["errors"])

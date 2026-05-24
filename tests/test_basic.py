@@ -1690,6 +1690,116 @@ baidu-银康03
     assert any("字段 点击" in error for error in parsed["errors"])
 
 
+def test_extract_baidu_rows_from_visible_text_uses_data_width_when_group_header_has_no_cell():
+    text = """
+详细数据
+账户
+账户ID
+展现
+点击
+消费
+平均点击价格
+落地页转化
+一句话咨询量
+留线索量
+总计-3
+-
+7,990
+1,113
+2,989.19
+2.69
+14
+1
+竞网CS博润240304
+53559272
+720
+58
+186.85
+3.22
+0
+0
+竞网CS博润241209
+61561000
+1,568
+174
+1,779.96
+10.23
+5
+0
+竞网CS博润251218
+77609531
+5,702
+881
+1,022.38
+1.16
+9
+1
+20条/页
+"""
+    config = {
+        "accounts": {
+            "竞网CS博润240304": {"baidu_name": "竞网CS博润240304"},
+            "竞网CS博润241209": {"baidu_name": "竞网CS博润241209"},
+            "竞网CS博润251218": {"baidu_name": "竞网CS博润251218"},
+        }
+    }
+
+    rows = extract_baidu_rows_from_visible_text(text)
+    parsed = parse_baidu_table(rows, config)
+
+    assert len(rows) == 4
+    assert parsed["errors"] == []
+    assert parsed["accounts"]["竞网CS博润240304"]["展现"] == 720
+    assert parsed["accounts"]["竞网CS博润240304"]["点击"] == 58
+    assert parsed["accounts"]["竞网CS博润240304"]["消费"] == 186.85
+    assert parsed["accounts"]["竞网CS博润241209"]["展现"] == 1568
+    assert parsed["accounts"]["竞网CS博润241209"]["点击"] == 174
+    assert parsed["accounts"]["竞网CS博润241209"]["消费"] == 1779.96
+    assert parsed["accounts"]["竞网CS博润251218"]["展现"] == 5702
+    assert parsed["accounts"]["竞网CS博润251218"]["点击"] == 881
+    assert parsed["accounts"]["竞网CS博润251218"]["消费"] == 1022.38
+
+
+def test_extract_baidu_rows_from_visible_text_rejects_unverifiable_data_width():
+    text = """
+账户
+账户ID
+展现
+点击
+消费
+平均点击价格
+落地页转化
+一句话咨询量
+留线索量
+总计-3
+-
+7,990
+1,113
+2,989.19
+2.69
+14
+1
+竞网CS博润240304
+53559272
+720
+58
+186.85
+3.22
+0
+0
+竞网CS博润241209
+61561000
+1,568
+174
+1,779.96
+10.23
+5
+20条/页
+"""
+
+    assert extract_baidu_rows_from_visible_text(text) == []
+
+
 def test_extract_selected_date_from_baidu_visible_text():
     text = """
 账户：
@@ -6239,6 +6349,195 @@ def test_doctor_baidu_source_detail_marks_candidate_only_accounts_for_shenyang()
     assert report["passed"] is True
     assert report["detail"]["excel_accounts"] == ["沈阳中亚02", "沈阳银康01", "沈阳中亚01"]
     assert report["detail"]["candidate_only_accounts"] == ["沈阳中亚03", "沈阳银康02", "沈阳银康03"]
+
+
+def test_baidu_multi_source_writes_human_readable_markdown_report(tmp_path):
+    import logging
+
+    from modules.baidu_multi_source import fetch_baidu_multi_source
+
+    config = {
+        "project_id": "shenyang_niu",
+        "project_name": "沈阳牛",
+        "accounts": {"沈阳中亚02": {}, "沈阳银康01": {}},
+        "baidu_sources": [
+            {
+                "source_id": "zhongya",
+                "source_name": "沈阳中亚",
+                "credential_profile": "secret_profile_a",
+                "accounts": [{"standard_name": "沈阳中亚02", "baidu_names": ["百度中亚02"]}, {"standard_name": "沈阳中亚03", "baidu_names": ["百度中亚03"]}],
+            },
+            {
+                "source_id": "yinkang",
+                "source_name": "沈阳银康",
+                "credential_profile": "secret_profile_b",
+                "accounts": [{"standard_name": "沈阳银康01", "baidu_names": ["百度银康01"]}, {"standard_name": "沈阳银康02", "baidu_names": ["百度银康02"]}],
+            },
+        ],
+    }
+
+    def fake_fetch(*, config, root, logger, period):
+        if config["baidu_source"]["source_id"] == "zhongya":
+            return {
+                "date": "2026-05-24",
+                "accounts": {"沈阳中亚02": {"展现": 10, "点击": 2, "消费": 5.5}, "沈阳中亚03": {"展现": 0, "点击": 0, "消费": 0}},
+                "unknown_accounts": [{"account_name": "未知A", "展现": 1, "点击": 0, "消费": 0, "reason": "未配置"}],
+                "ignored_unknown_accounts": [],
+                "errors": [],
+            }
+        return {
+            "date": "2026-05-24",
+            "accounts": {"沈阳银康01": {"展现": 20, "点击": 3, "消费": 6.5}, "沈阳银康02": {"展现": 1, "点击": 1, "消费": 1}},
+            "unknown_accounts": [],
+            "ignored_unknown_accounts": [{"account_name": "空账户", "展现": 0, "点击": 0, "消费": 0, "reason": "已忽略"}],
+            "errors": [],
+        }
+
+    report = fetch_baidu_multi_source(config, tmp_path, logging.getLogger("test"), "15点", fake_fetch)
+    md_path = tmp_path / "reports" / "baidu_multi_source_report.md"
+    markdown = md_path.read_text(encoding="utf-8")
+
+    assert report["errors"] == []
+    assert md_path.exists()
+    assert "沈阳牛" in markdown
+    assert "## 来源摘要" in markdown
+    assert "## 最终写入账户" in markdown
+    assert "## 被忽略的未启用账户" in markdown
+    assert "## 被跳过的未映射账户" in markdown
+    assert "## unknown_accounts" in markdown
+    assert "username" not in markdown.lower()
+    assert "password" not in markdown.lower()
+    assert "secret_profile" not in markdown
+
+
+def test_baidu_multi_source_cost_validation_reports_matching_totals_and_source_unknown_details():
+    from modules.baidu_multi_source import aggregate_baidu_source_reports
+
+    config = {"accounts": {"A": {}, "B": {}}}
+    source_reports = [
+        {
+            "source_id": "s1",
+            "source_name": "来源1",
+            "report": {
+                "accounts": {"A": {"展现": 1, "点击": 1, "消费": 1.1}},
+                "unknown_accounts": [{"account_name": "X", "展现": 1, "点击": 0, "消费": 2}],
+                "ignored_unknown_accounts": [{"account_name": "Z", "展现": 0, "点击": 0, "消费": 0}],
+                "errors": [],
+            },
+        },
+        {"source_id": "s2", "source_name": "来源2", "report": {"accounts": {"B": {"展现": 2, "点击": 1, "消费": 2.2}}, "errors": []}},
+    ]
+
+    report = aggregate_baidu_source_reports(config, source_reports)
+
+    assert report["source_total_cost_sum"] == 3.3
+    assert report["final_total_cost"] == 3.3
+    assert report["diff"] == 0
+    assert report["errors"] == []
+    assert report["source_reports"][0]["report"]["unknown_accounts"][0]["source_id"] == "s1"
+    assert report["source_reports"][0]["report"]["ignored_unknown_accounts"][0]["source_name"] == "来源1"
+
+
+def test_baidu_multi_source_cost_validation_fails_when_totals_differ():
+    from modules.baidu_multi_source import build_cost_validation
+
+    validation = build_cost_validation(10.2, 10.0)
+
+    assert validation["passed"] is False
+    assert validation["diff"] == 0.2
+    assert validation["errors"]
+
+
+def test_multi_source_candidate_accounts_may_be_absent_from_source_page():
+    from modules.baidu_multi_source import build_source_runtime_config
+    from modules.baidu_parser import parse_baidu_table
+
+    config = {"accounts": {"写入A": {}}}
+    source = {
+        "source_id": "source_a",
+        "source_name": "来源A",
+        "credential_profile": "profile_a",
+        "accounts": [
+            {"standard_name": "写入A", "baidu_names": ["百度A"]},
+            {"standard_name": "候选B", "baidu_names": ["百度B"]},
+        ],
+    }
+    source_config = build_source_runtime_config(config, source)
+    parsed = parse_baidu_table([{"账户": "百度A", "展现": "1", "点击": "1", "消费": "1"}], source_config)
+
+    assert source_config["baidu"]["allow_missing_candidate_accounts"] is True
+    assert parsed["errors"] == []
+    assert list(parsed["accounts"]) == ["写入A"]
+
+
+def test_multi_source_overview_allows_absent_candidate_accounts():
+    from modules.baidu_overview import validate_overview_ready
+
+    report = validate_overview_ready(
+        "数据报告 搜索推广 2026/05/24 账户 展现 点击 消费 百度A",
+        "2026-05-24",
+        {
+            "baidu": {"allow_missing_candidate_accounts": True},
+            "accounts": {
+                "写入A": {"baidu_name": "百度A"},
+                "候选B": {"baidu_name": "百度B"},
+            },
+        },
+    )
+
+    assert report["passed"] is True
+    assert report["accounts"]["候选B"] is False
+    assert report["allow_missing_candidate_accounts"] is True
+
+
+def test_doctor_multi_source_detail_includes_summary_counts_and_candidate_note():
+    from modules.project_config import load_project_config
+    from modules.doctor import _check_baidu_sources
+
+    project = load_project_config(Path.cwd(), "shenyang_niu")
+    report = _check_baidu_sources(project)
+    detail = report["detail"]
+
+    assert detail["baidu_sources_count"] == 2
+    assert detail["excel_accounts_count"] == 3
+    assert detail["baidu_candidate_accounts_count"] == 6
+    assert "不算错误" in detail["candidate_only_note"]
+    assert all("candidate_accounts_count" in source for source in detail["sources"])
+    assert all("has_duplicate_baidu_name" in source for source in detail["sources"])
+
+
+def test_inspect_excel_structure_writes_excel_account_regions_report(tmp_path):
+    import logging
+
+    from openpyxl import Workbook
+    from modules.excel_inspector import inspect_excel_structure
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "时段数据"
+    ws["A1"] = "日期"
+    ws["B1"] = "时段"
+    ws["D2"] = "项目甲"
+    headers = ["展现", "点击", "消费"]
+    for index, header in enumerate(headers, start=4):
+        ws.cell(row=3, column=index).value = header
+    excel_path = tmp_path / "demo.xlsx"
+    wb.save(excel_path)
+    config = {
+        "project_id": "demo",
+        "project_name": "演示",
+        "excel_path": str(excel_path),
+        "sheet_name": "时段数据",
+        "accounts": {"项目甲": {"aliases": ["项目甲"], "excel_name": "项目甲", "baidu_name": "项目甲"}},
+        "field_aliases": {"日期": ["日期"], "时段": ["时段"], "展现": ["展现"], "点击": ["点击"], "消费": ["消费"]},
+    }
+
+    inspect_excel_structure(config, tmp_path, logging.getLogger("test"))
+    report = json.loads((tmp_path / "reports" / "excel_account_regions.json").read_text(encoding="utf-8"))
+
+    assert report["configured_excel_accounts"] == ["项目甲"]
+    assert report["missing_configured_accounts"] == []
+    assert report["detected_account_regions"] == [{"account_name": "项目甲", "row": 2, "column": 4, "title_cell": "D2"}]
 
 
 def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp_path):

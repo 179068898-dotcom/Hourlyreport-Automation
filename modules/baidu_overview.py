@@ -125,8 +125,9 @@ def validate_overview_ready(visible_text: str, target_date: str, config: dict[st
         errors.append("当前页面不是搜索推广数据页")
     if not checks["date_is_today"]:
         errors.append(f"页面日期不是今天：目标 {target_date}，页面日期 {dates or '未识别'}")
+    allow_missing_candidate_accounts = bool(config.get("baidu", {}).get("allow_missing_candidate_accounts"))
     for account, found in accounts.items():
-        if not found:
+        if not found and not allow_missing_candidate_accounts:
             errors.append(f"页面未看到目标账户：{account}")
     for field, found in fields.items():
         if not found:
@@ -138,6 +139,7 @@ def validate_overview_ready(visible_text: str, target_date: str, config: dict[st
         "checks": checks,
         "accounts": accounts,
         "fields": fields,
+        "allow_missing_candidate_accounts": allow_missing_candidate_accounts,
         "errors": errors,
     }
 
@@ -198,13 +200,19 @@ def validate_overview_parse_ready_v2(root: Path, config: dict[str, Any]) -> dict
     non_numeric_fields = list(debug.get("non_numeric_fields") or [])
     percent_misalignment = bool(debug.get("percent_misalignment"))
     extraction_method = str(debug.get("extraction_method") or "")
+    allow_missing_candidate_accounts = bool(config.get("baidu", {}).get("allow_missing_candidate_accounts"))
 
     checks = {
         "required_headers_detected": all(value in normalized_headers for value in required.values()),
-        "parsed_account_count_matches_required": parsed_account_count >= required_account_count if required_account_count else parsed_account_count >= 1,
-        "all_required_accounts_detected": not missing_accounts,
+        "parsed_account_count_matches_required": (
+            parsed_account_count >= 1
+            if allow_missing_candidate_accounts
+            else (parsed_account_count >= required_account_count if required_account_count else parsed_account_count >= 1)
+        ),
+        "all_required_accounts_detected": not missing_accounts or allow_missing_candidate_accounts,
         "non_numeric_fields_empty": not non_numeric_fields,
         "visible_text_percent_misalignment": extraction_method == "visible_text" and percent_misalignment,
+        "allow_missing_candidate_accounts": allow_missing_candidate_accounts,
     }
 
     errors: list[str] = []
