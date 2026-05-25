@@ -10,12 +10,26 @@ echo Current folder:
 echo %CD%
 echo.
 
+set "NEED_INSTALL="
 if not exist ".venv\Scripts\python.exe" (
-  echo [ERROR] .venv was not found.
-  echo Please run install_env.bat first.
+  set "NEED_INSTALL=1"
+)
+
+if not defined NEED_INSTALL (
+  ".venv\Scripts\python.exe" -c "import openpyxl, pandas, xlrd, dateutil, playwright, rich" >nul 2>nul
+  if errorlevel 1 set "NEED_INSTALL=1"
+)
+
+if defined NEED_INSTALL (
+  echo Python environment is missing or incomplete. Installing dependencies...
+  call "%~dp0install_env.bat"
+  if errorlevel 1 (
+    echo [ERROR] Environment installation failed. Menu cannot start.
+    echo.
+    pause
+    exit /b 1
+  )
   echo.
-  pause
-  exit /b 1
 )
 
 ".venv\Scripts\python.exe" menu.py

@@ -647,6 +647,48 @@ def test_doctor_openpyxl_mode_skips_excel_com_only_requirements(tmp_path, monkey
     assert "xlwings" in excel_com_report["detail"]["missing"]
 
 
+def test_doctor_excel_com_reads_optional_requirements_file(tmp_path, monkeypatch):
+    import modules.doctor as doctor
+
+    (tmp_path / "requirements.txt").write_text("openpyxl>=3.1.2\n", encoding="utf-8")
+    (tmp_path / "requirements-excel-com.txt").write_text("xlwings>=0.30.0\npywin32>=306\n", encoding="utf-8")
+
+    def fake_version(package_name):
+        if package_name in {"xlwings", "pywin32"}:
+            raise doctor.importlib.metadata.PackageNotFoundError
+        return "1.0"
+
+    monkeypatch.setattr(doctor.importlib.metadata, "version", fake_version)
+
+    openpyxl_report = doctor._check_requirements(tmp_path, excel_engine="openpyxl")
+    excel_com_report = doctor._check_requirements(tmp_path, excel_engine="excel_com")
+
+    assert openpyxl_report["passed"] is True
+    assert excel_com_report["passed"] is False
+    assert set(excel_com_report["detail"]["missing"]) == {"xlwings", "pywin32"}
+
+
+def test_default_install_excludes_optional_excel_com_dependencies():
+    root = Path(__file__).resolve().parents[1]
+    base = (root / "requirements.txt").read_text(encoding="utf-8")
+    optional = (root / "requirements-excel-com.txt").read_text(encoding="utf-8")
+
+    assert "xlwings" not in base
+    assert "pywin32" not in base
+    assert "xlwings" in optional
+    assert "pywin32" in optional
+
+
+def test_run_menu_installs_or_repairs_missing_dependencies_before_importing_menu():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "run_menu.bat").read_text(encoding="utf-8")
+
+    assert 'if not exist ".venv\\Scripts\\python.exe"' in script
+    assert 'set "NEED_INSTALL=1"' in script
+    assert 'call "%~dp0install_env.bat"' in script
+    assert 'import openpyxl, pandas, xlrd, dateutil, playwright, rich' in script
+
+
 def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("main.py")) is True
     assert should_include_file(Path("modules") / "doctor.py") is True
@@ -874,6 +916,11 @@ def test_visitor_dialog_requires_message_count_at_least_one():
     assert has_visitor_dialog({"访客消息数": "无"}) is False
 
 
+def test_visitor_dialog_accepts_visitor_sent_count_alias():
+    assert has_visitor_dialog({"访客发送数": "1"}) is True
+    assert has_visitor_dialog({"访客发送数": "0"}) is False
+
+
 def test_kst_daily_tags_do_not_count_invalid_as_valid():
     invalid = classify_daily_dialog_by_tags("转潜-无效, 无效")
     assert invalid["总对话"] == 1
@@ -955,6 +1002,25 @@ def test_parse_kst_export_csv_outputs_reports(tmp_path):
     assert (reports / "kst_unmatched_rows.json").exists()
 
 
+def test_parse_kst_export_accepts_visitor_sent_count_header(tmp_path):
+    export = tmp_path / "kst_sent_count.csv"
+    today = date.today().isoformat()
+    export.write_text(
+        "对话时间,备注说明,名片标签,访客发送数\n"
+        f"{today} 10:00,72828178-abc,转潜-有效,1\n",
+        encoding="utf-8-sig",
+    )
+    config = _kunming_niu_runtime_config()
+    config["kst"] = {"export_dir": str(tmp_path), "promotion_id_accounts": _kunming_niu_runtime_config()["kst"]["promotion_id_accounts"]}
+
+    result = parse_kst_export_file(export, config, tmp_path, "15点")
+
+    assert result["parse_report"]["passed"] is True
+    assert result["parse_report"]["field_info"]["has_visitor_messages"] is True
+    assert result["dialog_data"]["accounts"]["银康01"]["总对话"] == 1
+    assert result["dialog_data"]["accounts"]["银康01"]["有效"] == 1
+
+
 def test_parse_kst_export_filters_non_current_date_without_marking_unmatched(tmp_path):
     export = tmp_path / "kst.csv"
     export.write_text(
@@ -1006,6 +1072,23 @@ def test_parse_kst_daily_file_filters_date_and_outputs_daily_counts(tmp_path):
     assert result["parse_report"]["passed"] is True
     assert (tmp_path / "reports" / "kst_daily_data.json").exists()
     assert (tmp_path / "reports" / "kst_daily_parse_report.json").exists()
+
+
+def test_parse_kst_daily_accepts_visitor_sent_count_header(tmp_path):
+    export = tmp_path / "kst_daily_sent_count.csv"
+    export.write_text(
+        "对话时间,备注说明,名片标签,访客发送数\n"
+        "2026-05-07 10:00,72828178-abc,转潜-有效,1\n",
+        encoding="utf-8-sig",
+    )
+
+    result = parse_kst_daily_file(export, _kunming_niu_runtime_config(), tmp_path, "2026-05-07")
+
+    assert result["parse_report"]["passed"] is True
+    assert result["parse_report"]["field_info"]["has_visitor_messages"] is True
+    assert result["daily_data"]["accounts"]["银康01"]["总对话"] == 1
+    assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 1
+    assert result["daily_data"]["accounts"]["银康01"]["无效对话"] == 0
 
 
 def test_parse_kst_daily_file_skips_rows_without_visitor_messages(tmp_path):
@@ -3998,12 +4081,19 @@ def test_kunming_niu_accounts():
     assert "baidu-银康03" in accounts[2]["baidu_names"]
 
 
-def test_secrets_example_has_four_profiles():
-    """secrets.example.json 包含四个 profile，密码为空。"""
+def test_secrets_example_has_six_profiles():
+    """secrets.example.json 包含含沈阳双来源在内的六个 profile，密码为空。"""
     root = Path(__file__).resolve().parents[1]
     data = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
     baidu = data["baidu"]
-    for profile in ["kunming_niu_baidu", "nanjing_niu_baidu", "ningbo_niu_baidu", "changsha_niu_baidu"]:
+    for profile in [
+        "kunming_niu_baidu",
+        "nanjing_niu_baidu",
+        "ningbo_niu_baidu",
+        "changsha_niu_baidu",
+        "shenyang_niu_zhongya_baidu",
+        "shenyang_niu_yinkang_baidu",
+    ]:
         assert profile in baidu
         assert baidu[profile]["username"] == ""
         assert baidu[profile]["password"] == ""
@@ -4020,7 +4110,7 @@ def test_regular_build_excludes_secrets_json():
         names = set(archive.namelist())
     assert "secrets/secrets.json" not in names
     assert "secrets/secrets.example.json" in names
-    for pid in ["kunming_niu", "nanjing_niu", "ningbo_niu", "changsha_niu"]:
+    for pid in ["kunming_niu", "nanjing_niu", "ningbo_niu", "changsha_niu", "shenyang_niu"]:
         assert f"configs/projects/{pid}.json" in names
     assert "configs/projects/kunming_npx.json" not in names
     assert "reports/menu_task_status.json" not in names
@@ -4076,8 +4166,8 @@ def test_internal_build_validates_empty_credentials(tmp_path):
     assert any("未填写密码" in e for e in errors)
 
 
-def test_internal_build_validates_all_complete(tmp_path):
-    """内部包四个 profile 完整时校验通过。"""
+def test_internal_build_requires_shenyang_multi_source_profiles(tmp_path):
+    """内部包必须同时具备沈阳中亚与沈阳银康百度凭据。"""
     from tools.build_release import _validate_internal_secrets
 
     (tmp_path / "secrets").mkdir()
@@ -4087,6 +4177,27 @@ def test_internal_build_validates_all_complete(tmp_path):
             "nanjing_niu_baidu": {"username": "a", "password": "b"},
             "ningbo_niu_baidu": {"username": "a", "password": "b"},
             "changsha_niu_baidu": {"username": "a", "password": "b"},
+        }
+    }, ensure_ascii=False), encoding="utf-8")
+
+    errors = _validate_internal_secrets(tmp_path)
+    assert "缺少百度凭据 profile：shenyang_niu_zhongya_baidu" in errors
+    assert "缺少百度凭据 profile：shenyang_niu_yinkang_baidu" in errors
+
+
+def test_internal_build_validates_all_complete(tmp_path):
+    """内部包六个 profile 完整时校验通过。"""
+    from tools.build_release import _validate_internal_secrets
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
+        "baidu": {
+            "kunming_niu_baidu": {"username": "a", "password": "b"},
+            "nanjing_niu_baidu": {"username": "a", "password": "b"},
+            "ningbo_niu_baidu": {"username": "a", "password": "b"},
+            "changsha_niu_baidu": {"username": "a", "password": "b"},
+            "shenyang_niu_zhongya_baidu": {"username": "a", "password": "b"},
+            "shenyang_niu_yinkang_baidu": {"username": "a", "password": "b"},
         }
     }, ensure_ascii=False), encoding="utf-8")
 
@@ -4107,8 +4218,9 @@ def test_xia_sidao_readme_exists():
     assert "run_menu.bat" in content
     assert "参数表" in content
     assert "验证标准" in content
-    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛"]:
+    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛"]:
         assert name in content, f"缺少项目：{name}"
+    assert "双百度来源" in content
 
 
 def test_regular_build_includes_xia_sidao_readme():

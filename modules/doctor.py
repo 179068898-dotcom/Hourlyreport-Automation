@@ -105,22 +105,27 @@ def _check_requirements(root: Path, excel_engine: str = "openpyxl") -> dict[str,
     req = root / "requirements.txt"
     if not req.exists():
         return _warn("未找到 requirements.txt")
+    requirement_files = [req]
+    optional_req = root / "requirements-excel-com.txt"
+    if excel_engine == "excel_com" and optional_req.exists():
+        requirement_files.append(optional_req)
     missing = []
     checked = []
     skipped_optional = []
-    for line in req.read_text(encoding="utf-8").splitlines():
-        name = _parse_requirement_name(line)
-        if not name:
-            continue
-        if excel_engine == "openpyxl" and name in EXCEL_COM_ONLY_REQUIREMENTS:
-            skipped_optional.append(name)
-            continue
-        package_name = REQUIREMENT_NAME_MAP.get(name, name)
-        try:
-            importlib.metadata.version(package_name)
-            checked.append(name)
-        except importlib.metadata.PackageNotFoundError:
-            missing.append(name)
+    for requirement_file in requirement_files:
+        for line in requirement_file.read_text(encoding="utf-8").splitlines():
+            name = _parse_requirement_name(line)
+            if not name:
+                continue
+            if excel_engine == "openpyxl" and name in EXCEL_COM_ONLY_REQUIREMENTS:
+                skipped_optional.append(name)
+                continue
+            package_name = REQUIREMENT_NAME_MAP.get(name, name)
+            try:
+                importlib.metadata.version(package_name)
+                checked.append(name)
+            except importlib.metadata.PackageNotFoundError:
+                missing.append(name)
     if missing:
         return _warn(
             f"依赖未安装完整，缺少：{', '.join(missing)}",

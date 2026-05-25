@@ -19,6 +19,8 @@ REQUIRED_INTERNAL_PROFILES = [
     "nanjing_niu_baidu",
     "ningbo_niu_baidu",
     "changsha_niu_baidu",
+    "shenyang_niu_zhongya_baidu",
+    "shenyang_niu_yinkang_baidu",
 ]
 
 
@@ -63,7 +65,7 @@ def should_include_file(path: Path, internal: bool = False) -> bool:
 
 
 def _validate_internal_secrets(root: Path) -> list[str]:
-    """校验内部包所需的四个 profile 是否完整。返回错误列表。"""
+    """校验内部包所需的百度凭据 profile 是否完整。返回错误列表。"""
     secrets_path = root / "secrets" / "secrets.json"
     errors: list[str] = []
     if not secrets_path.exists():

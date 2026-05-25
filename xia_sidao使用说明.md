@@ -4,7 +4,7 @@
 
 一句话：自动读取百度消费、展现、点击，解析商务通导出文件，合并后写入对应项目 Excel。
 
-- 当前版本：`v0.4.18-C 多项目可用发布版`
+- 当前版本：`v0.4.21 内部修复版（含沈阳双百度来源日报、自动安装修复与商务通表头兼容）`
 - 项目路径：`D:\自动化脚本\hourly_report_bot_release_v0.4.4`
 - 核心依赖：
   - Python 虚拟环境：`.venv`
@@ -16,6 +16,7 @@
 - 支持任务：
   - 小时报：`11点`、`15点`、`18点`
   - 日报：默认昨天，也可指定日期
+  - 沈阳牛双百度来源：小时报和日报均会依次读取沈阳中亚、沈阳银康并聚合后写入
   - 文件合格校验 / `doctor`
   - 项目切换 / 项目查看
   - Excel 结构扫描
@@ -57,6 +58,22 @@
    - OpenClaw 定时任务异常时，可以先跑：
      ` .venv\Scripts\python.exe main.py --mode inspect-excel`
    - 该命令只识别结构，不写入 Excel。
+
+5. 沈阳牛现已支持双百度来源的小时报和日报。
+   - `shenyang_niu` 会分别使用 `shenyang_niu_zhongya_baidu`、`shenyang_niu_yinkang_baidu` 登录读取，然后只聚合 Excel 实际账户。
+   - 日报最终百度输入文件仍为 `reports/baidu_daily_data.json`，不会改变 `merge-daily` 和 Excel 写入入口。
+   - 任一来源读取失败时，百度步骤立即失败，日报不会继续写 Excel。
+   - 未知账户、候选未启用账户及候选有量但未映射账户可在 `reports/baidu_multi_source_report.json` / `.md` 中按来源排查。
+
+6. 内部包首次运行入口已改为自动安装和自动修复依赖。
+   - 同事直接双击 `run_menu.bat` 即可；没有 `.venv` 或核心依赖不完整时，会先调用 `install_env.bat`。
+   - 内置项目全部使用 `openpyxl`，默认安装不再要求 `xlwings` / `pywin32`，避免 Python 3.14 环境因 Excel COM 备用依赖失败而无法打开菜单。
+   - `xlwings` / `pywin32` 仅在未来将项目配置为 `excel_com` 时按 `requirements-excel-com.txt` 单独安装。
+
+7. 商务通导出文件已兼容 `访客发送数` 表头。
+   - 小时报 `parse-kst-export` 与日报 `parse-kst-daily` 均支持 `访客消息数`、`访客发送数` 两种表头。
+   - 两种表头按同一口径统计：字段值 `>= 1` 才计入总对话及其标签分类。
+   - 如果两种表头都未识别，程序仍会中断并输出解析报告，不猜测写入。
 
 ## 3. 完整命令速查表
 
@@ -164,7 +181,7 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
 run_menu.bat
 ```
 
-说明：人工操作时用菜单入口；AI / 夏思道自动执行时优先用命令行。
+说明：人工操作时用菜单入口；首次运行或依赖安装不完整时，该入口会自动安装/修复环境后再打开菜单。AI / 夏思道自动执行时优先用命令行。
 
 ### 3.5 分步调试
 
@@ -267,6 +284,7 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
 | `nanjing_niu` | 南京牛 | `华厦npx1 / 华厦npx3 / 华厦npx5` | `D:\Seafile\【竞价】\【❤南京牛】\【2026年】【南京牛】竞价数据\【南京华夏yxb】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\南京牛` | `nanjing_niu_baidu` |
 | `ningbo_niu` | 宁波牛 | `宁波博润1 / 宁波博润2 / 宁波博润12` | `D:\Seafile\【竞价】\【❤宁波牛】\【2026年】【宁波牛】竞价数据\【宁波YXB】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\宁波牛` | `ningbo_niu_baidu` |
 | `changsha_niu` | 长沙牛 | `竞网CS博润241209 / 竞网CS博润240304 / 竞网CS博润251218` | `D:\Seafile\【竞价】\【❤长沙牛】\【2026年】【长沙牛】竞价数据\【长沙】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\长沙牛` | `changsha_niu_baidu` |
+| `shenyang_niu` | 沈阳牛 | Excel 写入：`沈阳中亚02 / 沈阳银康01 / 沈阳中亚01`；双百度来源抓取 | `D:\Seafile\【竞价】\【❤沈阳牛】\【2026年】【沈阳牛】竞价数据\【沈阳YXB】2026竞价数据.xlsx` | `时段数据` | `百度` | `D:\商务通数据\沈阳牛` | `shenyang_niu_zhongya_baidu` / `shenyang_niu_yinkang_baidu` |
 
 说明：`demo_project.json` 和 `project_template.json` 仅用于演示/模板，不属于正式生产项目。
 
@@ -300,6 +318,7 @@ run_menu.bat
 - `nanjing_niu`
 - `ningbo_niu`
 - `changsha_niu`
+- `shenyang_niu`
 
 重要说明：
 
@@ -320,11 +339,16 @@ run_menu.bat
 |---|---|---|
 | 默认项目变成宁波牛 / 长沙牛 | 菜单切换项目后 `app_config.json` 改了 `default_project_id` | 切回目标项目；提交代码前不要把 `app_config` 本地状态提交 |
 | Chrome `9222` 连接失败 | Chrome 调试端口未启动 | 运行 `start_chrome_debug.bat`，或关闭旧 Chrome 后重启调试 Chrome |
+| 首次双击菜单提示缺少 `openpyxl` | 旧包的 `run_menu.bat` 未自动安装，或上次安装中断 | 使用 `v0.4.21` 修复包重新解压后双击 `run_menu.bat`；新包会自动安装或修复环境 |
+| 安装时提示找不到 `xlwings` | `v0.4.19` 旧包把 Excel COM 备用依赖当成默认必装项 | 使用 `v0.4.21` 修复包；当前 `openpyxl` 项目默认安装不再安装 `xlwings` |
 | 百度账号不匹配 | 当前浏览器登录了其他项目百度管家账号 | 程序会自动退出重登；若提示无法退出，手动退出后重试 |
 | 百度 report 页面列解析异常 | 百度虚拟 grid 表格结构变化、列顺序漂移、`visible_text` 错位 | 查看 `reports/baidu_table_parse_debug_latest.json` 和 `reports/baidu_table_candidates_latest.json` |
 | 出现“读取 0 个账户 / 读取 1 个账户” | 未正确解析百度 report 表格，或账户名未完整匹配 | 先看 `baidu_table_parse_debug`；不要手动改数据 |
 | 点击 / 消费不是数字，`raw_value` 是百分比 | 列错位，把点击率 / 消费占比当成点击 / 消费 | 这是 parser 问题，不要把百分比当数字写入 |
 | 商务通导出文件未找到 | 商务通未导出，或导出目录不对 | 让人工导出；必要时用 `--file` 指定导出文件 |
+| 商务通提示未识别到访客消息数字段 | 导出表头可能改为 `访客发送数`，或使用了更旧版本程序 | 使用 `v0.4.21` 修复包重跑；若仍失败，查看 `reports/kst_parse_report.json` 或日报解析报告中的实际表头 |
+| 沈阳牛提示某个百度来源失败 | 双来源中任一账号未登录、凭据缺失或页面不可读取 | 检查 `reports/baidu_multi_source_report.json` / `.md` 和 `logs/run.log`；修复后重跑，失败时程序不会写 Excel |
+| 沈阳牛出现候选账户已忽略/跳过 | 百度来源含不属于 Excel 实际写入区域的候选账户 | `展点消=0` 的未启用候选可忽略；有量但未映射时必须人工核对配置和 Excel，不要直接改表 |
 | Excel 找不到目标文件 | 配置路径与真实文件名不一致 | 看 doctor 提示的相似文件名，核对 `configs/projects/*.json` 的 `excel.path` |
 | Excel 打不开 / 写入失败 | WPS / Excel 正在打开目标文件 | 关闭目标 Excel 后重跑 |
 | 南京牛小时报找不到账块 | 首航小时报模板没有账户名，日报模板有账户名 | 这是模板适配问题，暂时不要归因百度抓数 |
@@ -362,6 +386,7 @@ run_menu.bat
   - `reports/baidu_open_overview_report.json`
   - `reports/baidu_prepare_overview_report.json`
   - `reports/baidu_daily_data.json`
+  - 多来源项目：`reports/baidu_multi_source_report.json`、`reports/baidu_multi_source_report.md`
 - 百度表格解析调试：
   - `reports/baidu_table_parse_debug_latest.json`
   - `reports/baidu_table_candidates_latest.json`
@@ -385,7 +410,7 @@ run_menu.bat
 
 本说明适用于：
 
-`v0.4.18-C 多项目可用发布版`
+`v0.4.21 内部修复版（含沈阳双百度来源日报、自动安装修复与商务通表头兼容）`
 
 最近关键能力：
 
@@ -396,3 +421,7 @@ run_menu.bat
 - 多项目 Excel path / doctor 诊断增强
 - 南京牛日期 / 时段全局字段定位
 - 夏思道命令行 SOP
+- 沈阳牛双百度来源小时报 / 日报聚合，任一来源失败即中断写入
+- 内部发布包校验六个百度凭据 profile，避免沈阳双来源缺凭据交付
+- `run_menu.bat` 首次运行自动安装/修复依赖，默认安装移除 Excel COM 备用依赖阻断
+- 商务通 `访客消息数` / `访客发送数` 两种导出表头统一兼容小时报和日报
