@@ -75,6 +75,29 @@
    - 两种表头按同一口径统计：字段值 `>= 1` 才计入总对话及其标签分类。
    - 如果两种表头都未识别，程序仍会中断并输出解析报告，不猜测写入。
 
+## 2.2 多百度来源项目操作 SOP
+
+适用于沈阳牛，以及以后使用 `baidu_sources` 配置的沈阳白、合肥白等项目。
+
+1. 先跑 `doctor`，确认项目配置、Excel、商务通目录、百度凭据 profile 和浏览器状态可用。
+2. 查看当前项目配置中的 `baidu_sources` 数量，确认应读取的百度来源完整。
+3. 确认 `excel_accounts` 是目标 Excel 中实际存在、允许写入的账户，不要把全部百度候选账户直接当成写入账户。
+4. 先跑 `fetch-baidu-auto`，只抓取百度数据并输出诊断报告，不要直接写 Excel。
+5. 检查 `reports/baidu_multi_source_report.md`，确认每个来源读取成功，并核对被忽略、被跳过或 unknown 的候选账户。
+6. 检查 `reports/baidu_account_data.json`，确认小时报聚合结果只包含 Excel 实际写入账户。
+7. 百度抓数结果确认无误后，再运行完整小时报流程写入 Excel。
+8. 日报同理：先确认多来源读取及 `reports/baidu_daily_data.json`，再执行完整日报流程。
+9. 出错时优先查看以下文件，不要手工补数据或绕过失败步骤：
+
+```text
+reports/baidu_multi_source_report.md
+reports/baidu_multi_source_report.json
+reports/baidu_account_data.json
+logs/run.log
+```
+
+说明：候选账户展现、点击、消费全为 `0` 且不属于 Excel 写入范围时，会记录为 `ignored_inactive_accounts`；存在数据但不写入 Excel 时，会记录为 `skipped_unmapped_accounts`，必须人工核对。百度账户名必须完整匹配，禁止模糊匹配。
+
 ## 3. 完整命令速查表
 
 以下内容就是夏思道日常最常用的执行命令速查表，也可以视为命令行参数表。

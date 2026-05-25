@@ -1,0 +1,141 @@
+{
+  "is_template": true,
+  "project_id": "your_multi_source_project_id",
+  "project_name": "多百度来源项目名称",
+  "excel": {
+    "path": "D:/你的项目/2026竞价数据.xlsx",
+    "hourly_sheet": "时段数据",
+    "daily_sheet": "百度",
+    "engine": "openpyxl"
+  },
+  "kst": {
+    "export_dir": "D:/你的项目/商务通导出",
+    "auto_pick_latest": true,
+    "max_file_age_hours": 2
+  },
+  "baidu": {
+    "credential_profile": "",
+    "data_path": [
+      "首页",
+      "数据报告",
+      "数据概览",
+      "搜索推广"
+    ]
+  },
+  "baidu_sources": [
+    {
+      "source_id": "source_a",
+      "source_name": "百度来源A",
+      "credential_profile": "your_project_source_a_baidu",
+      "accounts": [
+        {
+          "standard_name": "实际写入账户01",
+          "baidu_names": [
+            "百度后台完整账户名01"
+          ],
+          "excel_name": "实际写入账户01",
+          "kst_ids": [
+            "商务通推广备注ID_01"
+          ],
+          "kst_names": [
+            "商务通账户名01"
+          ]
+        },
+        {
+          "standard_name": "候选账户不写入示例01",
+          "baidu_names": [
+            "百度后台完整候选账户名01"
+          ],
+          "excel_name": "候选账户不写入示例01",
+          "kst_ids": [
+            "商务通推广备注ID_候选01"
+          ],
+          "kst_names": [
+            "商务通候选账户名01"
+          ]
+        }
+      ]
+    },
+    {
+      "source_id": "source_b",
+      "source_name": "百度来源B",
+      "credential_profile": "your_project_source_b_baidu",
+      "accounts": [
+        {
+          "standard_name": "实际写入账户02",
+          "baidu_names": [
+            "百度后台完整账户名02"
+          ],
+          "excel_name": "实际写入账户02",
+          "kst_ids": [
+            "商务通推广备注ID_02"
+          ],
+          "kst_names": [
+            "商务通账户名02"
+          ]
+        }
+      ]
+    }
+  ],
+  "excel_accounts": [
+    {
+      "standard_name": "实际写入账户01"
+    },
+    {
+      "standard_name": "实际写入账户02"
+    }
+  ],
+  "accounts": [
+    {
+      "standard_name": "实际写入账户01",
+      "baidu_names": [
+        "百度后台完整账户名01"
+      ],
+      "excel_name": "实际写入账户01",
+      "kst_ids": [
+        "商务通推广备注ID_01"
+      ],
+      "kst_names": [
+        "商务通账户名01"
+      ]
+    },
+    {
+      "standard_name": "实际写入账户02",
+      "baidu_names": [
+        "百度后台完整账户名02"
+      ],
+      "excel_name": "实际写入账户02",
+      "kst_ids": [
+        "商务通推广备注ID_02"
+      ],
+      "kst_names": [
+        "商务通账户名02"
+      ]
+    }
+  ],
+  "hourly": {
+    "periods": [
+      "11点",
+      "15点",
+      "18点"
+    ]
+  },
+  "daily": {
+    "write_fields": [
+      "展现",
+      "点击",
+      "消费",
+      "有效对话",
+      "无效对话",
+      "一般有效对话",
+      "有效转潜",
+      "总转潜"
+    ],
+    "do_not_write_fields": [
+      "总对话",
+      "预约",
+      "到诊",
+      "就诊"
+    ]
+  }
+}
