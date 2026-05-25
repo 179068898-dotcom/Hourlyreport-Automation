@@ -160,7 +160,7 @@ def parse_kst_export_file(file_path: str | Path, config: dict[str, Any], root: P
         if rows and not field_info["has_tag"]:
             errors.append("未识别到名片标签字段")
         if rows and not field_info["has_visitor_messages"]:
-            errors.append("未识别到访客消息数/访客发送数字段，无法按访客发送数量大于等于 1 统计总对话")
+            errors.append("未识别到访客消息数/访客发送消息数/访客发送数字段，无法按访客发送数量大于等于 1 统计总对话")
         if rows and not (field_info["has_remark"] or field_info["has_account"]):
             errors.append("未识别到账户归属字段或备注说明推广 ID 字段")
         if rows and field_info["has_dialog_time"]:

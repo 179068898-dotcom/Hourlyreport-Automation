@@ -921,6 +921,11 @@ def test_visitor_dialog_accepts_visitor_sent_count_alias():
     assert has_visitor_dialog({"访客发送数": "0"}) is False
 
 
+def test_visitor_dialog_accepts_visitor_sent_message_count_alias():
+    assert has_visitor_dialog({"访客发送消息数": "1"}) is True
+    assert has_visitor_dialog({"访客发送消息数": "0"}) is False
+
+
 def test_kst_daily_tags_do_not_count_invalid_as_valid():
     invalid = classify_daily_dialog_by_tags("转潜-无效, 无效")
     assert invalid["总对话"] == 1
@@ -1021,6 +1026,25 @@ def test_parse_kst_export_accepts_visitor_sent_count_header(tmp_path):
     assert result["dialog_data"]["accounts"]["银康01"]["有效"] == 1
 
 
+def test_parse_kst_export_accepts_visitor_sent_message_count_header(tmp_path):
+    export = tmp_path / "kst_sent_message_count.csv"
+    today = date.today().isoformat()
+    export.write_text(
+        "对话时间,备注说明,名片标签,访客发送消息数\n"
+        f"{today} 10:00,72828178-abc,转潜-有效,1\n",
+        encoding="utf-8-sig",
+    )
+    config = _kunming_niu_runtime_config()
+    config["kst"] = {"export_dir": str(tmp_path), "promotion_id_accounts": _kunming_niu_runtime_config()["kst"]["promotion_id_accounts"]}
+
+    result = parse_kst_export_file(export, config, tmp_path, "15点")
+
+    assert result["parse_report"]["passed"] is True
+    assert result["parse_report"]["field_info"]["has_visitor_messages"] is True
+    assert result["dialog_data"]["accounts"]["银康01"]["总对话"] == 1
+    assert result["dialog_data"]["accounts"]["银康01"]["有效"] == 1
+
+
 def test_parse_kst_export_filters_non_current_date_without_marking_unmatched(tmp_path):
     export = tmp_path / "kst.csv"
     export.write_text(
@@ -1078,6 +1102,23 @@ def test_parse_kst_daily_accepts_visitor_sent_count_header(tmp_path):
     export = tmp_path / "kst_daily_sent_count.csv"
     export.write_text(
         "对话时间,备注说明,名片标签,访客发送数\n"
+        "2026-05-07 10:00,72828178-abc,转潜-有效,1\n",
+        encoding="utf-8-sig",
+    )
+
+    result = parse_kst_daily_file(export, _kunming_niu_runtime_config(), tmp_path, "2026-05-07")
+
+    assert result["parse_report"]["passed"] is True
+    assert result["parse_report"]["field_info"]["has_visitor_messages"] is True
+    assert result["daily_data"]["accounts"]["银康01"]["总对话"] == 1
+    assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 1
+    assert result["daily_data"]["accounts"]["银康01"]["无效对话"] == 0
+
+
+def test_parse_kst_daily_accepts_visitor_sent_message_count_header(tmp_path):
+    export = tmp_path / "kst_daily_sent_message_count.csv"
+    export.write_text(
+        "对话时间,备注说明,名片标签,访客发送消息数\n"
         "2026-05-07 10:00,72828178-abc,转潜-有效,1\n",
         encoding="utf-8-sig",
     )
@@ -6256,6 +6297,43 @@ def test_shenyang_niu_config_resolves_two_baidu_sources():
     }
     assert sources[1]["accounts"][2]["kst_ids"] == ["47190275"]
     assert sources[1]["accounts"][2]["baidu_names"] == ["沈阳银康银屑病3"]
+
+
+def test_hefei_bai_config_resolves_two_baidu_sources_and_three_excel_accounts():
+    from modules.project_config import build_runtime_config_from_project, load_project_config, validate_project_config
+    from modules.baidu_multi_source import resolve_baidu_sources
+
+    project = load_project_config(Path.cwd(), "hefei_bai")
+    runtime = build_runtime_config_from_project(project, {})
+    sources = resolve_baidu_sources(runtime)
+
+    assert validate_project_config(project) == []
+    assert project["project_id"] == "hefei_bai"
+    assert project["project_name"] == "合肥白"
+    assert [source["source_id"] for source in sources] == ["hefei_bai_huaxia", "hefei_bai_xinhuaxia"]
+    assert [source["credential_profile"] for source in sources] == [
+        "hefei_bai_huaxia_baidu",
+        "hefei_bai_xinhuaxia_baidu",
+    ]
+    assert [account["standard_name"] for account in project["excel_accounts"]] == [
+        "华夏白癜风-新",
+        "华夏白癜风-新2",
+        "新华夏白癜风3",
+    ]
+    assert list(runtime["accounts"]) == ["华夏白癜风-新", "华夏白癜风-新2", "新华夏白癜风3"]
+    assert runtime["kst"]["promotion_id_accounts"] == {
+        "64544816": "华夏白癜风-新",
+        "64607455": "华夏白癜风-新2",
+        "34910745": "新华夏白癜风3",
+    }
+
+
+def test_secrets_example_has_empty_hefei_bai_profiles():
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
+
+    for profile in ["hefei_bai_huaxia_baidu", "hefei_bai_xinhuaxia_baidu"]:
+        assert data["baidu"][profile] == {"username": "", "password": ""}
 
 
 def test_validate_project_config_rejects_duplicate_baidu_name_inside_same_source():

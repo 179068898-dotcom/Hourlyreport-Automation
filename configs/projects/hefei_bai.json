@@ -1,0 +1,96 @@
+{
+  "project_id": "hefei_bai",
+  "project_name": "合肥白",
+  "excel": {
+    "path": "D:\\Seafile\\【竞价】\\【❤合肥白】\\【2026年】【合肥白】竞价数据\\【合肥】2026竞价数据.xlsx",
+    "hourly_sheet": "时段数据",
+    "daily_sheet": "百度",
+    "engine": "openpyxl"
+  },
+  "kst": {
+    "export_dir": "D:\\商务通数据\\合肥白",
+    "auto_pick_latest": true,
+    "max_file_age_hours": 2
+  },
+  "baidu": {
+    "credential_profile": "",
+    "data_path": [
+      "首页",
+      "数据报告",
+      "数据概览",
+      "搜索推广"
+    ]
+  },
+  "baidu_sources": [
+    {
+      "source_id": "hefei_bai_huaxia",
+      "source_name": "合肥华夏",
+      "credential_profile": "hefei_bai_huaxia_baidu",
+      "accounts": [
+        {
+          "standard_name": "华夏白癜风-新",
+          "baidu_names": ["华夏白癜风-新"],
+          "excel_name": "华夏白癜风-新",
+          "kst_ids": ["64544816"],
+          "kst_names": ["华夏白癜风-新"]
+        },
+        {
+          "standard_name": "华夏白癜风-新2",
+          "baidu_names": ["华夏白癜风-新2"],
+          "excel_name": "华夏白癜风-新2",
+          "kst_ids": ["64607455"],
+          "kst_names": ["华夏白癜风-新2"]
+        }
+      ]
+    },
+    {
+      "source_id": "hefei_bai_xinhuaxia",
+      "source_name": "合肥新华夏",
+      "credential_profile": "hefei_bai_xinhuaxia_baidu",
+      "accounts": [
+        {
+          "standard_name": "新华夏白癜风3",
+          "baidu_names": ["新华夏白癜风3"],
+          "excel_name": "新华夏白癜风3",
+          "kst_ids": ["34910745"],
+          "kst_names": ["新华夏白癜风3"]
+        }
+      ]
+    }
+  ],
+  "excel_accounts": [
+    {"standard_name": "华夏白癜风-新"},
+    {"standard_name": "华夏白癜风-新2"},
+    {"standard_name": "新华夏白癜风3"}
+  ],
+  "accounts": [
+    {
+      "standard_name": "华夏白癜风-新",
+      "baidu_names": ["华夏白癜风-新"],
+      "excel_name": "华夏白癜风-新",
+      "kst_ids": ["64544816"],
+      "kst_names": ["华夏白癜风-新"]
+    },
+    {
+      "standard_name": "华夏白癜风-新2",
+      "baidu_names": ["华夏白癜风-新2"],
+      "excel_name": "华夏白癜风-新2",
+      "kst_ids": ["64607455"],
+      "kst_names": ["华夏白癜风-新2"]
+    },
+    {
+      "standard_name": "新华夏白癜风3",
+      "baidu_names": ["新华夏白癜风3"],
+      "excel_name": "新华夏白癜风3",
+      "kst_ids": ["34910745"],
+      "kst_names": ["新华夏白癜风3"]
+    }
+  ],
+  "hourly": {
+    "periods": ["11点", "15点", "18点"]
+  },
+  "daily": {
+    "write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"],
+    "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"]
+  }
+}
