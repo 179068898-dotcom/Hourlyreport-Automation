@@ -7,6 +7,7 @@ from typing import Any, Callable
 from modules.baidu_multi_source import resolve_baidu_sources
 from modules.browser_manager import get_browser_settings
 from modules.chrome_debug import is_chrome_debug_port_alive
+from modules.daily_excel_inspector import inspect_daily_excel_structure
 from modules.excel_inspector import inspect_excel_structure
 from modules.project_config import validate_project_config
 
@@ -112,6 +113,7 @@ def run_preflight(
     project: dict[str, Any],
     config: dict[str, Any],
     *,
+    task: str = "hourly",
     chrome_check_func: Callable[..., bool] = is_chrome_debug_port_alive,
 ) -> dict[str, Any]:
     root_path = Path(root)
@@ -136,15 +138,17 @@ def run_preflight(
 
     excel_path = _resolve(root_path, config.get("excel_path"))
     add(bool(excel_path and excel_path.exists()), "Excel 路径存在" if excel_path and excel_path.exists() else f"Excel 路径不存在：{excel_path or ''}")
+    sheet_label = "日报" if task == "daily" else "小时报"
+    structure_func = inspect_daily_excel_structure if task == "daily" else inspect_excel_structure
     if excel_path and excel_path.exists():
         try:
-            structure = inspect_excel_structure(config=config, root=root_path, logger=_SilentLogger())
+            structure = structure_func(config=config, root=root_path, logger=_SilentLogger())
             errors = structure.get("errors") or []
-            add(not errors, "小时报 sheet 结构可识别" if not errors else "小时报 sheet 结构识别失败：" + "；".join(errors))
+            add(not errors, f"{sheet_label} sheet 结构可识别" if not errors else f"{sheet_label} sheet 结构识别失败：" + "；".join(errors))
         except Exception as exc:
-            add(False, f"小时报 sheet 结构识别失败：{exc}")
+            add(False, f"{sheet_label} sheet 结构识别失败：{exc}")
     else:
-        add(False, "小时报 sheet 结构无法检查：Excel 不存在")
+        add(False, f"{sheet_label} sheet 结构无法检查：Excel 不存在")
 
     kst_dir = _resolve(root_path, config.get("kst", {}).get("export_dir"))
     add(bool(kst_dir and kst_dir.exists()), "商务通目录存在" if kst_dir and kst_dir.exists() else f"商务通目录不存在：{kst_dir or ''}")
@@ -157,6 +161,7 @@ def run_preflight(
     return {
         "passed": all(item["passed"] for item in checks),
         "mode": "preflight",
+        "task": task,
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),
         "checks": checks,

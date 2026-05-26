@@ -3167,6 +3167,141 @@ def test_preflight_credentials_checks_every_multi_source_profile_without_leaking
     assert "secret-pass-b" not in output
 
 
+def _prepare_daily_preflight_files(tmp_path, credentials: dict) -> dict:
+    (tmp_path / "main.py").write_text("", encoding="utf-8")
+    (tmp_path / "kst_exports").mkdir()
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(
+        json.dumps({"baidu": credentials}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    excel_path = tmp_path / "daily.xlsx"
+    excel_path.write_text("", encoding="utf-8")
+    config = _baidu_credential_test_config(*credentials.keys())
+    config["excel_path"] = str(excel_path)
+    config["kst"] = {"export_dir": "kst_exports"}
+    return config
+
+
+def test_daily_preflight_selects_daily_sheet_check_and_hides_credentials(tmp_path, monkeypatch):
+    import modules.preflight as preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {"profile_a": {"username": "daily-secret-user", "password": "daily-secret-password"}},
+    )
+    selected = []
+
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+    monkeypatch.setattr(preflight, "inspect_excel_structure", lambda **kwargs: (_ for _ in ()).throw(AssertionError("日报不得检查小时报 sheet")))
+    monkeypatch.setattr(
+        preflight,
+        "inspect_daily_excel_structure",
+        lambda **kwargs: selected.append("daily") or {"errors": []},
+        raising=False,
+    )
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        task="daily",
+        chrome_check_func=lambda **kwargs: True,
+    )
+    output = json.dumps(report, ensure_ascii=False)
+
+    assert report["passed"] is True
+    assert report["task"] == "daily"
+    assert selected == ["daily"]
+    assert "daily-secret-user" not in output
+    assert "daily-secret-password" not in output
+
+
+def test_daily_preflight_checks_all_multi_source_profiles(tmp_path, monkeypatch):
+    import modules.preflight as preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {
+            "profile_a": {"username": "u-a", "password": "p-a"},
+            "profile_b": {"username": "u-b", "password": "p-b"},
+        },
+    )
+
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+    monkeypatch.setattr(
+        preflight,
+        "inspect_daily_excel_structure",
+        lambda **kwargs: {"errors": []},
+        raising=False,
+    )
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        task="daily",
+        chrome_check_func=lambda **kwargs: True,
+    )
+
+    assert report["passed"] is True
+    assert [item["credential_profile"] for item in report["credentials"]["profiles"]] == ["profile_a", "profile_b"]
+
+
+def test_preflight_defaults_to_hourly_sheet_check(tmp_path, monkeypatch):
+    import modules.preflight as preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {"profile_a": {"username": "hourly-user", "password": "hourly-password"}},
+    )
+    selected = []
+
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+    monkeypatch.setattr(
+        preflight,
+        "inspect_excel_structure",
+        lambda **kwargs: selected.append("hourly") or {"errors": []},
+    )
+    monkeypatch.setattr(
+        preflight,
+        "inspect_daily_excel_structure",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("默认预检不得检查日报 sheet")),
+    )
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        chrome_check_func=lambda **kwargs: True,
+    )
+
+    assert report["passed"] is True
+    assert report["task"] == "hourly"
+    assert selected == ["hourly"]
+
+
+def test_cli_preflight_accepts_daily_task_and_passes_it_to_runner(tmp_path, monkeypatch):
+    import main as cli_main
+
+    calls = []
+    monkeypatch.setattr(cli_main, "ROOT", tmp_path)
+    monkeypatch.setattr(cli_main, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli_main, "get_current_project", lambda root: {"project_id": "demo", "project_name": "演示"})
+    monkeypatch.setattr(cli_main, "build_runtime_config_from_project", lambda current, base: {})
+    monkeypatch.setattr(
+        cli_main,
+        "run_preflight",
+        lambda root, project, config, task="hourly": calls.append(task) or {"passed": True, "checks": [], "credentials": {}},
+    )
+    monkeypatch.setattr("sys.argv", ["main.py", "--mode", "preflight", "--task", "daily"])
+
+    result = cli_main.main()
+
+    assert result == 0
+    assert calls == ["daily"]
+
+
 def test_cli_run_fails_before_baidu_pipeline_when_credential_precheck_fails(tmp_path, monkeypatch):
     import main as cli_main
 
@@ -3180,6 +3315,26 @@ def test_cli_run_fails_before_baidu_pipeline_when_credential_precheck_fails(tmp_
     monkeypatch.setattr(cli_main, "build_runtime_config_from_project", lambda current, base: config)
     monkeypatch.setattr(cli_main, "run_half_auto_pipeline", lambda **kwargs: called.append(kwargs))
     monkeypatch.setattr("sys.argv", ["main.py", "--mode", "run", "--period", "15点", "--yes"])
+
+    result = cli_main.main()
+
+    assert result == 1
+    assert called == []
+
+
+def test_cli_run_daily_fails_before_baidu_pipeline_when_credential_precheck_fails(tmp_path, monkeypatch):
+    import main as cli_main
+
+    project = {"project_id": "demo", "project_name": "演示"}
+    config = _baidu_credential_test_config("missing_baidu")
+    called = []
+
+    monkeypatch.setattr(cli_main, "ROOT", tmp_path)
+    monkeypatch.setattr(cli_main, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli_main, "get_current_project", lambda root: project)
+    monkeypatch.setattr(cli_main, "build_runtime_config_from_project", lambda current, base: config)
+    monkeypatch.setattr(cli_main, "run_daily_pipeline", lambda **kwargs: called.append(kwargs))
+    monkeypatch.setattr("sys.argv", ["main.py", "--mode", "run-daily", "--yes"])
 
     result = cli_main.main()
 
@@ -3418,6 +3573,30 @@ def test_openclaw_hourly_sop_documents_preflight_credentials_and_password_rule()
     for period in ["11点", "15点", "18点"]:
         assert f"run --period {period}" in content
     assert "UTF-8" in content
+
+
+def test_openclaw_daily_bat_runs_daily_preflight_before_daily_pipeline():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "run_openclaw_daily.bat").read_text(encoding="utf-8")
+
+    assert "cd /d D:\\自动化脚本\\hourly_report_bot_release_v0.4.4" in script
+    assert "chcp 65001" in script
+    assert "PYTHONUTF8=1" in script
+    assert "PYTHONIOENCODING=utf-8" in script
+    assert "main.py --mode preflight --task daily" in script
+    assert "main.py --mode run-daily --yes" in script
+    assert 'main.py --mode run-daily --date "%~1" --yes' in script
+
+
+def test_openclaw_daily_sop_documents_preflight_password_and_visit_rules():
+    root = Path(__file__).resolve().parents[1]
+    content = (root / "docs" / "openclaw_daily_sop.md").read_text(encoding="utf-8")
+
+    assert "OpenClaw 日报自动化执行手册" in content
+    assert "run_openclaw_daily.bat" in content
+    assert "preflight --task daily" in content
+    assert "禁止向用户索要百度密码" in content
+    assert "到诊数需要问姜老师或用户确认" in content
 
 
 # ── console_ui 新增测试 ──────────────────────────────────

@@ -104,6 +104,21 @@ OpenClaw 执行小时报必须优先使用 `run_openclaw_hourly.bat 11点|15点|
 
 完整执行手册见：`docs/openclaw_hourly_sop.md`。
 
+## 2.4 OpenClaw 日报自动执行规范
+
+OpenClaw 执行日报必须优先使用：
+
+```cmd
+run_openclaw_daily.bat
+run_openclaw_daily.bat 2026-05-24
+```
+
+日报入口会先运行 `main.py --mode preflight --task daily`，预检失败即停止，不得继续执行 `run-daily`。OpenClaw 优先调用 `.bat`，不得直接拼接 `main.py` 命令绕过预检；凭据位于本机 `secrets/secrets.json`，不得向用户索要百度密码，不得输出或提交真实密码。
+
+日报完成后，程序不会自动乱填到诊数；到诊数必须问姜老师或用户确认。外部脚本 `D:\xia_sidao\tools\fill_daily_visit.py` 仅可在确认存在且参数明确后人工执行，不包含在日报批处理入口中。
+
+完整执行手册见：`docs/openclaw_daily_sop.md`。
+
 ## 3. 完整命令速查表
 
 以下内容就是夏思道日常最常用的执行命令速查表，也可以视为命令行参数表。
@@ -160,6 +175,14 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
 
 ### 3.2 小时报一键流
 
+OpenClaw 优先入口：
+
+```cmd
+run_openclaw_hourly.bat 11点
+run_openclaw_hourly.bat 15点
+run_openclaw_hourly.bat 18点
+```
+
 ```cmd
 .venv\Scripts\python.exe main.py --mode run --period 11点 --yes
 ```
@@ -185,6 +208,13 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
 说明：当自动识别最新商务通导出文件不准确时，用 `--file` 指定。
 
 ### 3.3 日报一键流
+
+OpenClaw 优先入口：
+
+```cmd
+run_openclaw_daily.bat
+run_openclaw_daily.bat 2026-05-24
+```
 
 ```cmd
 .venv\Scripts\python.exe main.py --mode run-daily

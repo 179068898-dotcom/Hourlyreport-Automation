@@ -81,6 +81,7 @@ def main() -> int | None:
     parser.add_argument("--kst-file", dest="file", default=None, help="同 --file，快商通人工导出的 Excel/CSV 文件路径")
     parser.add_argument("--yes", action="store_true", help="run 模式跳过运行前确认清单")
     parser.add_argument("--date", default=None, help="日报日期，例如：2026-05-07；不传则默认昨天")
+    parser.add_argument("--task", choices=["hourly", "daily"], default="hourly", help="preflight 任务类型，默认检查小时报")
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
     parser.add_argument("--verbose", action="store_true", help="启用详细终端输出")
     args = parser.parse_args()
@@ -141,7 +142,7 @@ def main() -> int | None:
         return 0 if report.get("passed") else 1
 
     if args.mode == "preflight":
-        report = run_preflight(ROOT, current_project, config)
+        report = run_preflight(ROOT, current_project, config, task=args.task)
         out = ROOT / "reports" / "preflight_report.json"
         out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print_preflight_report(report)
