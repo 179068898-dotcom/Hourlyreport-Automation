@@ -422,6 +422,8 @@ def test_menu_text_is_simplified_for_new_users():
     assert "3. 项目列表" in MENU_TEXT
     assert "4. 项目信息" in MENU_TEXT
     assert "5. 文件合格校验" in MENU_TEXT
+    assert "6. 更多功能" in MENU_TEXT
+    assert "R. 刷新状态" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
     # 旧文案不应出现
     assert "运行日报" not in MENU_TEXT
@@ -3693,8 +3695,7 @@ def test_print_banner_shows_project_and_version():
         set_output_func(print)
 
     output = buf.getvalue()
-    assert "百度竞价日报" in output
-    assert "小时报自动化助手" in output
+    assert "百度竞价自动化控制台" in output
     assert "1.0.0" in output
     assert "测试项目" in output
     assert "test.xlsx" in output
@@ -3787,7 +3788,183 @@ def test_menu_new_text_entries_exist():
     assert "3. 项目列表" in MENU_TEXT
     assert "4. 项目信息" in MENU_TEXT
     assert "5. 文件合格校验" in MENU_TEXT
+    assert "6. 更多功能" in MENU_TEXT
+    assert "R. 刷新状态" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
+
+
+def test_more_features_menu_contains_console_sections():
+    from menu import MORE_FEATURES_MENU_TEXT
+
+    for text in ["预检与环境", "报告与日志", "配置与诊断", "OpenClaw 帮助", "多百度来源摘要"]:
+        assert text in MORE_FEATURES_MENU_TEXT
+
+
+def test_diagnostic_menu_exposes_sheet_text_dump_without_write_action():
+    from menu import DIAGNOSTIC_MENU_TEXT
+
+    assert "导出 sheet 文本诊断" in DIAGNOSTIC_MENU_TEXT
+    assert "写入" not in DIAGNOSTIC_MENU_TEXT
+
+
+def test_openclaw_menu_help_includes_bat_commands_and_password_rule():
+    from menu import build_openclaw_help_lines
+
+    text = "\n".join(build_openclaw_help_lines())
+
+    assert "run_openclaw_hourly.bat 11点" in text
+    assert "run_openclaw_daily.bat" in text
+    assert "不得询问或输出真实百度密码" in text
+    assert "到诊数必须人工确认" in text
+
+
+def test_multi_source_menu_summary_only_displays_safe_configuration_metadata():
+    from menu import build_baidu_source_summary_lines
+
+    project = {
+        "project_name": "多来源项目",
+        "excel_accounts": [{"standard_name": "写入A"}],
+        "baidu_sources": [
+            {
+                "source_id": "a",
+                "source_name": "来源A",
+                "credential_profile": "profile_a",
+                "accounts": [{"standard_name": "写入A"}],
+                "username": "secret-user",
+                "password": "secret-password",
+            },
+            {
+                "source_id": "b",
+                "source_name": "来源B",
+                "credential_profile": "profile_b",
+                "accounts": [{"standard_name": "候选B"}],
+            },
+        ],
+    }
+
+    text = "\n".join(build_baidu_source_summary_lines(project))
+
+    assert "百度来源数量：2" in text
+    assert "来源A" in text
+    assert "profile_a" in text
+    assert "写入A" in text
+    assert "候选B" in text
+    assert "ignored_inactive_accounts" in text
+    assert "skipped_unmapped_accounts" in text
+    assert "secret-user" not in text
+    assert "secret-password" not in text
+
+
+def test_single_source_menu_summary_is_brief():
+    from menu import build_baidu_source_summary_lines
+
+    assert build_baidu_source_summary_lines({"project_name": "单来源"}) == [
+        "当前项目为单百度来源项目。"
+    ]
+
+
+def test_console_home_context_shows_project_id_source_type_and_short_excel_name():
+    from io import StringIO
+
+    from modules.console_ui import print_console_context, set_output_func
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_console_context({
+            "project_name": "沈阳牛",
+            "project_id": "shenyang_niu",
+            "excel": {"path": r"D:\very\long\path\沈阳YXB2026竞价数据.xlsx"},
+            "baidu_sources": [{}, {}],
+        })
+    finally:
+        set_output_func(print)
+
+    text = buf.getvalue()
+    assert "沈阳牛" in text
+    assert "shenyang_niu" in text
+    assert "多百度来源 x2" in text
+    assert "沈阳YXB2026竞价数据.xlsx" in text
+    assert r"D:\very\long\path" not in text
+
+
+def test_menu_enhancement_does_not_introduce_textual_dependency():
+    root = Path(__file__).resolve().parents[1]
+    content = (root / "menu.py").read_text(encoding="utf-8") + (root / "modules" / "console_ui.py").read_text(encoding="utf-8")
+
+    assert "import textual" not in content.lower()
+    assert "from textual" not in content.lower()
+
+
+def test_menu_preflight_execution_writes_report_and_logs_result(tmp_path, monkeypatch):
+    import menu
+
+    entries = []
+
+    class Logger:
+        def info(self, *args):
+            entries.append(args)
+
+    monkeypatch.setattr(
+        menu,
+        "run_preflight",
+        lambda root, project, config, task: {
+            "passed": True,
+            "task": task,
+            "checks": [],
+            "credentials": {},
+        },
+    )
+
+    report = menu._execute_preflight(tmp_path, {}, {}, "daily", Logger())
+
+    assert report["passed"] is True
+    assert json.loads((tmp_path / "reports" / "preflight_report.json").read_text(encoding="utf-8"))["task"] == "daily"
+    assert entries
+
+
+def test_menu_refresh_choice_does_not_dispatch_task(tmp_path, monkeypatch):
+    import menu
+
+    project = {
+        "project_id": "demo",
+        "project_name": "演示",
+        "excel": {"path": "demo.xlsx"},
+    }
+    answers = iter(["r", "0"])
+    monkeypatch.setattr(menu, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(menu, "get_current_project", lambda root: project)
+    monkeypatch.setattr(menu, "build_runtime_config", lambda current, base: {})
+    monkeypatch.setattr(menu, "setup_logger", lambda path: object())
+    monkeypatch.setattr(menu, "_check_chrome_debug", lambda *args, **kwargs: True)
+    monkeypatch.setattr(menu, "dispatch_menu_task", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("刷新不得执行任务")))
+
+    menu.run_menu(root=tmp_path, input_func=lambda prompt: next(answers), output_func=lambda text: None)
+
+
+def test_menu_shortcuts_open_safe_support_sections(tmp_path, monkeypatch):
+    import menu
+
+    project = {
+        "project_id": "demo",
+        "project_name": "演示",
+        "excel": {"path": "demo.xlsx"},
+    }
+    calls = []
+    answers = iter(["p", "l", "o", "0"])
+    monkeypatch.setattr(menu, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(menu, "get_current_project", lambda root: project)
+    monkeypatch.setattr(menu, "build_runtime_config", lambda current, base: {})
+    monkeypatch.setattr(menu, "setup_logger", lambda path: object())
+    monkeypatch.setattr(menu, "_check_chrome_debug", lambda *args, **kwargs: True)
+    monkeypatch.setattr(menu, "_run_preflight_menu", lambda *args: calls.append("preflight"))
+    monkeypatch.setattr(menu, "_run_report_menu", lambda *args: calls.append("reports"))
+    monkeypatch.setattr(menu, "_run_openclaw_menu", lambda *args: calls.append("openclaw"))
+    monkeypatch.setattr(menu, "dispatch_menu_task", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("快捷键不得执行任务")))
+
+    menu.run_menu(root=tmp_path, input_func=lambda prompt: next(answers), output_func=lambda text: None)
+
+    assert calls == ["preflight", "reports", "openclaw"]
 
 
 # ── 返回逻辑测试 ──────────────────────────────────────────

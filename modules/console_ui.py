@@ -177,7 +177,7 @@ def print_banner(project: dict[str, Any] | None = None,
     sep = _bright("  " + "=" * (width - 4))
     _emit("")
     _emit(sep)
-    _emit(_bright(f"   百度竞价日报 / 小时报自动化助手  v{ver}"))
+    _emit(_bright(f"   百度竞价自动化控制台  v{ver}"))
     _emit(sep)
     if project:
         _emit(f"   项目：{_cyan(project.get('project_name', ''))}")
@@ -215,6 +215,11 @@ def print_main_menu(project: dict[str, Any] | None = None,
     _emit("  3. 项目列表")
     _emit("  4. 项目信息")
     _emit("  5. 文件合格校验")
+    _emit("  6. 更多功能")
+    _emit("  P. 预检与环境")
+    _emit("  L. 报告与日志")
+    _emit("  O. OpenClaw 帮助")
+    _emit("  R. 刷新状态")
     _emit("  0. 退出")
     _emit(_bright("  " + "=" * 58))
     _emit("")
@@ -331,6 +336,24 @@ def print_task_status_header(project: dict[str, Any], root: Path | None = None) 
         hourly_parts.append(f"{period} {tag}")
     _emit(f"    小时报：{'  |  '.join(hourly_parts)}")
     _emit(_bright("  " + "=" * 58))
+    _emit("")
+
+
+def print_console_context(project: dict[str, Any]) -> None:
+    """打印首页当前项目摘要，不执行任何检查或外部动作。"""
+    excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
+    excel_path = excel.get("path") or project.get("excel_path", "")
+    sources = project.get("baidu_sources")
+    if isinstance(sources, list) and len(sources) > 1:
+        project_type = f"多百度来源 x{len(sources)}"
+    else:
+        project_type = "单百度来源"
+    _emit("")
+    _emit(
+        f"  项目：{project.get('project_name', '')} "
+        f"[{project.get('project_id', '')}]  |  类型：{project_type}"
+    )
+    _emit(f"  Excel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}")
     _emit("")
 
 
