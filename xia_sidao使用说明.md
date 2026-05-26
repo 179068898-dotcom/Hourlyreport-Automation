@@ -98,6 +98,12 @@ logs/run.log
 
 说明：候选账户展现、点击、消费全为 `0` 且不属于 Excel 写入范围时，会记录为 `ignored_inactive_accounts`；存在数据但不写入 Excel 时，会记录为 `skipped_unmapped_accounts`，必须人工核对。百度账户名必须完整匹配，禁止模糊匹配。
 
+## 2.3 OpenClaw 小时报自动执行规范
+
+OpenClaw 执行小时报必须优先使用 `run_openclaw_hourly.bat 11点|15点|18点`，由脚本先固定目录与 UTF-8 环境，再运行 `preflight`，通过后才执行小时报。不得直接在 CAS 登录页向用户索要百度密码，也不得用 ANSI/GBK 覆盖写回中文配置或说明文件。
+
+完整执行手册见：`docs/openclaw_hourly_sop.md`。
+
 ## 3. 完整命令速查表
 
 以下内容就是夏思道日常最常用的执行命令速查表，也可以视为命令行参数表。

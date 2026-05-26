@@ -3088,6 +3088,105 @@ def test_build_login_failure_message_defaults_when_config_empty():
     assert "credentials.local.json" in msg
 
 
+def _baidu_credential_test_config(*profiles: str) -> dict:
+    config = {
+        "project_id": "demo",
+        "project_name": "演示项目",
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {"credential_profile": profiles[0] if profiles else ""},
+    }
+    if len(profiles) > 1:
+        config["baidu_sources"] = [
+            {"source_id": f"source_{index}", "source_name": f"来源{index}", "credential_profile": profile, "accounts": []}
+            for index, profile in enumerate(profiles, start=1)
+        ]
+    return config
+
+
+def test_preflight_credentials_fails_for_invalid_secrets_json_without_values(tmp_path):
+    from modules.preflight import check_baidu_credentials
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text('{"baidu": invalid', encoding="utf-8")
+
+    report = check_baidu_credentials(tmp_path, _baidu_credential_test_config("demo_baidu"))
+    output = json.dumps(report, ensure_ascii=False)
+
+    assert report["passed"] is False
+    assert "不是合法 JSON" in report["errors"][0]
+    assert "line" in report["errors"][0]
+    assert "invalid-secret-value" not in output
+
+
+def test_preflight_credentials_fails_for_missing_profile(tmp_path):
+    from modules.preflight import check_baidu_credentials
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text('{"baidu": {}}', encoding="utf-8")
+
+    report = check_baidu_credentials(tmp_path, _baidu_credential_test_config("missing_baidu"))
+
+    assert report["passed"] is False
+    assert "缺少 credential_profile：missing_baidu" in report["errors"]
+
+
+def test_preflight_credentials_fails_for_empty_username_or_password(tmp_path):
+    from modules.preflight import check_baidu_credentials
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(
+        json.dumps({"baidu": {"empty_user": {"username": "", "password": "value"}, "empty_password": {"username": "value", "password": ""}}}),
+        encoding="utf-8",
+    )
+
+    report = check_baidu_credentials(tmp_path, _baidu_credential_test_config("empty_user", "empty_password"))
+
+    assert report["passed"] is False
+    assert "profile empty_user 的 username 为空" in report["errors"]
+    assert "profile empty_password 的 password 为空" in report["errors"]
+
+
+def test_preflight_credentials_checks_every_multi_source_profile_without_leaking_values(tmp_path):
+    from modules.preflight import check_baidu_credentials, print_credential_report
+
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text(
+        json.dumps({"baidu": {"profile_a": {"username": "secret-user-a", "password": "secret-pass-a"}, "profile_b": {"username": "secret-user-b", "password": "secret-pass-b"}}}),
+        encoding="utf-8",
+    )
+
+    report = check_baidu_credentials(tmp_path, _baidu_credential_test_config("profile_a", "profile_b"))
+    lines = []
+    print_credential_report(report, output_func=lines.append)
+    output = "\n".join(lines) + json.dumps(report, ensure_ascii=False)
+
+    assert report["passed"] is True
+    assert [item["credential_profile"] for item in report["profiles"]] == ["profile_a", "profile_b"]
+    assert all(item["username_nonempty"] and item["password_nonempty"] for item in report["profiles"])
+    assert "secret-user-a" not in output
+    assert "secret-pass-b" not in output
+
+
+def test_cli_run_fails_before_baidu_pipeline_when_credential_precheck_fails(tmp_path, monkeypatch):
+    import main as cli_main
+
+    project = {"project_id": "demo", "project_name": "演示"}
+    config = _baidu_credential_test_config("missing_baidu")
+    called = []
+
+    monkeypatch.setattr(cli_main, "ROOT", tmp_path)
+    monkeypatch.setattr(cli_main, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(cli_main, "get_current_project", lambda root: project)
+    monkeypatch.setattr(cli_main, "build_runtime_config_from_project", lambda current, base: config)
+    monkeypatch.setattr(cli_main, "run_half_auto_pipeline", lambda **kwargs: called.append(kwargs))
+    monkeypatch.setattr("sys.argv", ["main.py", "--mode", "run", "--period", "15点", "--yes"])
+
+    result = cli_main.main()
+
+    assert result == 1
+    assert called == []
+
+
 # ── Chrome 调试端口自动启动 ──
 
 
@@ -3295,6 +3394,30 @@ def test_run_bat_files_support_dragged_kst_file_argument():
         assert f"--period {period}" in text
         assert 'set "KST_FILE=%~1"' in text
         assert '--file "%KST_FILE%"' in text
+
+
+def test_openclaw_hourly_bat_fixes_utf8_and_runs_preflight_before_hourly_pipeline():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "run_openclaw_hourly.bat").read_text(encoding="utf-8")
+
+    assert "cd /d D:\\自动化脚本\\hourly_report_bot_release_v0.4.4" in script
+    assert "chcp 65001" in script
+    assert "PYTHONUTF8=1" in script
+    assert "PYTHONIOENCODING=utf-8" in script
+    assert ".venv\\Scripts\\python.exe main.py --mode preflight" in script
+    assert "main.py --mode run --period" in script
+
+
+def test_openclaw_hourly_sop_documents_preflight_credentials_and_password_rule():
+    root = Path(__file__).resolve().parents[1]
+    content = (root / "docs" / "openclaw_hourly_sop.md").read_text(encoding="utf-8")
+
+    assert "preflight" in content
+    assert "test-baidu-credentials" in content
+    assert "禁止向用户索要百度密码" in content
+    for period in ["11点", "15点", "18点"]:
+        assert f"run --period {period}" in content
+    assert "UTF-8" in content
 
 
 # ── console_ui 新增测试 ──────────────────────────────────

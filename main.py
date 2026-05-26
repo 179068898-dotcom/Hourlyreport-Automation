@@ -31,6 +31,7 @@ from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_f
 from modules.kst_daily_parser import parse_kst_daily_file
 from modules.logger import setup_logger
 from modules.project_config import build_runtime_config_from_project, get_current_project, list_projects, validate_project_config
+from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
 
@@ -42,7 +43,7 @@ def ensure_runtime_dirs() -> None:
         (ROOT / name).mkdir(exist_ok=True)
 
 
-def main() -> None:
+def main() -> int | None:
     ensure_runtime_dirs()
     parser = argparse.ArgumentParser(description="百度竞价日报/小时报自动化工具")
     parser.add_argument("--mode", required=True, choices=[
@@ -72,6 +73,8 @@ def main() -> None:
         "show-project",
         "validate-project",
         "doctor",
+        "preflight",
+        "test-baidu-credentials",
     ])
     parser.add_argument("--period", default=None, help="时段，例如：11点 / 15点 / 18点")
     parser.add_argument("--file", default=None, help="快商通人工导出的 Excel/CSV 文件路径")
@@ -87,10 +90,12 @@ def main() -> None:
 
     logger = setup_logger(ROOT / "logs" / "run.log")
     base_config = load_config(args.config, fallback_path=ROOT / "config.example.json")
+    config_error: Exception | None = None
     try:
         current_project = get_current_project(ROOT)
         config = build_runtime_config_from_project(current_project, base_config)
-    except Exception:
+    except Exception as exc:
+        config_error = exc
         current_project = {}
         config = base_config
 
@@ -125,6 +130,23 @@ def main() -> None:
         print_doctor_report(report)
         verbose_print(f"详细报告：reports/doctor_report.json")
         return
+
+    if args.mode in {"preflight", "test-baidu-credentials"} and config_error:
+        print_error(f"当前项目配置无法读取：{config_error}")
+        return 1
+
+    if args.mode == "test-baidu-credentials":
+        report = check_baidu_credentials(ROOT, config)
+        print_credential_report(report)
+        return 0 if report.get("passed") else 1
+
+    if args.mode == "preflight":
+        report = run_preflight(ROOT, current_project, config)
+        out = ROOT / "reports" / "preflight_report.json"
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print_preflight_report(report)
+        logger.info("preflight 结果：%s；报告：%s", "通过" if report.get("passed") else "失败", out)
+        return 0 if report.get("passed") else 1
 
     if args.mode == "inspect-excel":
         report = inspect_excel_structure(config=config, root=ROOT, logger=logger)
@@ -338,6 +360,11 @@ def main() -> None:
             print_success(f"日报 Excel 写入完成并复核通过：reports/daily_write_report.json")
         return
     if args.mode == "run":
+        credential_report = check_baidu_credentials(ROOT, config)
+        if not credential_report.get("passed"):
+            print_credential_report(credential_report)
+            print_error("凭据预检未通过，请检查 secrets/secrets.json")
+            return 1
         report = run_half_auto_pipeline(
             config=config,
             root=ROOT,
@@ -352,8 +379,13 @@ def main() -> None:
             print_final_success(f"半自动一键流完成：reports/final_run_report.json")
         else:
             print_final_failure(f"半自动一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/final_run_report.json")
-        return
+        return 0 if report.get("passed") else 1
     if args.mode == "run-daily":
+        credential_report = check_baidu_credentials(ROOT, config)
+        if not credential_report.get("passed"):
+            print_credential_report(credential_report)
+            print_error("凭据预检未通过，请检查 secrets/secrets.json")
+            return 1
         report = run_daily_pipeline(
             config=config,
             root=ROOT,
@@ -366,8 +398,8 @@ def main() -> None:
             print_final_success(f"日报一键流完成：reports/daily_final_run_report.json")
         else:
             print_final_failure(f"日报一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/daily_final_run_report.json")
-        return
+        return 0 if report.get("passed") else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)
