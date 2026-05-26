@@ -7,7 +7,6 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.browser_manager import test_browser_connect
 from modules.chrome_debug import ensure_chrome_debug_ready
 from modules.config_manager import load_config
 from modules.console_ui import (
@@ -36,7 +35,6 @@ from modules.project_config import (
     list_projects,
     load_project_config,
     set_current_project,
-    validate_project_config,
 )
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
 
@@ -47,14 +45,9 @@ ROOT = Path(__file__).resolve().parent
 MENU_TEXT = """
 1. 小时报
 2. 日报
-3. 项目列表
-4. 项目信息
-5. 文件合格校验
-6. 更多功能
-P. 预检与环境
-L. 报告与日志
-O. OpenClaw 帮助
-R. 刷新状态
+3. 切换项目
+4. 检查条件项
+5. 更多功能
 0. 退出
 """
 
@@ -68,23 +61,22 @@ HOURLY_MENU_TEXT = """
 
 MORE_FEATURES_MENU_TEXT = """
 更多功能
-1. 预检与环境
-2. 报告与日志
-3. 配置与诊断
-4. OpenClaw 帮助
-5. 多百度来源摘要
-6. 返回
+1. 报告与日志
+2. 配置诊断
+3. OpenClaw 帮助
+4. 多百度来源摘要
+5. 项目信息详情
+6. 高级分步调试
+0. 返回
 """
 
-PREFLIGHT_MENU_TEXT = """
-预检与环境
-1. 小时报预检
-2. 日报预检
-3. 百度凭据检查
-4. Chrome 9222 连接检查
-5. 当前项目配置检查
-6. 完整 doctor 检查
-7. 返回
+CONDITION_MENU_TEXT = """
+检查条件项
+1. 一键检查当前项目能否运行
+2. 检查百度账号凭据
+3. 检查小时报条件
+4. 检查日报条件
+0. 返回
 """
 
 REPORT_MENU_TEXT = """
@@ -100,16 +92,22 @@ REPORT_MENU_TEXT = """
 """
 
 DIAGNOSTIC_MENU_TEXT = """
-配置与诊断
+配置诊断
 1. 扫描小时报 Excel 结构
 2. 扫描日报 Excel 结构
 3. 导出 sheet 文本诊断
-4. 只抓百度小时报数据
-5. 只抓百度日报数据
-6. 只解析商务通小时报文件
-7. 只解析商务通日报文件
-8. 百度页面状态检测
-9. 百度退出诊断
+0. 返回
+"""
+
+ADVANCED_DEBUG_MENU_TEXT = """
+高级分步调试
+普通同事不要随意执行，遇到异常时按指导使用。
+1. 只抓百度小时报数据
+2. 只抓百度日报数据
+3. 只解析商务通小时报文件
+4. 只解析商务通日报文件
+5. 百度页面状态检测
+6. 百度退出诊断
 0. 返回
 """
 
@@ -341,7 +339,7 @@ def _execute_preflight(
     return report
 
 
-def _run_preflight_menu(
+def _run_condition_menu(
     root: Path,
     base_config: dict[str, Any],
     logger,
@@ -349,31 +347,18 @@ def _run_preflight_menu(
     output_func: Callable[[str], None],
 ) -> None:
     while True:
-        _print_text_block("预检与环境", PREFLIGHT_MENU_TEXT.strip().splitlines()[1:], output_func)
+        _print_text_block("检查条件项", CONDITION_MENU_TEXT.strip().splitlines()[1:], output_func)
         choice = input_func("  请选择选项：").strip()
-        if choice == "7":
+        if choice == "0":
             return
         project, config = _current_config(root, base_config)
-        if choice in {"1", "2"}:
-            report = _execute_preflight(root, project, config, "daily" if choice == "2" else "hourly", logger)
-            print_preflight_report(report, output_func=output_func)
-        elif choice == "3":
-            print_credential_report(check_baidu_credentials(root, config), output_func=output_func)
-        elif choice == "4":
-            report = test_browser_connect(config=config, root=root, logger=logger)
-            output_func("  Chrome 9222：" + ("已连接" if report.get("connected") else "连接失败"))
-            for error in report.get("errors") or []:
-                output_func(f"  {error}")
-        elif choice == "5":
-            errors = validate_project_config(project)
-            if errors:
-                output_func("  当前项目配置检查失败：")
-                for error in errors:
-                    output_func(f"  - {error}")
-            else:
-                output_func(f"  当前项目配置检查通过：{project.get('project_name')} [{project.get('project_id')}]")
-        elif choice == "6":
+        if choice == "1":
             print_doctor_report(run_doctor(root, config))
+        elif choice == "2":
+            print_credential_report(check_baidu_credentials(root, config), output_func=output_func)
+        elif choice in {"3", "4"}:
+            report = _execute_preflight(root, project, config, "daily" if choice == "4" else "hourly", logger)
+            print_preflight_report(report, output_func=output_func)
         else:
             output_func("  无效选项，请重新选择。")
             continue
@@ -427,15 +412,30 @@ def _run_diagnostic_menu(root: Path, input_func: Callable[[str], str], output_fu
             "1": ["--mode", "inspect-excel"],
             "2": ["--mode", "inspect-daily-excel"],
             "3": ["--mode", "dump-sheet-text"],
-            "8": ["--mode", "baidu-detect"],
-            "9": ["--mode", "test-baidu-logout"],
         }.get(choice)
-        if choice in {"4", "6"}:
+        if arguments is None:
+            output_func("  无效选项，请重新选择。")
+            continue
+        _run_cli_diagnostic(root, arguments, output_func)
+        _pause(input_func)
+
+
+def _run_advanced_debug_menu(root: Path, input_func: Callable[[str], str], output_func: Callable[[str], None]) -> None:
+    while True:
+        _print_text_block("高级分步调试", ADVANCED_DEBUG_MENU_TEXT.strip().splitlines()[1:], output_func)
+        choice = input_func("  请选择选项：").strip()
+        if choice == "0":
+            return
+        arguments: list[str] | None = {
+            "5": ["--mode", "baidu-detect"],
+            "6": ["--mode", "test-baidu-logout"],
+        }.get(choice)
+        if choice in {"1", "3"}:
             period = input_func("  输入小时报时段（默认 15点）：").strip() or "15点"
-            arguments = ["--mode", "fetch-baidu-auto" if choice == "4" else "parse-kst-export", "--period", period]
-        elif choice in {"5", "7"}:
+            arguments = ["--mode", "fetch-baidu-auto" if choice == "1" else "parse-kst-export", "--period", period]
+        elif choice in {"2", "4"}:
             target_date = input_func("  输入日报日期 YYYY-MM-DD（留空为默认日期）：").strip()
-            arguments = ["--mode", "fetch-baidu-daily" if choice == "5" else "parse-kst-daily"]
+            arguments = ["--mode", "fetch-baidu-daily" if choice == "2" else "parse-kst-daily"]
             if target_date:
                 arguments.extend(["--date", target_date])
         if arguments is None:
@@ -478,19 +478,22 @@ def _run_more_features_menu(
     while True:
         _print_text_block("更多功能", MORE_FEATURES_MENU_TEXT.strip().splitlines()[1:], output_func)
         choice = input_func("  请选择选项：").strip()
-        if choice == "6":
+        if choice == "0":
             return
         if choice == "1":
-            _run_preflight_menu(root, base_config, logger, input_func, output_func)
-        elif choice == "2":
             _run_report_menu(root, input_func, output_func)
-        elif choice == "3":
+        elif choice == "2":
             _run_diagnostic_menu(root, input_func, output_func)
-        elif choice == "4":
+        elif choice == "3":
             _run_openclaw_menu(root, input_func, output_func)
-        elif choice == "5":
+        elif choice == "4":
             _print_text_block("多百度来源摘要", build_baidu_source_summary_lines(get_current_project(root)), output_func)
             _pause(input_func)
+        elif choice == "5":
+            print_project_info(get_current_project(root))
+            _pause(input_func)
+        elif choice == "6":
+            _run_advanced_debug_menu(root, input_func, output_func)
         else:
             output_func("  无效选项，请重新选择。")
 
@@ -613,12 +616,8 @@ def run_menu(
     logger = setup_logger(root / "logs" / "run.log")
     base_config = load_config(str(root / "config.json"), fallback_path=root / "config.example.json")
     project = get_current_project(root)
-    menu_config = build_runtime_config(project, base_config)
-
     # 启动横幅
     print_banner(project, root=root)
-
-    _check_chrome_debug(root, menu_config, output_func)
 
     while True:
         project = get_current_project(root)
@@ -626,7 +625,7 @@ def run_menu(
         excel_path = excel.get("path") or project.get("excel_path", "")
 
         # 简洁顶部状态行 + 今日任务完成状态
-        print_console_context(project)
+        print_console_context(project, root=root)
         from modules.console_ui import print_task_status_header
         print_task_status_header(project, root=root)
 
@@ -640,20 +639,8 @@ def run_menu(
         if choice.lower() == "r":
             continue
 
-        if choice.lower() == "p":
-            _run_preflight_menu(root, base_config, logger, input_func, output_func)
-            continue
-
-        if choice.lower() == "l":
-            _run_report_menu(root, input_func, output_func)
-            continue
-
-        if choice.lower() == "o":
-            _run_openclaw_menu(root, input_func, output_func)
-            continue
-
         if choice == "3":
-            # 项目列表
+            # 切换项目
             switched = _select_project_from_list(root, input_func, output_func)
             if switched:
                 project = switched
@@ -662,22 +649,10 @@ def run_menu(
             continue
 
         if choice == "4":
-            # 项目信息
-            print_project_info(project)
-            input_func("  输入 0 返回：").strip()
+            _run_condition_menu(root, base_config, logger, input_func, output_func)
             continue
 
         if choice == "5":
-            # 文件合格校验 (doctor)
-            config = build_runtime_config(project, base_config)
-            report = dispatch_menu_task("5", config=config, root=root, logger=logger, output_func=output_func)
-            from modules.console_ui import verbose_print, is_verbose
-            verbose_print(f"详细报告：reports/doctor_report.json")
-            output_func("")
-            input_func("  输入 0 返回：").strip()
-            continue
-
-        if choice == "6":
             _run_more_features_menu(root, base_config, logger, input_func, output_func)
             continue
 

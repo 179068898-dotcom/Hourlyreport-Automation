@@ -8,9 +8,11 @@ Chrome 检查、Excel 写入提示等输出风格一致。
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
+from io import StringIO
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,6 +39,16 @@ except ImportError:
     Fore = _NoopFore()
     Style = _NoopStyle()
 
+# ── Rich 可选展示 ──────────────────────────────────────────
+try:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
+    _HAS_RICH = True
+except ImportError:
+    _HAS_RICH = False
+
 
 # ── 内部状态 ──────────────────────────────────────────────
 _verbose = False
@@ -62,6 +74,24 @@ def set_output_func(func: Callable[[str], None]) -> None:
 
 def _emit(text: str) -> None:
     _output_func(text)
+
+
+def _emit_rich(renderable: Any) -> bool:
+    """渲染 Rich 组件；依赖不可用时由调用方输出纯文本。"""
+    if not _HAS_RICH:
+        return False
+    stream = StringIO()
+    terminal_output = _output_func is print
+    console = Console(
+        file=stream,
+        force_terminal=terminal_output,
+        color_system="auto" if terminal_output else None,
+        width=76,
+    )
+    console.print(renderable)
+    for line in stream.getvalue().rstrip("\n").splitlines():
+        _emit(line)
+    return True
 
 
 # ── 颜色快捷方式 ──────────────────────────────────────────
@@ -124,6 +154,38 @@ def _truncate_excel_name(path: str) -> str:
     return Path(path).name
 
 
+def get_condition_status(root: Path | None, project_id: str) -> str:
+    """从当前项目最近一次检查报告读取首页提示状态，不触发实际检查。"""
+    if not root or not project_id:
+        return "未检查"
+    report_dir = Path(root) / "reports"
+    candidates = [report_dir / "doctor_report.json", report_dir / "preflight_report.json"]
+    candidates = [path for path in candidates if path.exists()]
+    candidates.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    for path in candidates:
+        try:
+            report = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if report.get("project_id") != project_id:
+            continue
+        if report.get("mode") == "preflight":
+            return "通过" if report.get("passed") else "未通过"
+        checks = list((report.get("checks") or {}).values())
+        if report.get("summary", {}).get("all_passed"):
+            return "通过"
+        failures = [item for item in checks if not item.get("passed")]
+        if failures and all(item.get("level") == "warning" for item in failures):
+            return "注意"
+        return "未通过"
+    return "未检查"
+
+
+def _status_text(value: str) -> Text:
+    styles = {"通过": "green", "已完成": "green", "注意": "yellow", "未通过": "red", "未完成": "red", "未检查": "dim"}
+    return Text(value, style=styles.get(value, "dim"))
+
+
 # ── 时间格式化 ──────────────────────────────────────────────
 def format_done_time(value: str | None) -> str:
     """从 last_success_time 提取 HH:mm 格式。
@@ -174,6 +236,19 @@ def print_banner(project: dict[str, Any] | None = None,
         excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
     excel_path = excel.get("path") or (project or {}).get("excel_path", "")
 
+    if _HAS_RICH:
+        body = Text()
+        body.append("百度竞价自动化控制台", style="bold cyan")
+        body.append(f"  v{ver}", style="dim")
+        if project:
+            body.append(f"\n当前项目：{project.get('project_name', '')}", style="bold")
+            if excel_path:
+                body.append(f"\nExcel：{_truncate_excel_name(excel_path)}", style="dim")
+        body.append("\n日志：logs/run.log", style="dim")
+        if _emit_rich(Panel(body, border_style="cyan")):
+            _emit("")
+            return
+
     sep = _bright("  " + "=" * (width - 4))
     _emit("")
     _emit(sep)
@@ -212,16 +287,12 @@ def print_main_menu(project: dict[str, Any] | None = None,
 
     _emit("  1. 小时报")
     _emit(daily_line)
-    _emit("  3. 项目列表")
-    _emit("  4. 项目信息")
-    _emit("  5. 文件合格校验")
-    _emit("  6. 更多功能")
-    _emit("  P. 预检与环境")
-    _emit("  L. 报告与日志")
-    _emit("  O. OpenClaw 帮助")
-    _emit("  R. 刷新状态")
+    _emit("  3. 切换项目")
+    _emit("  4. 检查条件项")
+    _emit("  5. 更多功能")
     _emit("  0. 退出")
     _emit(_bright("  " + "=" * 58))
+    _emit(_dim("  R. 刷新状态"))
     _emit("")
 
 
@@ -315,44 +386,81 @@ def print_task_status_header(project: dict[str, Any], root: Path | None = None) 
     except Exception:
         return
 
-    _emit(_bright("  " + "=" * 58))
-    _emit("  今日状态")
     daily = st.get("daily", {})
     if daily.get("done"):
         dt = format_done_time(daily.get("last_success_time"))
-        daily_tag = f"{_green('已完成')} 完成于 {dt}" if dt else _green("已完成")
+        daily_status = "已完成"
     else:
-        daily_tag = _red("未完成")
-    _emit(f"    日报：{daily_tag}")
-
-    hourly_parts = []
+        dt = ""
+        daily_status = "未完成"
+    rows = [("日报", daily_status, dt or "-")]
     for period in ["11点", "15点", "18点"]:
         h = st.get("hourly", {}).get(period, {})
         if h.get("done"):
             ht = format_done_time(h.get("last_success_time"))
-            tag = f"{_green('已完成')} {ht}" if ht else _green("已完成")
+            status = "已完成"
         else:
-            tag = _red("未完成")
-        hourly_parts.append(f"{period} {tag}")
-    _emit(f"    小时报：{'  |  '.join(hourly_parts)}")
+            ht = ""
+            status = "未完成"
+        rows.append((period, status, ht or "-"))
+
+    if _HAS_RICH:
+        table = Table(title="今日任务状态", header_style="bold", show_header=True, box=None)
+        table.add_column("项目")
+        table.add_column("状态")
+        table.add_column("时间")
+        for label, status, time_str in rows:
+            table.add_row(label, _status_text(status), time_str)
+        if _emit_rich(table):
+            _emit("")
+            return
+
+    _emit(_bright("  " + "=" * 58))
+    _emit("  今日任务状态")
+    for label, status, time_str in rows:
+        styled = _green(status) if status == "已完成" else _red(status)
+        _emit(f"    {label}：{styled}  {time_str}")
     _emit(_bright("  " + "=" * 58))
     _emit("")
 
 
-def print_console_context(project: dict[str, Any]) -> None:
+def print_console_context(project: dict[str, Any], root: Path | None = None) -> None:
     """打印首页当前项目摘要，不执行任何检查或外部动作。"""
     excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
     excel_path = excel.get("path") or project.get("excel_path", "")
     sources = project.get("baidu_sources")
+    source_count = len(sources) if isinstance(sources, list) else 1
     if isinstance(sources, list) and len(sources) > 1:
         project_type = f"多百度来源 x{len(sources)}"
     else:
         project_type = "单百度来源"
+    accounts = project.get("excel_accounts", []) or project.get("accounts", [])
+    account_count = len([item for item in accounts if isinstance(item, dict) and item.get("standard_name")])
+    condition_status = get_condition_status(root, str(project.get("project_id") or ""))
+
+    if _HAS_RICH:
+        body = Text()
+        body.append("当前项目：", style="bold")
+        body.append(str(project.get("project_name", "")), style="bold cyan")
+        body.append(f"\n项目ID：{project.get('project_id', '')}", style="dim")
+        body.append(f"\n类型：{project_type}")
+        if source_count > 1:
+            body.append(f"\n百度来源：{source_count} 个  |  写入账户：{account_count} 个")
+        body.append("\n条件项：")
+        body.append_text(_status_text(condition_status))
+        body.append(f"\nExcel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}", style="dim")
+        if _emit_rich(Panel(body, title="当前项目", border_style="blue")):
+            _emit("")
+            return
+
     _emit("")
     _emit(
-        f"  项目：{project.get('project_name', '')} "
+        f"  当前项目：{project.get('project_name', '')} "
         f"[{project.get('project_id', '')}]  |  类型：{project_type}"
     )
+    if source_count > 1:
+        _emit(f"  百度来源：{source_count} 个  |  写入账户：{account_count} 个")
+    _emit(f"  条件项：{condition_status}")
     _emit(f"  Excel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}")
     _emit("")
 

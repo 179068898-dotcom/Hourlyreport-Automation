@@ -419,21 +419,12 @@ def test_menu_dispatch_uses_existing_pipeline_functions(tmp_path):
 def test_menu_text_is_simplified_for_new_users():
     assert "1. 小时报" in MENU_TEXT
     assert "2. 日报" in MENU_TEXT
-    assert "3. 项目列表" in MENU_TEXT
-    assert "4. 项目信息" in MENU_TEXT
-    assert "5. 文件合格校验" in MENU_TEXT
-    assert "6. 更多功能" in MENU_TEXT
-    assert "R. 刷新状态" in MENU_TEXT
+    assert "3. 切换项目" in MENU_TEXT
+    assert "4. 检查条件项" in MENU_TEXT
+    assert "5. 更多功能" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
-    # 旧文案不应出现
-    assert "运行日报" not in MENU_TEXT
-    assert "运行小时报" not in MENU_TEXT
-    assert "切换项目" not in MENU_TEXT
-    assert "刷新当前项目" not in MENU_TEXT
-    assert "检查运行环境" not in MENU_TEXT
-    assert "只抓百度数据" not in MENU_TEXT
-    assert "只解析商务通导出表" not in MENU_TEXT
-    assert "查看最近报告" not in MENU_TEXT
+    for advanced_text in ["预检与环境", "报告与日志", "配置与诊断", "OpenClaw 帮助", "多百度来源摘要"]:
+        assert advanced_text not in MENU_TEXT
 
 
 def test_menu_hourly_dispatch_uses_internal_period_while_confirm_can_show_simple_period(tmp_path):
@@ -3785,19 +3776,26 @@ def test_menu_new_text_entries_exist():
     """菜单显示新文案。"""
     assert "1. 小时报" in MENU_TEXT
     assert "2. 日报" in MENU_TEXT
-    assert "3. 项目列表" in MENU_TEXT
-    assert "4. 项目信息" in MENU_TEXT
-    assert "5. 文件合格校验" in MENU_TEXT
-    assert "6. 更多功能" in MENU_TEXT
-    assert "R. 刷新状态" in MENU_TEXT
+    assert "3. 切换项目" in MENU_TEXT
+    assert "4. 检查条件项" in MENU_TEXT
+    assert "5. 更多功能" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
 
 
 def test_more_features_menu_contains_console_sections():
     from menu import MORE_FEATURES_MENU_TEXT
 
-    for text in ["预检与环境", "报告与日志", "配置与诊断", "OpenClaw 帮助", "多百度来源摘要"]:
+    for text in ["报告与日志", "配置诊断", "OpenClaw 帮助", "多百度来源摘要", "项目信息详情", "高级分步调试"]:
         assert text in MORE_FEATURES_MENU_TEXT
+
+
+def test_condition_menu_uses_colleague_facing_labels():
+    from menu import CONDITION_MENU_TEXT
+
+    for text in ["一键检查当前项目能否运行", "检查百度账号凭据", "检查小时报条件", "检查日报条件"]:
+        assert text in CONDITION_MENU_TEXT
+    assert "doctor" not in CONDITION_MENU_TEXT
+    assert "preflight" not in CONDITION_MENU_TEXT
 
 
 def test_diagnostic_menu_exposes_sheet_text_dump_without_write_action():
@@ -3863,11 +3861,20 @@ def test_single_source_menu_summary_is_brief():
     ]
 
 
-def test_console_home_context_shows_project_id_source_type_and_short_excel_name():
+def test_console_home_context_shows_project_id_source_type_account_count_condition_and_short_excel_name(tmp_path):
     from io import StringIO
 
     from modules.console_ui import print_console_context, set_output_func
 
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "doctor_report.json").write_text(
+        json.dumps({
+            "project_id": "shenyang_niu",
+            "summary": {"all_passed": True},
+            "checks": {},
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
     buf = StringIO()
     set_output_func(buf.write)
     try:
@@ -3876,7 +3883,8 @@ def test_console_home_context_shows_project_id_source_type_and_short_excel_name(
             "project_id": "shenyang_niu",
             "excel": {"path": r"D:\very\long\path\沈阳YXB2026竞价数据.xlsx"},
             "baidu_sources": [{}, {}],
-        })
+            "excel_accounts": [{"standard_name": "A"}, {"standard_name": "B"}, {"standard_name": "C"}],
+        }, root=tmp_path)
     finally:
         set_output_func(print)
 
@@ -3884,8 +3892,66 @@ def test_console_home_context_shows_project_id_source_type_and_short_excel_name(
     assert "沈阳牛" in text
     assert "shenyang_niu" in text
     assert "多百度来源 x2" in text
+    assert "百度来源：2 个" in text
+    assert "写入账户：3 个" in text
+    assert "条件项：通过" in text
     assert "沈阳YXB2026竞价数据.xlsx" in text
     assert r"D:\very\long\path" not in text
+
+
+def test_console_home_condition_status_defaults_to_unchecked_and_maps_cached_results(tmp_path):
+    from modules.console_ui import get_condition_status
+
+    assert get_condition_status(tmp_path, "demo") == "未检查"
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    report_path = reports / "doctor_report.json"
+    report_path.write_text(json.dumps({
+        "project_id": "demo",
+        "summary": {"all_passed": False},
+        "checks": {"chrome": {"passed": False, "level": "warning"}},
+    }), encoding="utf-8")
+    assert get_condition_status(tmp_path, "demo") == "注意"
+    report_path.write_text(json.dumps({
+        "project_id": "demo",
+        "summary": {"all_passed": False},
+        "checks": {"excel": {"passed": False}},
+    }), encoding="utf-8")
+    assert get_condition_status(tmp_path, "demo") == "未通过"
+
+
+def test_console_home_has_plain_text_fallback_when_rich_is_disabled(tmp_path, monkeypatch):
+    from io import StringIO
+
+    import modules.console_ui as console_ui
+
+    monkeypatch.setattr(console_ui, "_HAS_RICH", False)
+    buf = StringIO()
+    console_ui.set_output_func(buf.write)
+    try:
+        console_ui.print_banner({"project_name": "演示"}, version="1.0.0")
+        console_ui.print_console_context({"project_name": "演示", "project_id": "demo"}, root=tmp_path)
+    finally:
+        console_ui.set_output_func(print)
+
+    output = buf.getvalue()
+    assert "百度竞价自动化控制台" in output
+    assert "当前项目：演示" in output
+    assert "条件项：未检查" in output
+
+
+def test_rich_console_output_preserves_terminal_status_colors_when_available(capsys):
+    import modules.console_ui as console_ui
+
+    if not console_ui._HAS_RICH:
+        return
+    console_ui.set_output_func(print)
+    try:
+        console_ui.print_banner({"project_name": "演示"}, version="1.0.0")
+    finally:
+        console_ui.set_output_func(print)
+
+    assert "\x1b[" in capsys.readouterr().out
 
 
 def test_menu_enhancement_does_not_introduce_textual_dependency():
@@ -3942,7 +4008,7 @@ def test_menu_refresh_choice_does_not_dispatch_task(tmp_path, monkeypatch):
     menu.run_menu(root=tmp_path, input_func=lambda prompt: next(answers), output_func=lambda text: None)
 
 
-def test_menu_shortcuts_open_safe_support_sections(tmp_path, monkeypatch):
+def test_menu_no_longer_routes_hidden_developer_shortcuts(tmp_path, monkeypatch):
     import menu
 
     project = {
@@ -3957,14 +4023,37 @@ def test_menu_shortcuts_open_safe_support_sections(tmp_path, monkeypatch):
     monkeypatch.setattr(menu, "build_runtime_config", lambda current, base: {})
     monkeypatch.setattr(menu, "setup_logger", lambda path: object())
     monkeypatch.setattr(menu, "_check_chrome_debug", lambda *args, **kwargs: True)
-    monkeypatch.setattr(menu, "_run_preflight_menu", lambda *args: calls.append("preflight"))
+    monkeypatch.setattr(menu, "_run_condition_menu", lambda *args: calls.append("condition"))
     monkeypatch.setattr(menu, "_run_report_menu", lambda *args: calls.append("reports"))
     monkeypatch.setattr(menu, "_run_openclaw_menu", lambda *args: calls.append("openclaw"))
     monkeypatch.setattr(menu, "dispatch_menu_task", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("快捷键不得执行任务")))
 
     menu.run_menu(root=tmp_path, input_func=lambda prompt: next(answers), output_func=lambda text: None)
 
-    assert calls == ["preflight", "reports", "openclaw"]
+    assert calls == []
+
+
+def test_menu_routes_switch_project_and_condition_check_from_home(tmp_path, monkeypatch):
+    import menu
+
+    project = {
+        "project_id": "demo",
+        "project_name": "演示",
+        "excel": {"path": "demo.xlsx"},
+    }
+    calls = []
+    answers = iter(["3", "", "4", "0"])
+    monkeypatch.setattr(menu, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(menu, "get_current_project", lambda root: project)
+    monkeypatch.setattr(menu, "build_runtime_config", lambda current, base: {})
+    monkeypatch.setattr(menu, "setup_logger", lambda path: object())
+    monkeypatch.setattr(menu, "_check_chrome_debug", lambda *args, **kwargs: True)
+    monkeypatch.setattr(menu, "_select_project_from_list", lambda *args: calls.append("switch") or None)
+    monkeypatch.setattr(menu, "_run_condition_menu", lambda *args: calls.append("condition"))
+
+    menu.run_menu(root=tmp_path, input_func=lambda prompt: next(answers), output_func=lambda text: None)
+
+    assert calls == ["switch", "condition"]
 
 
 # ── 返回逻辑测试 ──────────────────────────────────────────
