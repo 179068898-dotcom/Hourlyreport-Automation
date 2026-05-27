@@ -4925,6 +4925,21 @@ def test_xia_sidao_readme_exists():
     assert "双百度来源" in content
 
 
+def test_xia_sidao_readme_tracks_rich_menu_and_openclaw_fixed_entries():
+    """夏思道说明同步当前 Rich 菜单与仍保持稳定的 OpenClaw 入口。"""
+    root = Path(__file__).resolve().parents[1]
+    content = (root / "xia_sidao使用说明.md").read_text(encoding="utf-8")
+
+    assert "v1.0 内部发布版" in content
+    assert "Rich 控制台" in content
+    for label in ["3. 切换项目", "4. 检查条件项", "5. 更多功能"]:
+        assert label in content
+    assert "3. 项目列表" not in content
+    assert "run_openclaw_hourly.bat 11点" in content
+    assert "run_openclaw_daily.bat" in content
+    assert "菜单布局调整不影响 OpenClaw 固定入口" in content
+
+
 def test_regular_build_includes_xia_sidao_readme():
     """普通包包含 xia_sidao使用说明.md。"""
     root = Path(__file__).resolve().parents[1]
