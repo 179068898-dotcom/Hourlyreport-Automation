@@ -156,12 +156,27 @@ def _replace_xml_node(xml: str, tag: str, replacement: str | None) -> tuple[str,
     if replacement:
         if pattern.search(xml):
             return pattern.sub(replacement, xml, count=1), True
-        insert_before = re.search(r"<sheetViews\b", xml)
         if tag == "sheetProtection":
             insert_after = re.search(r"</sheetViews>", xml)
             if insert_after:
                 pos = insert_after.end()
                 return xml[:pos] + replacement + xml[pos:], True
+        if tag == "autoFilter":
+            insert_before = re.search(
+                r"<(?:sortState|dataConsolidate|customSheetViews|mergeCells|phoneticPr|conditionalFormatting|"
+                r"dataValidations|hyperlinks|printOptions|pageMargins|pageSetup|headerFooter|rowBreaks|"
+                r"colBreaks|customProperties|cellWatches|ignoredErrors|smartTags|drawing|legacyDrawing|"
+                r"legacyDrawingHF|picture|oleObjects|controls|webPublishItems|tableParts|extLst)\b",
+                xml,
+            )
+            if insert_before:
+                pos = insert_before.start()
+                return xml[:pos] + replacement + xml[pos:], True
+            insert_before_close = re.search(r"</worksheet>", xml)
+            if insert_before_close:
+                pos = insert_before_close.start()
+                return xml[:pos] + replacement + xml[pos:], True
+        insert_before = re.search(r"<sheetViews\b", xml)
         if insert_before:
             pos = insert_before.start()
             return xml[:pos] + replacement + xml[pos:], True
@@ -177,12 +192,13 @@ def _restore_sheet_filter_protection_metadata(
 ) -> bool:
     """恢复 openpyxl 保存时容易丢失的保护/筛选 UI 元数据。
 
-    只替换目标 sheet 的 sheetProtection 节点，不改任何单元格值、公式、样式或其他 sheet。
+    只替换目标 sheet 的 sheetProtection 和 autoFilter 节点，不改单元格值、公式、样式或其他 sheet。
     """
     if not backup_path.exists() or not excel_path.exists():
         return False
 
     changed_files: dict[str, bytes] = {}
+    processed_sheets: list[str] = []
     try:
         with ZipFile(backup_path, "r") as backup_zip, ZipFile(excel_path, "r") as current_zip:
             for sheet_name in sheet_names:
@@ -191,29 +207,33 @@ def _restore_sheet_filter_protection_metadata(
                 if not backup_sheet_path or not current_sheet_path:
                     continue
 
+                processed_sheets.append(sheet_name)
                 backup_xml = backup_zip.read(backup_sheet_path).decode("utf-8")
                 current_xml = current_zip.read(current_sheet_path).decode("utf-8")
-                backup_protection_match = re.search(
-                    r"<sheetProtection\b[^>]*(?:/>|>.*?</sheetProtection>)",
-                    backup_xml,
-                    re.S,
-                )
-                replacement = backup_protection_match.group(0) if backup_protection_match else None
-                restored_xml, changed = _replace_xml_node(current_xml, "sheetProtection", replacement)
-                if changed and restored_xml != current_xml:
+                restored_xml = current_xml
+                for tag in ("sheetProtection", "autoFilter"):
+                    backup_node_match = re.search(
+                        rf"<{tag}\b[^>]*(?:/>|>.*?</{tag}>)",
+                        backup_xml,
+                        re.S,
+                    )
+                    replacement = backup_node_match.group(0) if backup_node_match else None
+                    restored_xml, _ = _replace_xml_node(restored_xml, tag, replacement)
+                if restored_xml != current_xml:
                     changed_files[current_sheet_path] = restored_xml.encode("utf-8")
 
-            if not changed_files:
-                return False
-
-            with tempfile.NamedTemporaryFile(delete=False, suffix=excel_path.suffix) as tmp:
-                tmp_path = Path(tmp.name)
-            with ZipFile(tmp_path, "w", ZIP_DEFLATED) as out_zip:
-                for item in current_zip.infolist():
-                    out_zip.writestr(item, changed_files.get(item.filename, current_zip.read(item.filename)))
-        shutil.move(str(tmp_path), excel_path)
-        logger.info("已恢复 Excel 筛选/保护 UI 元数据：%s", ", ".join(sheet_names))
-        return True
+            if changed_files:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=excel_path.suffix) as tmp:
+                    tmp_path = Path(tmp.name)
+                with ZipFile(tmp_path, "w", ZIP_DEFLATED) as out_zip:
+                    for item in current_zip.infolist():
+                        out_zip.writestr(item, changed_files.get(item.filename, current_zip.read(item.filename)))
+        if changed_files:
+            shutil.move(str(tmp_path), excel_path)
+            logger.info("已恢复 Excel 筛选/保护 UI 元数据：%s", ", ".join(processed_sheets))
+        elif processed_sheets:
+            logger.info("Excel 筛选/保护 UI 元数据保持不变：%s", ", ".join(processed_sheets))
+        return bool(processed_sheets)
     except Exception as exc:
         logger.warning("恢复 Excel 筛选/保护 UI 元数据失败：%s", exc)
         return False
@@ -605,25 +625,12 @@ def write_merged_hourly_data(
 
     for op in planned_writes:
         ws[op["cell"]].value = op["new_value"]
-    # 保存前恢复 AutoFilter，防止 openpyxl 写丢失筛选
-    auto_filter_ref = ws.auto_filter.ref if hasattr(ws, 'auto_filter') and ws.auto_filter.ref else None
     try:
         wb.save(excel_path)
     except OSError as exc:
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("保存小时报 Excel 失败：%s", exc)
         return finish()
-    # 保存后再补一次 AutoFilter，确保筛选可用
-    if auto_filter_ref:
-        try:
-            wb2 = load_workbook(excel_path)
-            for ws2 in wb2.worksheets:
-                if ws2.auto_filter and not ws2.auto_filter.ref:
-                    ws2.auto_filter.ref = auto_filter_ref
-            wb2.save(excel_path)
-            wb2.close()
-        except Exception:
-            pass
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
@@ -808,25 +815,12 @@ def write_merged_daily_data(
 
     for op in planned_writes:
         ws[op["cell"]].value = op["new_value"]
-    # 保存前恢复 AutoFilter，防止 openpyxl 写丢失筛选
-    auto_filter_ref = ws.auto_filter.ref if hasattr(ws, 'auto_filter') and ws.auto_filter.ref else None
     try:
         wb.save(excel_path)
     except OSError as exc:
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("保存日报 Excel 失败：%s", exc)
         return finish()
-    # 保存后再补一次 AutoFilter
-    if auto_filter_ref:
-        try:
-            wb2 = load_workbook(excel_path)
-            for ws2 in wb2.worksheets:
-                if ws2.auto_filter and not ws2.auto_filter.ref:
-                    ws2.auto_filter.ref = auto_filter_ref
-            wb2.save(excel_path)
-            wb2.close()
-        except Exception:
-            pass
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,

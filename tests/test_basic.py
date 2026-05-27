@@ -114,6 +114,41 @@ def test_restore_sheet_filter_protection_metadata_keeps_original_protection_attr
     assert dropped_node not in restored_xml
     assert load_workbook(excel_path)["时段数据"]["A3"].value == "日期"
 
+
+def test_restore_sheet_filter_protection_metadata_restores_original_auto_filter(tmp_path):
+    from openpyxl import Workbook, load_workbook
+
+    class Logger:
+        def info(self, *args, **kwargs):
+            pass
+
+        def warning(self, *args, **kwargs):
+            pass
+
+    excel_path = tmp_path / "current.xlsx"
+    backup_path = tmp_path / "backup.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "时段数据"
+    ws["A3"] = "日期"
+    ws["B3"] = "时段"
+    ws.auto_filter.ref = "A3:XDP1464"
+    wb.save(backup_path)
+
+    ws.auto_filter.ref = None
+    wb.save(excel_path)
+
+    restored = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        ["时段数据"],
+        Logger(),
+    )
+
+    assert restored is True
+    assert load_workbook(excel_path)["时段数据"].auto_filter.ref == "A3:XDP1464"
+
 from modules.kst_export_parser import parse_kst_export_file
 from modules.kst_daily_parser import classify_daily_dialog_by_tags, parse_kst_daily_file
 from modules.kst_parser import aggregate_kst_export_rows, classify_dialog_by_tags, has_visitor_dialog
@@ -2440,6 +2475,9 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
     ws["B4"] = "11点"
     ws["B5"] = "3点"
     ws["B6"] = "6点"
+    ws.auto_filter.ref = "A2:Z6"
+    notes_ws = wb.create_sheet("说明")
+    notes_ws["A1"] = "无关工作表"
     excel_path = tmp_path / "target.xlsx"
     wb.save(excel_path)
 
@@ -2497,6 +2535,8 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
     assert verify_ws["H5"].value == 1873.41
     assert verify_ws["T5"].value == 225
     assert verify_ws["Z5"].value == 2
+    assert verify_ws.auto_filter.ref == "A2:Z6"
+    assert verify_wb["说明"].auto_filter.ref is None
 
 
 def test_write_merged_daily_data_backs_up_writes_allowed_fields_only(tmp_path):
