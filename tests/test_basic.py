@@ -3623,7 +3623,7 @@ def test_openclaw_daily_bat_runs_daily_preflight_before_daily_pipeline():
     assert 'main.py --mode run-daily --date "%~1" --yes' in script
 
 
-def test_openclaw_daily_sop_documents_preflight_password_and_visit_rules():
+def test_openclaw_daily_sop_documents_preflight_password_and_write_boundaries():
     root = Path(__file__).resolve().parents[1]
     content = (root / "docs" / "openclaw_daily_sop.md").read_text(encoding="utf-8")
 
@@ -3631,7 +3631,8 @@ def test_openclaw_daily_sop_documents_preflight_password_and_visit_rules():
     assert "run_openclaw_daily.bat" in content
     assert "preflight --task daily" in content
     assert "禁止向用户索要百度密码" in content
-    assert "到诊数需要问姜老师或用户确认" in content
+    assert "预约、到诊、就诊等禁止字段不由本工具填写" in content
+    assert "不得在日报完成后自行追加任何外部填表或补数步骤" in content
 
 
 # ── console_ui 新增测试 ──────────────────────────────────
@@ -3855,7 +3856,7 @@ def test_openclaw_menu_help_includes_bat_commands_and_password_rule():
     assert "run_openclaw_hourly.bat 11点" in text
     assert "run_openclaw_daily.bat" in text
     assert "不得询问或输出真实百度密码" in text
-    assert "到诊数必须人工确认" in text
+    assert "预约、到诊、就诊等禁止字段不由本工具填写" in text
 
 
 def test_multi_source_menu_summary_only_displays_safe_configuration_metadata():
@@ -4980,6 +4981,20 @@ def test_xia_sidao_readme_tracks_rich_menu_and_openclaw_fixed_entries():
     assert "run_openclaw_hourly.bat 11点" in content
     assert "run_openclaw_daily.bat" in content
     assert "菜单布局调整不影响 OpenClaw 固定入口" in content
+
+
+def test_xia_sidao_readme_tracks_v1_current_scope_without_retired_workflows():
+    """夏思道说明只保留 V1.0 当前能力与安全规则。"""
+    root = Path(__file__).resolve().parents[1]
+    content = (root / "xia_sidao使用说明.md").read_text(encoding="utf-8")
+
+    assert "六个正式项目" in content
+    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "合肥白"]:
+        assert name in content, f"缺少项目：{name}"
+    for text in ["小时报和日报均在写入前先备份目标 Excel", "筛选按钮", "从本次写入前备份恢复"]:
+        assert text in content
+    for retired in ["腾讯文档", "fill_daily_visit.py", "cron", "v0.4.19", "v0.4.21"]:
+        assert retired not in content
 
 
 def test_regular_build_includes_xia_sidao_readme():
