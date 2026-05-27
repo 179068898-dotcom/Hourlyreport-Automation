@@ -265,33 +265,13 @@ def print_banner(project: dict[str, Any] | None = None,
 
 def print_main_menu(project: dict[str, Any] | None = None,
                     root: Path | None = None) -> None:
-    """打印主菜单，日报行显示完成状态和时间。"""
-    from modules.task_status import is_daily_done, get_project_task_status
-
-    # 日报行
-    daily_line = "  2. 日报"
-    if root and project:
-        pid = project.get("project_id", "")
-        try:
-            if is_daily_done(root, pid):
-                st = get_project_task_status(root, pid)
-                time_str = format_done_time(st.get("daily", {}).get("last_success_time"))
-                if time_str:
-                    daily_line = f"  2. 日报  {_green('[已完成]')} (完成于：{time_str})"
-                else:
-                    daily_line = f"  2. 日报  {_green('[已完成]')}"
-            else:
-                daily_line = f"  2. 日报  {_red('[未完成]')}"
-        except Exception:
-            pass
-
+    """打印仅包含导航入口的首页菜单。"""
     _emit("  1. 小时报")
-    _emit(daily_line)
+    _emit("  2. 日报")
     _emit("  3. 切换项目")
     _emit("  4. 检查条件项")
     _emit("  5. 更多功能")
     _emit("  0. 退出")
-    _emit(_bright("  " + "=" * 58))
     _emit(_dim("  R. 刷新状态"))
     _emit("")
 
@@ -405,22 +385,20 @@ def print_task_status_header(project: dict[str, Any], root: Path | None = None) 
         rows.append((period, status, ht or "-"))
 
     if _HAS_RICH:
-        table = Table(title="今日任务状态", header_style="bold", show_header=True, box=None)
-        table.add_column("项目")
+        table = Table(title="今日任务", header_style="bold", show_header=True, box=None)
+        table.add_column("任务")
         table.add_column("状态")
-        table.add_column("时间")
+        table.add_column("完成时间")
         for label, status, time_str in rows:
             table.add_row(label, _status_text(status), time_str)
         if _emit_rich(table):
             _emit("")
             return
 
-    _emit(_bright("  " + "=" * 58))
-    _emit("  今日任务状态")
+    _emit("  今日任务")
     for label, status, time_str in rows:
         styled = _green(status) if status == "已完成" else _red(status)
         _emit(f"    {label}：{styled}  {time_str}")
-    _emit(_bright("  " + "=" * 58))
     _emit("")
 
 
@@ -441,27 +419,28 @@ def print_console_context(project: dict[str, Any], root: Path | None = None) -> 
     if _HAS_RICH:
         body = Text()
         body.append("当前项目：", style="bold")
-        body.append(str(project.get("project_name", "")), style="bold cyan")
-        body.append(f"\n项目ID：{project.get('project_id', '')}", style="dim")
-        body.append(f"\n类型：{project_type}")
+        body.append(str(project.get("project_name", "")), style="bold")
+        body.append(f"    类型：{project_type}")
         if source_count > 1:
-            body.append(f"\n百度来源：{source_count} 个  |  写入账户：{account_count} 个")
+            body.append(f"    写入账户：{account_count} 个")
+        body.append(f"\n项目 ID：{project.get('project_id', '')}", style="dim")
+        body.append(f"\nExcel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}", style="dim")
         body.append("\n条件项：")
         body.append_text(_status_text(condition_status))
-        body.append(f"\nExcel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}", style="dim")
-        if _emit_rich(Panel(body, title="当前项目", border_style="blue")):
+        if _emit_rich(Panel(body, title="百度竞价自动化控制台", border_style="dim")):
             _emit("")
             return
 
     _emit("")
+    _emit("  百度竞价自动化控制台")
     _emit(
-        f"  当前项目：{project.get('project_name', '')} "
-        f"[{project.get('project_id', '')}]  |  类型：{project_type}"
+        f"  当前项目：{project.get('project_name', '')}    类型：{project_type}"
     )
     if source_count > 1:
-        _emit(f"  百度来源：{source_count} 个  |  写入账户：{account_count} 个")
-    _emit(f"  条件项：{condition_status}")
+        _emit(f"  写入账户：{account_count} 个")
+    _emit(f"  项目 ID：{project.get('project_id', '')}")
     _emit(f"  Excel：{_truncate_excel_name(excel_path) if excel_path else '未配置'}")
+    _emit(f"  条件项：{condition_status}")
     _emit("")
 
 

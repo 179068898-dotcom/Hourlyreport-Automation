@@ -11,7 +11,6 @@ from modules.chrome_debug import ensure_chrome_debug_ready
 from modules.config_manager import load_config
 from modules.console_ui import (
     clear_screen,
-    print_banner,
     print_check_result,
     print_error,
     print_final_failure,
@@ -56,7 +55,7 @@ HOURLY_MENU_TEXT = """
 1. 11点
 2. 15点
 3. 18点
-0. 返回主菜单
+0. 返回
 """
 
 MORE_FEATURES_MENU_TEXT = """
@@ -88,7 +87,7 @@ REPORT_MENU_TEXT = """
 5. 查看 run.log 末尾 80 行
 6. 打开 reports 文件夹
 7. 打开 logs 文件夹
-8. 返回
+0. 返回
 """
 
 DIAGNOSTIC_MENU_TEXT = """
@@ -118,7 +117,7 @@ OpenClaw 帮助
 3. 打开小时报 SOP
 4. 打开日报 SOP
 5. 显示凭据与 CAS 规则
-6. 返回
+0. 返回
 """
 
 
@@ -369,7 +368,7 @@ def _run_report_menu(root: Path, input_func: Callable[[str], str], output_func: 
     while True:
         _print_text_block("报告与日志", REPORT_MENU_TEXT.strip().splitlines()[1:], output_func)
         choice = input_func("  请选择选项：").strip()
-        if choice == "8":
+        if choice == "0":
             return
         if choice == "1":
             _print_report_summary(root / "reports" / "final_run_report.json", "小时报最终报告", output_func)
@@ -404,7 +403,7 @@ def _run_report_menu(root: Path, input_func: Callable[[str], str], output_func: 
 
 def _run_diagnostic_menu(root: Path, input_func: Callable[[str], str], output_func: Callable[[str], None]) -> None:
     while True:
-        _print_text_block("配置与诊断", DIAGNOSTIC_MENU_TEXT.strip().splitlines()[1:], output_func)
+        _print_text_block("配置诊断", DIAGNOSTIC_MENU_TEXT.strip().splitlines()[1:], output_func)
         choice = input_func("  请选择选项：").strip()
         if choice == "0":
             return
@@ -450,7 +449,7 @@ def _run_openclaw_menu(root: Path, input_func: Callable[[str], str], output_func
     while True:
         _print_text_block("OpenClaw 帮助", OPENCLAW_MENU_TEXT.strip().splitlines()[1:], output_func)
         choice = input_func("  请选择选项：").strip()
-        if choice == "6":
+        if choice == "0":
             return
         if choice == "1":
             _print_text_block("OpenClaw 小时报命令", lines[:4], output_func)
@@ -616,15 +615,13 @@ def run_menu(
     logger = setup_logger(root / "logs" / "run.log")
     base_config = load_config(str(root / "config.json"), fallback_path=root / "config.example.json")
     project = get_current_project(root)
-    # 启动横幅
-    print_banner(project, root=root)
 
     while True:
         project = get_current_project(root)
         excel = project.get("excel", {}) if isinstance(project.get("excel"), dict) else {}
         excel_path = excel.get("path") or project.get("excel_path", "")
 
-        # 简洁顶部状态行 + 今日任务完成状态
+        # 首页摘要与今日任务状态均为只读展示。
         print_console_context(project, root=root)
         from modules.console_ui import print_task_status_header
         print_task_status_header(project, root=root)

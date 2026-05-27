@@ -3892,8 +3892,8 @@ def test_console_home_context_shows_project_id_source_type_account_count_conditi
     assert "沈阳牛" in text
     assert "shenyang_niu" in text
     assert "多百度来源 x2" in text
-    assert "百度来源：2 个" in text
     assert "写入账户：3 个" in text
+    assert "百度来源：2 个" not in text
     assert "条件项：通过" in text
     assert "沈阳YXB2026竞价数据.xlsx" in text
     assert r"D:\very\long\path" not in text
@@ -3918,6 +3918,12 @@ def test_console_home_condition_status_defaults_to_unchecked_and_maps_cached_res
         "checks": {"excel": {"passed": False}},
     }), encoding="utf-8")
     assert get_condition_status(tmp_path, "demo") == "未通过"
+    report_path.write_text(json.dumps({
+        "project_id": "other-project",
+        "summary": {"all_passed": True},
+        "checks": {},
+    }), encoding="utf-8")
+    assert get_condition_status(tmp_path, "demo") == "未检查"
 
 
 def test_console_home_has_plain_text_fallback_when_rich_is_disabled(tmp_path, monkeypatch):
@@ -3929,8 +3935,9 @@ def test_console_home_has_plain_text_fallback_when_rich_is_disabled(tmp_path, mo
     buf = StringIO()
     console_ui.set_output_func(buf.write)
     try:
-        console_ui.print_banner({"project_name": "演示"}, version="1.0.0")
         console_ui.print_console_context({"project_name": "演示", "project_id": "demo"}, root=tmp_path)
+        console_ui.print_task_status_header({"project_id": "demo"}, root=tmp_path)
+        console_ui.print_main_menu({"project_id": "demo"}, root=tmp_path)
     finally:
         console_ui.set_output_func(print)
 
@@ -3938,28 +3945,91 @@ def test_console_home_has_plain_text_fallback_when_rich_is_disabled(tmp_path, mo
     assert "百度竞价自动化控制台" in output
     assert "当前项目：演示" in output
     assert "条件项：未检查" in output
+    assert "今日任务" in output
+    assert "日报" in output
+    assert "11点" in output
+    assert "15点" in output
+    assert "18点" in output
+    assert "=" not in output
 
 
-def test_rich_console_output_preserves_terminal_status_colors_when_available(capsys):
+def test_rich_home_renders_one_project_panel_and_one_task_table_when_available(tmp_path, monkeypatch):
     import modules.console_ui as console_ui
 
     if not console_ui._HAS_RICH:
         return
-    console_ui.set_output_func(print)
+    renderables = []
+    monkeypatch.setattr(console_ui, "_emit_rich", lambda renderable: renderables.append(renderable) or True)
     try:
-        console_ui.print_banner({"project_name": "演示"}, version="1.0.0")
+        console_ui.print_console_context({"project_name": "演示", "project_id": "demo"}, root=tmp_path)
+        console_ui.print_task_status_header({"project_id": "demo"}, root=tmp_path)
     finally:
         console_ui.set_output_func(print)
 
-    assert "\x1b[" in capsys.readouterr().out
+    assert [type(item).__name__ for item in renderables] == ["Panel", "Table"]
+    assert "百度竞价自动化控制台" in str(renderables[0].title)
+    assert "今日任务" in str(renderables[1].title)
 
 
 def test_menu_enhancement_does_not_introduce_textual_dependency():
     root = Path(__file__).resolve().parents[1]
-    content = (root / "menu.py").read_text(encoding="utf-8") + (root / "modules" / "console_ui.py").read_text(encoding="utf-8")
+    content = (
+        (root / "menu.py").read_text(encoding="utf-8")
+        + (root / "modules" / "console_ui.py").read_text(encoding="utf-8")
+        + (root / "requirements.txt").read_text(encoding="utf-8")
+    )
 
     assert "import textual" not in content.lower()
     assert "from textual" not in content.lower()
+    assert "textual" not in (root / "requirements.txt").read_text(encoding="utf-8").lower()
+
+
+def test_home_output_is_colleague_facing_and_keeps_advanced_sections_hidden(tmp_path, monkeypatch):
+    import menu
+
+    output = []
+    project = {
+        "project_id": "hefei_bai",
+        "project_name": "合肥白",
+        "excel": {"path": r"D:\data\【合肥】2026竞价数据.xlsx"},
+        "baidu_sources": [{}, {}],
+        "excel_accounts": [{"standard_name": "A"}, {"standard_name": "B"}],
+    }
+    monkeypatch.setattr(menu, "load_config", lambda *args, **kwargs: {})
+    monkeypatch.setattr(menu, "get_current_project", lambda root: project)
+    monkeypatch.setattr(menu, "setup_logger", lambda path: object())
+
+    menu.run_menu(root=tmp_path, input_func=lambda prompt: "0", output_func=output.append)
+
+    home = "\n".join(output)
+    assert home.count("百度竞价自动化控制台") == 1
+    for text in ["百度竞价自动化控制台", "当前项目", "合肥白", "hefei_bai", "条件项", "日报", "11点", "15点", "18点"]:
+        assert text in home
+    for text in ["OpenClaw 帮助", "配置诊断", "报告与日志", "多百度来源摘要", "高级分步调试"]:
+        assert text not in home
+    for text in ["doctor", "preflight", "credential_profile", "baidu_sources", "debug"]:
+        assert text not in home.lower()
+
+
+def test_submenu_labels_use_consistent_return_choice():
+    from menu import (
+        ADVANCED_DEBUG_MENU_TEXT,
+        CONDITION_MENU_TEXT,
+        DIAGNOSTIC_MENU_TEXT,
+        MORE_FEATURES_MENU_TEXT,
+        OPENCLAW_MENU_TEXT,
+        REPORT_MENU_TEXT,
+    )
+
+    for content in [
+        ADVANCED_DEBUG_MENU_TEXT,
+        CONDITION_MENU_TEXT,
+        DIAGNOSTIC_MENU_TEXT,
+        MORE_FEATURES_MENU_TEXT,
+        OPENCLAW_MENU_TEXT,
+        REPORT_MENU_TEXT,
+    ]:
+        assert "0. 返回" in content
 
 
 def test_menu_preflight_execution_writes_report_and_logs_result(tmp_path, monkeypatch):
@@ -4542,8 +4612,8 @@ def test_format_done_time_bad_format():
     assert format_done_time("2026/05/10") == ""
 
 
-def test_main_menu_shows_daily_completion_time(tmp_path):
-    """主菜单日报已完成时显示完成时间。"""
+def test_main_menu_keeps_daily_entry_free_of_status_duplication(tmp_path):
+    """首页菜单只承担导航，完成状态只在今日任务表中展示。"""
     from io import StringIO
     from modules.console_ui import print_main_menu, set_output_func
     from modules.task_status import mark_daily_done
@@ -4560,8 +4630,31 @@ def test_main_menu_shows_daily_completion_time(tmp_path):
 
     output = buf.getvalue()
     assert "2. 日报" in output
-    assert "[已完成]" in output
-    assert "完成于：" in output  # 有时间则必定包含
+    assert "[已完成]" not in output
+    assert "完成于：" not in output
+
+
+def test_task_status_header_shows_daily_completion_time(tmp_path):
+    """今日任务表展示日报完成状态和时间。"""
+    from io import StringIO
+    from modules.console_ui import print_task_status_header, set_output_func
+    from modules.task_status import mark_daily_done
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    mark_daily_done(tmp_path, "test_proj")
+
+    buf = StringIO()
+    set_output_func(buf.write)
+    try:
+        print_task_status_header({"project_id": "test_proj"}, root=tmp_path)
+    finally:
+        set_output_func(print)
+
+    output = buf.getvalue()
+    assert "今日任务" in output
+    assert "日报" in output
+    assert "已完成" in output
+    assert ":" in output
 
 
 def test_hourly_submenu_shows_completion_time(tmp_path):
@@ -4589,8 +4682,8 @@ def test_hourly_submenu_shows_completion_time(tmp_path):
     assert "[未完成]" in output
 
 
-def test_main_menu_daily_not_done_shows_undone(tmp_path):
-    """主菜单日报未完成时显示 [未完成]，不含时间。"""
+def test_main_menu_daily_entry_has_no_undone_status_duplication(tmp_path):
+    """未完成状态也不在导航菜单重复展示。"""
     from io import StringIO
     from modules.console_ui import print_main_menu, set_output_func
 
@@ -4605,7 +4698,7 @@ def test_main_menu_daily_not_done_shows_undone(tmp_path):
 
     output = buf.getvalue()
     assert "2. 日报" in output
-    assert "[未完成]" in output
+    assert "[未完成]" not in output
     assert "完成于：" not in output
 
 
@@ -4631,18 +4724,18 @@ def test_missing_time_does_not_error(tmp_path):
     save_task_status(tmp_path, data)
 
     from io import StringIO
-    from modules.console_ui import print_main_menu, set_output_func
+    from modules.console_ui import print_task_status_header, set_output_func
 
     buf = StringIO()
     set_output_func(buf.write)
     try:
         # 不应报错
-        print_main_menu({"project_id": "test_proj"}, root=tmp_path)
+        print_task_status_header({"project_id": "test_proj"}, root=tmp_path)
     finally:
         set_output_func(print)
 
     output = buf.getvalue()
-    assert "[已完成]" in output
+    assert "已完成" in output
 
 
 # ── 四项目预置测试 ────────────────────────────────────────
