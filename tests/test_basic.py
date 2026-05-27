@@ -2562,6 +2562,7 @@ def test_write_merged_daily_data_backs_up_writes_allowed_fields_only(tmp_path):
     ws["T3"] = 999
     ws["Z3"] = 3
     ws["AA3"] = 2
+    ws.auto_filter.ref = "A2:BB3"
     excel_path = tmp_path / "daily.xlsx"
     wb.save(excel_path)
 
@@ -2610,6 +2611,7 @@ def test_write_merged_daily_data_backs_up_writes_allowed_fields_only(tmp_path):
     assert ws2["T3"].value == 999
     assert ws2["Z3"].value == 3
     assert ws2["AA3"].value == 2
+    assert ws2.auto_filter.ref == "A2:BB3"
 
 
 def test_write_merged_hourly_data_reports_overwrites(tmp_path):
