@@ -5091,7 +5091,7 @@ def test_xia_sidao_readme_exists():
     assert "run_menu.bat" in content
     assert "参数表" in content
     assert "验证标准" in content
-    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛"]:
+    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "青岛白", "深圳白", "南京白", "沈阳白"]:
         assert name in content, f"缺少项目：{name}"
     assert "双百度来源" in content
 
@@ -5116,10 +5116,12 @@ def test_xia_sidao_readme_tracks_v1_current_scope_without_retired_workflows():
     root = Path(__file__).resolve().parents[1]
     content = (root / "xia_sidao使用说明.md").read_text(encoding="utf-8")
 
-    assert "六个正式项目" in content
-    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "合肥白"]:
+    assert "十个正式项目" in content
+    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "合肥白", "青岛白", "深圳白", "南京白", "沈阳白"]:
         assert name in content, f"缺少项目：{name}"
     for text in ["小时报和日报均在写入前先备份目标 Excel", "筛选按钮", "从本次写入前备份恢复"]:
+        assert text in content
+    for text in ["browser_profile/chrome_debug", "silent_automation=true", "window_state=minimized", "保存密码提示"]:
         assert text in content
     for retired in ["腾讯文档", "fill_daily_visit.py", "cron", "v0.4.19", "v0.4.21"]:
         assert retired not in content
