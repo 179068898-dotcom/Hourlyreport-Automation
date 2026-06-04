@@ -5508,6 +5508,35 @@ def test_logout_baidu_account_prioritizes_click(monkeypatch):
     assert result["success"] is True, "应退出成功"
 
 
+def test_logout_baidu_account_accepts_cas_after_account_click(monkeypatch):
+    """点击账号入口后若已进入 CAS，直接视为退出成功，不继续反复找退出按钮。"""
+    from unittest.mock import MagicMock
+    from modules.baidu_session import logout_baidu_account
+
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/report"
+    fake_page.viewport_size = {"width": 1920, "height": 1080}
+    fake_el = MagicMock()
+    fake_el.count.return_value = 1
+    fake_el.is_visible.return_value = True
+    fake_el.bounding_box.return_value = {"x": 1700, "y": 0, "width": 120, "height": 48}
+    fake_page.locator.return_value.first = fake_el
+
+    def fake_click(page, box):
+        page.url = "https://cas.baidu.com/?tpl=www2"
+        return True
+
+    dump_calls = []
+    monkeypatch.setattr("modules.baidu_session._click_element_center", fake_click)
+    monkeypatch.setattr("modules.baidu_session._dump_candidates_to", lambda page, root, filename: dump_calls.append(filename) or [])
+
+    result = logout_baidu_account(fake_page, root=".")
+
+    assert result["success"] is True
+    assert result["message"] == "点击账号入口后已进入百度登录页"
+    assert dump_calls == ["baidu_logout_candidates_before.json", "baidu_logout_candidates_after_account_click.json"]
+
+
 def test_logout_baidu_account_no_entry_returns_false():
     """找不到退出入口时不 traceback，返回 success=False。"""
     from unittest.mock import MagicMock

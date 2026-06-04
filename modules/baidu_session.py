@@ -383,6 +383,8 @@ def logout_baidu_account(page, root: str | Path = ".") -> dict[str, Any]:
     # ── After account click dump ──
     page.wait_for_timeout(1000)
     _dump_candidates_to(page, root, "baidu_logout_candidates_after_account_click.json")
+    if wait_until_cas_login_page(page, timeout_ms=3000):
+        return {"success": True, "message": "点击账号入口后已进入百度登录页"}
 
     # ── 2. 在 after candidates 中找"退出"并点击 ──
     after = _dump_candidates_to(page, root, "baidu_logout_candidates_after_account_click.json")
