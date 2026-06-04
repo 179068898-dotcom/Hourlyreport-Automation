@@ -114,7 +114,7 @@ START_HERE.bat
 
 ## 浏览器规则
 
-浏览器自动化默认连接你已经打开的常用 Google Chrome，不默认启动项目专用浏览器，也不会自动切换 Edge：
+浏览器自动化默认连接 `http://127.0.0.1:9222` 上的项目专用 Google Chrome 调试实例，不会自动切换 Edge：
 
 ```json
 "browser": {
@@ -123,6 +123,12 @@ START_HERE.bat
   "prefer_existing_chrome": true,
   "allow_edge_fallback": false,
   "max_tabs": 3,
+  "auto_start_debug_chrome": true,
+  "debug_profile_dir": "browser_profile/chrome_debug",
+  "silent_automation": true,
+  "window_state": "minimized",
+  "show_on_manual_intervention": true,
+  "disable_password_manager": true,
   "managed": {
     "channel": "chrome",
     "executable_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",
@@ -132,21 +138,21 @@ START_HERE.bat
 }
 ```
 
-使用前先在 CMD 中启动常用 Chrome 的调试端口：
-
-```cmd
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Default" https://cc.baidu.com/report
-```
-
-如果你已经打开过 Chrome，上面的命令可能只会复用旧窗口，导致 `9222` 端口没有真正开启。新版 Chrome 也可能禁止在默认个人资料目录上开启远程调试，即使进程命令行里看到了 `--remote-debugging-port=9222`，端口也不监听。此时请关闭所有 Chrome 后再运行，或直接双击项目里的：
+使用前可直接双击项目里的调试 Chrome 启动脚本：
 
 ```text
 start_chrome_debug.bat
 ```
 
-这个脚本会先检查 `9222` 端口；如果发现 Chrome 已在运行，会询问是否关闭所有 Chrome 并重新用调试端口打开。为兼容新版 Chrome 的安全限制，脚本会使用项目内 `browser_profile/chrome_debug` 作为调试专用用户目录。
+这个脚本会先检查 `9222` 端口；未就绪时使用项目内 `browser_profile/chrome_debug` 作为调试专用用户目录，并以 `--start-minimized` 最小化启动。它通常不需要关闭你日常使用的 Chrome。
 
-`connect_existing` 会复用这个 Chrome 里的登录态、书签、插件和已打开页面。如果没有找到百度投放后台页面，程序优先打开 `https://cc.baidu.com/report`；不会自动切 Edge，也不会无头运行。
+自动拉起调试 Chrome 时，程序不会把百度 URL 直接作为 Chrome 启动参数传入，避免启动失败时 URL 被日常 Chrome 接管开新标签。程序会等 `9222` 端口确认可连接后，再由 Playwright 在调试 Chrome 中打开 `https://cc.baidu.com/report`。
+
+静默模式下，自动流程不会调用 `bring_to_front()`，也不会在连接后用 CDP 强制最小化窗口；窗口状态主要依赖启动时的 `--start-minimized`。只有登录、验证码、安全校验、账号确认、切换账号或人工退出登录等需要人工介入的场景，程序才会显示 Chrome 窗口并提示处理。
+
+Chrome 保存密码提示已通过启动参数和 `browser_profile/chrome_debug` 的 profile 偏好禁用；不要通过网页 DOM 点击浏览器气泡。若旧 profile 仍残留提示状态，可关闭调试 Chrome 后清理 `browser_profile/chrome_debug` 再启动。
+
+`connect_existing` 会复用这个调试 Chrome 里的登录态和已打开页面。如果没有找到百度投放后台页面，程序优先打开 `https://cc.baidu.com/report`；不会自动切 Edge，也不会无头运行。
 
 每次连接已有 Chrome 后，程序会清理多余标签页：默认最多保留 3 个标签页，优先保留百度后台相关页面和当前工作页，减少多项目长期运行后的卡顿。
 

@@ -86,7 +86,7 @@ def main() -> int:
             host="127.0.0.1",
             port=DEBUG_PORT,
             profile_dir=debug_user_data_dir,
-            startup_url=START_URL,
+            startup_url=None,
             start_minimized=True,
             disable_password_manager=True,
         ),

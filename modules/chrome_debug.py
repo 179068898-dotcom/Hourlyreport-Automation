@@ -62,7 +62,7 @@ def build_chrome_debug_args(
     host: str,
     port: int,
     profile_dir: Path,
-    startup_url: str,
+    startup_url: str | None = None,
     start_minimized: bool = True,
     disable_password_manager: bool = True,
 ) -> list[str]:
@@ -81,7 +81,8 @@ def build_chrome_debug_args(
             "--disable-save-password-bubble",
             "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
         ])
-    args.append(startup_url)
+    if startup_url:
+        args.append(startup_url)
     return args
 
 
@@ -166,7 +167,7 @@ def start_debug_chrome(
                 host=host,
                 port=port,
                 profile_dir=resolved_profile,
-                startup_url=startup_url,
+                startup_url=None if silent_automation else startup_url,
                 start_minimized=silent_automation and window_state == "minimized",
                 disable_password_manager=disable_password_manager,
             ),

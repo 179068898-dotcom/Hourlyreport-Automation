@@ -130,7 +130,6 @@ def set_browser_window_state(page, state: str) -> bool:
 def prepare_automation_page(page, config: dict[str, Any] | None = None) -> None:
     settings = get_browser_settings(config or {})
     if settings["silent_automation"]:
-        set_browser_window_state(page, settings["window_state"])
         return
     try:
         page.bring_to_front()

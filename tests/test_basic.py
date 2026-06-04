@@ -1351,6 +1351,38 @@ def test_browser_settings_accepts_silent_overrides():
     assert settings["disable_password_manager"] is False
 
 
+def test_prepare_automation_page_does_not_touch_window_in_silent_mode():
+    from modules.browser_manager import prepare_automation_page
+
+    class FakeContext:
+        def new_cdp_session(self, page):
+            raise AssertionError("silent automation must not activate the window through CDP")
+
+    class FakePage:
+        context = FakeContext()
+
+        def bring_to_front(self):
+            raise AssertionError("silent automation must not bring Chrome to front")
+
+    prepare_automation_page(FakePage(), {"browser": {"silent_automation": True, "window_state": "minimized"}})
+
+
+def test_prepare_automation_page_can_focus_when_silent_disabled():
+    from modules.browser_manager import prepare_automation_page
+
+    class FakePage:
+        def __init__(self):
+            self.front = False
+
+        def bring_to_front(self):
+            self.front = True
+
+    page = FakePage()
+    prepare_automation_page(page, {"browser": {"silent_automation": False}})
+
+    assert page.front is True
+
+
 def test_connect_existing_does_not_launch_managed_chrome_or_edge():
     class FakeChromium:
         def __init__(self):
@@ -3555,6 +3587,7 @@ def test_start_debug_chrome_uses_minimized_debug_profile_and_disables_password_m
     assert "--start-minimized" in args
     assert "--disable-save-password-bubble" in args
     assert "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection" in args
+    assert not any("cas.baidu.com" in item or "cc.baidu.com" in item for item in args)
     assert any(str(tmp_path / "browser_profile" / "chrome_debug") in item for item in args)
     prefs = json.loads((tmp_path / "browser_profile" / "chrome_debug" / "Default" / "Preferences").read_text(encoding="utf-8"))
     assert prefs["credentials_enable_service"] is False

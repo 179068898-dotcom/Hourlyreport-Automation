@@ -48,7 +48,8 @@
 
 - 调试 Chrome 使用项目专用目录 `browser_profile/chrome_debug`，不使用同事日常 Chrome 的个人资料目录。
 - `start_chrome_debug.bat` 会以最小化方式启动调试 Chrome，通常不需要关闭日常 Chrome。
-- 自动读取百度数据时，程序默认不把 Chrome 抢到前台。
+- 自动拉起调试 Chrome 时，不把百度 URL 直接作为 Chrome 启动参数传入，避免启动失败时 URL 被日常 Chrome 接管开新标签。
+- 自动读取百度数据时，程序默认不把 Chrome 抢到前台，也不会在连接后用 CDP 强制最小化窗口；窗口状态主要依赖启动时的 `--start-minimized`。
 - 遇到验证码、安全校验、账号确认、切换账号或人工退出登录时，程序才会显示 Chrome 窗口并等待人工处理。
 - Chrome 保存密码提示已通过启动参数和 profile 偏好禁用；不要尝试通过页面脚本点击浏览器气泡。
 - 如果旧调试 profile 仍残留保存密码提示状态，可先关闭调试 Chrome，再清理 `browser_profile/chrome_debug` 后重新运行 `start_chrome_debug.bat`。
