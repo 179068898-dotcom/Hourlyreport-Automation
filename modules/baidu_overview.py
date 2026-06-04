@@ -9,7 +9,7 @@ from typing import Any, Callable
 from modules.baidu_browser import _write_debug_artifacts
 from modules.baidu_detector import classify_baidu_page
 from modules.baidu_parser import extract_baidu_rows_from_page
-from modules.browser_manager import BrowserLaunchError, DEFAULT_BAIDU_START_URL, get_browser_settings, launch_chrome_context
+from modules.browser_manager import BrowserLaunchError, DEFAULT_BAIDU_START_URL, get_browser_settings, launch_chrome_context, prepare_automation_page
 from modules.credential_manager import build_login_failure_message, load_project_credentials
 from modules.text_normalizer import normalize_text
 
@@ -616,7 +616,7 @@ def baidu_open_overview(
             return finish()
 
         report["connected"] = True
-        page.bring_to_front()
+        prepare_automation_page(page, config)
         report["initial_url"] = page.url
         try:
             page.wait_for_load_state("domcontentloaded", timeout=30000)

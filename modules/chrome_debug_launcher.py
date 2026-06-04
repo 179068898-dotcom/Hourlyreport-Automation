@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from modules.browser_manager import DEFAULT_BAIDU_START_URL
+from modules.chrome_debug import build_chrome_debug_args, write_chrome_preferences
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,34 +75,21 @@ def main() -> int:
         print("9222 调试端口已经开启，开始测试连接。", flush=True)
         return _run_connect_test()
 
-    if _chrome_is_running():
-        print("当前已经有 Chrome 在运行。", flush=True)
-        print("要让 --remote-debugging-port=9222 生效，必须先关闭所有 Chrome 进程再重新启动。", flush=True)
-        try:
-            answer = input("是否关闭所有 Chrome 并用调试端口重新打开？输入 Y 确认：").strip().lower()
-        except EOFError:
-            print("当前终端无法读取输入，已取消。请双击脚本或在 CMD 中手动运行后输入 Y。", flush=True)
-            return 1
-        if answer != "y":
-            print("已取消。请手动关闭所有 Chrome 后重新运行 start_chrome_debug.bat。")
-            return 1
-        _kill_chrome()
-        time.sleep(2)
-
     debug_user_data_dir = _load_debug_user_data_dir()
     debug_user_data_dir.mkdir(parents=True, exist_ok=True)
+    write_chrome_preferences(debug_user_data_dir, disable_password_manager=True)
     print("正在启动可调试 Google Chrome，并开启 9222 调试端口...", flush=True)
     print(f"调试专用用户目录：{debug_user_data_dir}", flush=True)
     subprocess.Popen(
-        [
-            str(CHROME_EXE),
-            f"--remote-debugging-port={DEBUG_PORT}",
-            f"--user-data-dir={debug_user_data_dir}",
-            '--profile-directory=Default',
-            "--no-first-run",
-            "--no-default-browser-check",
-            START_URL,
-        ],
+        build_chrome_debug_args(
+            CHROME_EXE,
+            host="127.0.0.1",
+            port=DEBUG_PORT,
+            profile_dir=debug_user_data_dir,
+            startup_url=START_URL,
+            start_minimized=True,
+            disable_password_manager=True,
+        ),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

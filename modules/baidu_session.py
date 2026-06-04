@@ -478,6 +478,8 @@ def force_relogin_current_project(
     task: str | None = None,
     input_func: Any = None, output_func: Any = None,
 ) -> bool:
+    from modules.browser_manager import show_browser_page_for_manual_intervention
+
     import builtins
     if input_func is None:
         input_func = builtins.input
@@ -486,6 +488,8 @@ def force_relogin_current_project(
 
     if not get_current_project_credential_profile(config):
         return False
+
+    show_browser_page_for_manual_intervention(page, config)
 
     project_id = config.get("project_id", "")
     project_name = config.get("project_name", "")
@@ -571,7 +575,10 @@ def ensure_baidu_profile_session(
 
     result = {"passed": True, "decision": decision, "reason": reason}
     if decision == "relogin":
+        from modules.browser_manager import show_browser_page_for_manual_intervention
+
         output_func("  [\u6ce8\u610f] \u6b63\u5728\u5207\u6362\u5230\u5f53\u524d\u9879\u76ee\u767e\u5ea6\u8d26\u53f7")
+        show_browser_page_for_manual_intervention(page, config)
         result["passed"] = force_relogin_current_project(
             root, config, page, logger, task=task, input_func=input_func, output_func=output_func
         )

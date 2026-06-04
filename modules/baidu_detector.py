@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from modules.baidu_browser import _write_debug_artifacts
-from modules.browser_manager import BrowserLaunchError, get_browser_settings, launch_chrome_context
+from modules.browser_manager import BrowserLaunchError, get_browser_settings, launch_chrome_context, prepare_automation_page
 from modules.text_normalizer import normalize_text
 
 
@@ -119,7 +119,7 @@ def baidu_detect(config: dict[str, Any], root: Path, logger) -> dict[str, Any]:
             return report
 
         report["connected"] = True
-        page.bring_to_front()
+        prepare_automation_page(page, config)
         try:
             page.wait_for_load_state("domcontentloaded", timeout=30000)
         except Exception:

@@ -16,7 +16,7 @@ from modules.baidu_overview import (
 )
 from modules.baidu_detector import classify_baidu_page
 from modules.baidu_parser import extract_baidu_rows_from_visible_text, parse_baidu_table
-from modules.browser_manager import BrowserLaunchError, launch_chrome_context
+from modules.browser_manager import BrowserLaunchError, launch_chrome_context, prepare_automation_page
 from modules.credential_manager import build_login_failure_message
 from modules.text_normalizer import normalize_text
 from modules.validators import get_required_accounts, validate_baidu_report
@@ -288,7 +288,7 @@ def _fetch_baidu_daily_single(
             report["finished_at"] = datetime.now().isoformat(timespec="seconds")
             _write_json(output_path, report)
             return report
-        page.bring_to_front()
+        prepare_automation_page(page, config)
         if not _prepare_baidu_daily_report_page(page, config, root, logger, report):
             _write_debug_artifacts(root, page, report, include_screenshot=bool(baidu_config.get("debug_screenshot", False)))
             report["finished_at"] = datetime.now().isoformat(timespec="seconds")

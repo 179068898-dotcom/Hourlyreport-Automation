@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from modules.baidu_parser import extract_baidu_rows_from_visible_text, parse_baidu_table
-from modules.browser_manager import BrowserLaunchError, DEFAULT_BAIDU_START_URL, launch_chrome_context
+from modules.browser_manager import BrowserLaunchError, DEFAULT_BAIDU_START_URL, launch_chrome_context, show_browser_page_for_manual_intervention
 from modules.validators import get_required_accounts, validate_baidu_report
 
 
@@ -153,7 +153,7 @@ def fetch_baidu_account_report(
             logger.error("百度 Chrome 浏览器启动失败：%s", exc)
             return report
         report["self_check"]["browser_opened"] = True
-        page.bring_to_front()
+        show_browser_page_for_manual_intervention(page, config)
         logger.info("已连接百度读取页面：%s", page.url or start_url)
 
         from modules.console_ui import print_quiet_line, print_warning

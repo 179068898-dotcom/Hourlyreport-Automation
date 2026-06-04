@@ -13,14 +13,12 @@ DEFAULT_BAIDU_START_URL = "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fc
 
 
 CONNECT_EXISTING_HELP = (
-    '请先用常用 Google Chrome 启动远程调试端口。\n'
-    '注意：如果已经打开 Chrome，新启动参数可能会被旧实例忽略，导致 9222 端口没有监听。'
-    '另外，新版 Chrome 可能禁止在默认个人资料目录上开启远程调试；'
-    '项目脚本会使用 browser_profile/chrome_debug 作为调试专用目录。'
-    '请先关闭所有 Chrome 窗口，或运行项目里的 start_chrome_debug.bat。\n'
-    '手动启动命令：\n'
+    "请先启动 Google Chrome 远程调试端口。\n"
+    "项目会使用 browser_profile/chrome_debug 作为调试专用目录，通常不需要关闭日常 Chrome。\n"
+    "如果 9222 已被其他 Chrome 调试实例占用，请关闭占用该端口的调试 Chrome，或运行项目里的 start_chrome_debug.bat。\n"
+    "手动启动命令：\n"
     '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" '
-    '--remote-debugging-port=9222 --profile-directory="Default" '
+    "--remote-debugging-port=9222 --user-data-dir=browser_profile/chrome_debug --start-minimized "
     f'{DEFAULT_BAIDU_START_URL}'
 )
 
@@ -78,6 +76,10 @@ def get_browser_settings(config: dict[str, Any]) -> dict[str, Any]:
         "max_tabs": int(browser.get("max_tabs", config.get("browser_max_tabs", 3))),
         "auto_start_debug_chrome": auto_start,
         "allow_kill_existing_chrome": allow_kill,
+        "silent_automation": bool(browser.get("silent_automation", True)),
+        "window_state": str(browser.get("window_state", "minimized") or "normal"),
+        "show_on_manual_intervention": bool(browser.get("show_on_manual_intervention", True)),
+        "disable_password_manager": bool(browser.get("disable_password_manager", True)),
     }
 
 
@@ -109,31 +111,79 @@ def _should_repoint_legacy_baidu_page(url: str, start_url: str) -> bool:
     return _is_legacy_baidu_login_entry(url) and "cas.baidu.com" in (start_url or "").lower()
 
 
-def _open_start_url(page, start_url: str):
+def set_browser_window_state(page, state: str) -> bool:
+    """通过 CDP 设置 Chrome 窗口状态；失败不影响自动化流程。"""
+    if state not in {"normal", "minimized", "maximized", "fullscreen"}:
+        return False
+    try:
+        session = page.context.new_cdp_session(page)
+        window = session.send("Browser.getWindowForTarget")
+        session.send("Browser.setWindowBounds", {
+            "windowId": window["windowId"],
+            "bounds": {"windowState": state},
+        })
+        return True
+    except Exception:
+        return False
+
+
+def prepare_automation_page(page, config: dict[str, Any] | None = None) -> None:
+    settings = get_browser_settings(config or {})
+    if settings["silent_automation"]:
+        set_browser_window_state(page, settings["window_state"])
+        return
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+
+
+def show_browser_page_for_manual_intervention(page, config: dict[str, Any] | None = None) -> bool:
+    settings = get_browser_settings(config or {})
+    if not settings["show_on_manual_intervention"]:
+        return False
+    set_browser_window_state(page, "normal")
+    try:
+        page.bring_to_front()
+        return True
+    except Exception:
+        return False
+
+
+def _maybe_focus_page(page, *, silent: bool) -> None:
+    if silent:
+        return
+    try:
+        page.bring_to_front()
+    except Exception:
+        pass
+
+
+def _open_start_url(page, start_url: str, *, silent: bool = True):
     if _should_repoint_legacy_baidu_page(getattr(page, "url", ""), start_url):
         page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
-    page.bring_to_front()
+    _maybe_focus_page(page, silent=silent)
     return page
 
 
-def find_baidu_page(context, start_url: str):
+def find_baidu_page(context, start_url: str, *, silent: bool = True):
     legacy_page = None
     for page in context.pages:
         if not _is_baidu_backend_url(page.url):
             continue
         if not _is_legacy_baidu_login_entry(page.url):
-            page.bring_to_front()
+            _maybe_focus_page(page, silent=silent)
             return page
         legacy_page = legacy_page or page
     if legacy_page:
-        return _open_start_url(legacy_page, start_url)
+        return _open_start_url(legacy_page, start_url, silent=silent)
     page = context.new_page()
     page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
-    page.bring_to_front()
+    _maybe_focus_page(page, silent=silent)
     return page
 
 
-def _select_context_and_page(browser, start_url: str):
+def _select_context_and_page(browser, start_url: str, *, silent: bool = True):
     contexts = list(browser.contexts)
     if not contexts:
         contexts = [browser.new_context()]
@@ -144,22 +194,22 @@ def _select_context_and_page(browser, start_url: str):
             if not _is_baidu_backend_url(page.url):
                 continue
             if not _is_legacy_baidu_login_entry(page.url):
-                page.bring_to_front()
+                _maybe_focus_page(page, silent=silent)
                 return context, page
             legacy_candidate = legacy_candidate or (context, page)
 
     if legacy_candidate:
         context, page = legacy_candidate
-        return context, _open_start_url(page, start_url)
+        return context, _open_start_url(page, start_url, silent=silent)
 
     context = contexts[0]
     page = context.new_page()
     page.goto(start_url, wait_until="domcontentloaded", timeout=60000)
-    page.bring_to_front()
+    _maybe_focus_page(page, silent=silent)
     return context, page
 
 
-def cleanup_extra_tabs(context, keep_page, max_tabs: int = 3) -> list[str]:
+def cleanup_extra_tabs(context, keep_page, max_tabs: int = 3, *, silent: bool = True) -> list[str]:
     try:
         pages = list(context.pages)
     except Exception:
@@ -195,10 +245,7 @@ def cleanup_extra_tabs(context, keep_page, max_tabs: int = 3) -> list[str]:
             page.close()
         except Exception:
             continue
-    try:
-        keep_page.bring_to_front()
-    except Exception:
-        pass
+    _maybe_focus_page(keep_page, silent=silent)
     return closed_urls
 
 
@@ -213,8 +260,9 @@ def connect_existing_chrome(playwright, config: dict[str, Any]):
     except Exception as exc:
         raise BrowserLaunchError(f"连接已有 Chrome 失败：{endpoint}\n{CONNECT_EXISTING_HELP}\n原始错误：{exc}") from exc
 
-    context, page = _select_context_and_page(browser, start_url)
-    cleanup_extra_tabs(context, page, settings["max_tabs"])
+    context, page = _select_context_and_page(browser, start_url, silent=settings["silent_automation"])
+    prepare_automation_page(page, config)
+    cleanup_extra_tabs(context, page, settings["max_tabs"], silent=settings["silent_automation"])
     return context, page
 
 
@@ -229,6 +277,19 @@ def launch_managed_chrome_context(playwright, config: dict[str, Any], root: Path
         "headless": settings["headless"],
         "viewport": {"width": 1440, "height": 900},
     }
+    args: list[str] = []
+    if settings["silent_automation"] and settings["window_state"] == "minimized":
+        args.append("--start-minimized")
+    if settings["disable_password_manager"]:
+        args.extend([
+            "--disable-save-password-bubble",
+            "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+        ])
+        from modules.chrome_debug import write_chrome_preferences
+
+        write_chrome_preferences(profile_dir, disable_password_manager=True)
+    if args:
+        launch_options["args"] = args
     executable_path = settings["chrome_executable_path"]
     if executable_path:
         if not Path(executable_path).exists():
@@ -245,6 +306,7 @@ def launch_managed_chrome_context(playwright, config: dict[str, Any], root: Path
             f"请确认本机已安装 Chrome 或配置 Chrome 路径。原始错误：{exc}"
         ) from exc
     page = context.pages[0] if context.pages else context.new_page()
+    prepare_automation_page(page, config)
     return context, page
 
 
@@ -312,8 +374,13 @@ def test_browser_connect(config: dict[str, Any], root: Path, logger) -> dict[str
 
         report["connected"] = True
         report["browser_version"] = browser.version
-        context, page = _select_context_and_page(browser, config.get("baidu", {}).get("start_url", settings["startup_url"]))
-        report["closed_extra_tab_urls"] = cleanup_extra_tabs(context, page, settings["max_tabs"])
+        context, page = _select_context_and_page(
+            browser,
+            config.get("baidu", {}).get("start_url", settings["startup_url"]),
+            silent=settings["silent_automation"],
+        )
+        prepare_automation_page(page, config)
+        report["closed_extra_tab_urls"] = cleanup_extra_tabs(context, page, settings["max_tabs"], silent=settings["silent_automation"])
         pages = _all_pages(browser)
         report["page_urls"] = [page.url for page in pages]
         report["baidu_page_found"] = any(_is_baidu_backend_url(url) for url in report["page_urls"])

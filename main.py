@@ -196,7 +196,7 @@ def main() -> int | None:
             print_success(f"连接已有 Chrome 测试完成：reports/browser_connect_report.json")
         return
     if args.mode == "test-baidu-logout":
-        from modules.browser_manager import connect_existing_chrome
+        from modules.browser_manager import connect_existing_chrome, show_browser_page_for_manual_intervention
         from modules.baidu_session import logout_baidu_account
         from modules.chrome_debug import ensure_chrome_debug_ready
 
@@ -207,7 +207,7 @@ def main() -> int | None:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as pw:
                 context, page = connect_existing_chrome(pw, config)
-                page.bring_to_front()
+                show_browser_page_for_manual_intervention(page, config)
                 result = logout_baidu_account(page, root=ROOT)
                 if result.get("success"):
                     print_success("已自动退出百度账号")

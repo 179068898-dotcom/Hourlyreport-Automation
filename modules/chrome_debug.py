@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 import urllib.error
@@ -13,12 +14,75 @@ from modules.browser_manager import DEFAULT_BAIDU_START_URL
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9222
 DEFAULT_STARTUP_URL = DEFAULT_BAIDU_START_URL
-DEFAULT_PROFILE_DIR = "browser_profile/chrome"
+DEFAULT_PROFILE_DIR = "browser_profile/chrome_debug"
 
 CHROME_CANDIDATES = [
     Path("C:/Program Files/Google/Chrome/Application/chrome.exe"),
     Path("C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"),
 ]
+
+
+PASSWORD_MANAGER_DISABLED_PREFS = {
+    "credentials_enable_service": False,
+    "profile": {
+        "password_manager_enabled": False,
+    },
+}
+
+
+def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+    for key, value in updates.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            _deep_update(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
+def write_chrome_preferences(profile_dir: Path, *, disable_password_manager: bool = True) -> Path | None:
+    """写入 Chrome profile 偏好，避免自动化登录后弹出保存密码气泡。"""
+    if not disable_password_manager:
+        return None
+    preferences = profile_dir / "Default" / "Preferences"
+    preferences.parent.mkdir(parents=True, exist_ok=True)
+    data: dict[str, Any] = {}
+    if preferences.exists():
+        try:
+            data = json.loads(preferences.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+    _deep_update(data, PASSWORD_MANAGER_DISABLED_PREFS)
+    preferences.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    return preferences
+
+
+def build_chrome_debug_args(
+    chrome_exe: Path,
+    *,
+    host: str,
+    port: int,
+    profile_dir: Path,
+    startup_url: str,
+    start_minimized: bool = True,
+    disable_password_manager: bool = True,
+) -> list[str]:
+    args = [
+        str(chrome_exe),
+        f"--remote-debugging-port={port}",
+        f"--remote-debugging-address={host}",
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+    if start_minimized:
+        args.append("--start-minimized")
+    if disable_password_manager:
+        args.extend([
+            "--disable-save-password-bubble",
+            "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection",
+        ])
+    args.append(startup_url)
+    return args
 
 
 def is_chrome_debug_port_alive(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT, timeout: float = 3.0) -> bool:
@@ -85,22 +149,27 @@ def start_debug_chrome(
         profile_dir = DEFAULT_PROFILE_DIR
     if config:
         browser_cfg = config.get("browser") if isinstance(config.get("browser"), dict) else {}
-        profile_dir = browser_cfg.get("profile_dir", profile_dir)
+        profile_dir = browser_cfg.get("debug_profile_dir", browser_cfg.get("profile_dir", profile_dir))
     resolved_profile = root / profile_dir if not Path(profile_dir).is_absolute() else Path(profile_dir)
     resolved_profile.mkdir(parents=True, exist_ok=True)
     result["profile_dir"] = str(resolved_profile)
+    browser_cfg = config.get("browser") if isinstance(config, dict) and isinstance(config.get("browser"), dict) else {}
+    silent_automation = bool(browser_cfg.get("silent_automation", True))
+    window_state = str(browser_cfg.get("window_state", "minimized") or "normal")
+    disable_password_manager = bool(browser_cfg.get("disable_password_manager", True))
+    write_chrome_preferences(resolved_profile, disable_password_manager=disable_password_manager)
 
     try:
         subprocess.Popen(
-            [
-                str(chrome_exe),
-                f"--remote-debugging-port={port}",
-                f"--remote-debugging-address={host}",
-                f"--user-data-dir={resolved_profile}",
-                "--no-first-run",
-                "--no-default-browser-check",
-                startup_url,
-            ],
+            build_chrome_debug_args(
+                chrome_exe,
+                host=host,
+                port=port,
+                profile_dir=resolved_profile,
+                startup_url=startup_url,
+                start_minimized=silent_automation and window_state == "minimized",
+                disable_password_manager=disable_password_manager,
+            ),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -143,8 +212,11 @@ def ensure_chrome_debug_ready(
 
     browser_cfg = config.get("browser") if isinstance(config, dict) and config else {}
     allow_kill = browser_cfg.get("allow_kill_existing_chrome", False) if isinstance(browser_cfg, dict) else False
+    configured_profile = browser_cfg.get("debug_profile_dir", browser_cfg.get("profile_dir", DEFAULT_PROFILE_DIR))
+    use_debug_profile = str(configured_profile).replace("\\", "/").endswith(DEFAULT_PROFILE_DIR)
+    can_parallel_debug_chrome = bool(browser_cfg.get("silent_automation", True)) and use_debug_profile
 
-    if not allow_kill:
+    if not allow_kill and not can_parallel_debug_chrome:
         chrome_running = _chrome_process_exists()
         if chrome_running:
             result["ready"] = False

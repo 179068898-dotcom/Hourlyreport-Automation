@@ -20,6 +20,10 @@
     "startup_url": "https://cas.baidu.com/?tpl=www2&fromu=https%3A%2F%2Fcc.baidu.com%2Freport",
     "allow_kill_existing_chrome": false,
     "debug_profile_dir": "browser_profile/chrome_debug",
+    "silent_automation": true,
+    "window_state": "minimized",
+    "show_on_manual_intervention": true,
+    "disable_password_manager": true,
     "managed": {
       "channel": "chrome",
       "executable_path": "C:/Program Files/Google/Chrome/Application/chrome.exe",

@@ -180,7 +180,7 @@ from modules.baidu_auto import fetch_baidu_auto
 from modules.baidu_daily import build_baidu_daily_report_from_visible_text, default_daily_date
 from modules.credential_manager import build_login_failure_message, load_project_credentials
 from modules.browser_manager import BrowserLaunchError, CONNECT_EXISTING_HELP, cleanup_extra_tabs, connect_existing_chrome, get_browser_settings
-from modules.chrome_debug import ensure_chrome_debug_ready, find_chrome_executable, is_chrome_debug_port_alive
+from modules.chrome_debug import ensure_chrome_debug_ready, find_chrome_executable, is_chrome_debug_port_alive, start_debug_chrome
 from modules.excel_engine import format_openpyxl_save_error
 from modules.project_config import (
     build_runtime_config_from_project,
@@ -1327,6 +1327,28 @@ def test_browser_settings_accept_nested_connect_existing_config():
     assert settings["browser_channel"] == "chrome"
     assert settings["browser_profile_dir"] == "browser_profile/chrome"
     assert settings["allow_edge_fallback"] is False
+    assert settings["silent_automation"] is True
+    assert settings["window_state"] == "minimized"
+    assert settings["show_on_manual_intervention"] is True
+    assert settings["disable_password_manager"] is True
+
+
+def test_browser_settings_accepts_silent_overrides():
+    settings = get_browser_settings(
+        {
+            "browser": {
+                "silent_automation": False,
+                "window_state": "normal",
+                "show_on_manual_intervention": False,
+                "disable_password_manager": False,
+            }
+        }
+    )
+
+    assert settings["silent_automation"] is False
+    assert settings["window_state"] == "normal"
+    assert settings["show_on_manual_intervention"] is False
+    assert settings["disable_password_manager"] is False
 
 
 def test_connect_existing_does_not_launch_managed_chrome_or_edge():
@@ -1366,10 +1388,11 @@ def test_connect_existing_does_not_launch_managed_chrome_or_edge():
 
 
 def test_connect_existing_help_mentions_running_chrome_blocks_debug_port():
-    assert "已经打开 Chrome" in CONNECT_EXISTING_HELP
+    assert "Google Chrome" in CONNECT_EXISTING_HELP
     assert "chrome_debug" in CONNECT_EXISTING_HELP
-    assert "关闭所有 Chrome" in CONNECT_EXISTING_HELP
+    assert "不需要关闭日常 Chrome" in CONNECT_EXISTING_HELP
     assert "--remote-debugging-port=9222" in CONNECT_EXISTING_HELP
+    assert "--start-minimized" in CONNECT_EXISTING_HELP
     assert "cas.baidu.com" in CONNECT_EXISTING_HELP
     assert "yingxiao.baidu.com" not in CONNECT_EXISTING_HELP
 
@@ -1434,7 +1457,7 @@ def test_select_context_repoints_legacy_yingxiao_page_to_cas():
     assert page is legacy_page
     assert context.pages == [legacy_page]
     assert legacy_page.goto_calls == [DEFAULT_BAIDU_START_URL]
-    assert legacy_page.front is True
+    assert legacy_page.front is False
 
 
 def test_select_context_keeps_existing_cc_report_page():
@@ -1466,6 +1489,31 @@ def test_select_context_keeps_existing_cc_report_page():
 
     assert page is report_page
     assert report_page.goto_calls == []
+    assert report_page.front is False
+
+
+def test_select_context_can_show_page_for_non_silent_mode():
+    from modules.browser_manager import DEFAULT_BAIDU_START_URL, _select_context_and_page
+
+    class FakePage:
+        def __init__(self, url):
+            self.url = url
+            self.front = False
+
+        def bring_to_front(self):
+            self.front = True
+
+    class FakeContext:
+        def __init__(self, pages):
+            self.pages = pages
+
+    class FakeBrowser:
+        def __init__(self, contexts):
+            self.contexts = contexts
+
+    report_page = FakePage("https://cc.baidu.com/report")
+    _select_context_and_page(FakeBrowser([FakeContext([report_page])]), DEFAULT_BAIDU_START_URL, silent=False)
+
     assert report_page.front is True
 
 
@@ -1501,7 +1549,31 @@ def test_cleanup_extra_tabs_keeps_baidu_page_and_limits_to_three():
     assert pages[0].closed is True
     assert pages[1].closed is True
     assert pages[3].closed is False
-    assert pages[3].front is True
+    assert pages[3].front is False
+
+
+def test_cleanup_extra_tabs_can_show_keep_page_for_non_silent_mode():
+    class FakePage:
+        def __init__(self, url):
+            self.url = url
+            self.closed = False
+            self.front = False
+
+        def bring_to_front(self):
+            self.front = True
+
+        def close(self):
+            self.closed = True
+
+    class FakeContext:
+        def __init__(self, pages):
+            self.pages = pages
+
+    pages = [FakePage("https://old.example/1"), FakePage("https://cc.baidu.com/report")]
+
+    cleanup_extra_tabs(FakeContext(pages), pages[1], max_tabs=1, silent=False)
+
+    assert pages[1].front is True
 
 
 def test_cleanup_extra_tabs_does_nothing_when_page_count_is_three():
@@ -3435,6 +3507,60 @@ def test_ensure_chrome_debug_ready_returns_error_when_chrome_not_found(monkeypat
     assert "未找到 Google Chrome" in result["error"]
 
 
+def test_ensure_chrome_debug_ready_can_start_parallel_debug_profile(monkeypatch, tmp_path):
+    import modules.chrome_debug as cd
+
+    calls = {"alive": 0}
+
+    def fake_is_alive(host="127.0.0.1", port=9222, timeout=3.0):
+        calls["alive"] += 1
+        return calls["alive"] > 1
+
+    chrome = tmp_path / "chrome.exe"
+    chrome.write_text("", encoding="utf-8")
+    monkeypatch.setattr(cd, "is_chrome_debug_port_alive", fake_is_alive)
+    monkeypatch.setattr(cd, "_chrome_process_exists", lambda: (_ for _ in ()).throw(AssertionError("daily Chrome should not block debug profile")))
+    monkeypatch.setattr(cd, "find_chrome_executable", lambda config=None: chrome)
+    monkeypatch.setattr(cd.subprocess, "Popen", lambda *args, **kwargs: object())
+
+    result = ensure_chrome_debug_ready(tmp_path, {"browser": {"auto_start_debug_chrome": True}}, wait_seconds=2)
+
+    assert result["ready"] is True
+    assert result["started_new_chrome"] is True
+    assert result["profile_dir"].endswith("browser_profile\\chrome_debug") or result["profile_dir"].endswith("browser_profile/chrome_debug")
+
+
+def test_start_debug_chrome_uses_minimized_debug_profile_and_disables_password_manager(monkeypatch, tmp_path):
+    import json
+    import modules.chrome_debug as cd
+
+    captured = {}
+
+    class FakeProcess:
+        pass
+
+    def fake_popen(args, stdout=None, stderr=None):
+        captured["args"] = args
+        return FakeProcess()
+
+    chrome = tmp_path / "chrome.exe"
+    chrome.write_text("", encoding="utf-8")
+    monkeypatch.setattr(cd, "find_chrome_executable", lambda config=None: chrome)
+    monkeypatch.setattr(cd.subprocess, "Popen", fake_popen)
+
+    result = start_debug_chrome(tmp_path, {"browser": {"debug_profile_dir": "browser_profile/chrome_debug"}})
+
+    assert result["started"] is True
+    args = captured["args"]
+    assert "--start-minimized" in args
+    assert "--disable-save-password-bubble" in args
+    assert "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection" in args
+    assert any(str(tmp_path / "browser_profile" / "chrome_debug") in item for item in args)
+    prefs = json.loads((tmp_path / "browser_profile" / "chrome_debug" / "Default" / "Preferences").read_text(encoding="utf-8"))
+    assert prefs["credentials_enable_service"] is False
+    assert prefs["profile"]["password_manager_enabled"] is False
+
+
 def test_menu_chrome_check_prints_status(tmp_path, capsys):
     from menu import _check_chrome_debug
 
@@ -3471,6 +3597,8 @@ def test_browser_settings_includes_new_auto_start_fields():
     assert settings["remote_debugging_host"] == "127.0.0.1"
     assert settings["startup_url"] == "https://yingxiao.baidu.com/"
     assert settings["allow_kill_existing_chrome"] is False
+    assert settings["silent_automation"] is True
+    assert settings["disable_password_manager"] is True
 
 
 # ── 终端输出分层（v0.4.8）──
