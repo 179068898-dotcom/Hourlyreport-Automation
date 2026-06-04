@@ -1,0 +1,90 @@
+{
+  "project_id": "qingdao_bai",
+  "project_name": "青岛白",
+  "excel": {
+    "path": "D:\\Seafile\\【竞价】\\【❤青岛白】\\【2026年】【青岛白】竞价数据\\【青岛白】2026竞价数据.xlsx",
+    "hourly_sheet": "时段数据",
+    "daily_sheet": "百度",
+    "engine": "openpyxl"
+  },
+  "kst": {
+    "export_dir": "D:\\商务通数据\\青岛白",
+    "auto_pick_latest": true,
+    "max_file_age_hours": 2
+  },
+  "baidu": {
+    "credential_profile": "qingdao_bai_baidu",
+    "data_path": [
+      "首页",
+      "数据报告",
+      "数据概览",
+      "搜索推广"
+    ]
+  },
+  "accounts": [
+    {
+      "standard_name": "青岛白账户01",
+      "baidu_names": [
+        "青岛白账户01"
+      ],
+      "excel_name": "青岛白账户01",
+      "kst_ids": [
+        "TODO_QINGDAO_BAI_KST_ID_01"
+      ],
+      "kst_names": [
+        "青岛白账户01"
+      ]
+    },
+    {
+      "standard_name": "青岛白账户02",
+      "baidu_names": [
+        "青岛白账户02"
+      ],
+      "excel_name": "青岛白账户02",
+      "kst_ids": [
+        "TODO_QINGDAO_BAI_KST_ID_02"
+      ],
+      "kst_names": [
+        "青岛白账户02"
+      ]
+    },
+    {
+      "standard_name": "青岛白账户03",
+      "baidu_names": [
+        "青岛白账户03"
+      ],
+      "excel_name": "青岛白账户03",
+      "kst_ids": [
+        "TODO_QINGDAO_BAI_KST_ID_03"
+      ],
+      "kst_names": [
+        "青岛白账户03"
+      ]
+    }
+  ],
+  "hourly": {
+    "periods": [
+      "11点",
+      "15点",
+      "18点"
+    ]
+  },
+  "daily": {
+    "write_fields": [
+      "展现",
+      "点击",
+      "消费",
+      "有效对话",
+      "无效对话",
+      "一般有效对话",
+      "有效转潜",
+      "总转潜"
+    ],
+    "do_not_write_fields": [
+      "总对话",
+      "预约",
+      "到诊",
+      "就诊"
+    ]
+  }
+}
