@@ -3571,8 +3571,9 @@ def test_start_debug_chrome_uses_minimized_debug_profile_and_disables_password_m
     class FakeProcess:
         pass
 
-    def fake_popen(args, stdout=None, stderr=None):
+    def fake_popen(args, stdout=None, stderr=None, startupinfo=None):
         captured["args"] = args
+        captured["startupinfo"] = startupinfo
         return FakeProcess()
 
     chrome = tmp_path / "chrome.exe"
@@ -3587,6 +3588,8 @@ def test_start_debug_chrome_uses_minimized_debug_profile_and_disables_password_m
     assert "--start-minimized" in args
     assert "--disable-save-password-bubble" in args
     assert "--disable-features=PasswordManagerOnboarding,PasswordLeakDetection" in args
+    assert captured["startupinfo"] is not None
+    assert captured["startupinfo"].wShowWindow == 7
     assert not any("cas.baidu.com" in item or "cc.baidu.com" in item for item in args)
     assert any(str(tmp_path / "browser_profile" / "chrome_debug") in item for item in args)
     prefs = json.loads((tmp_path / "browser_profile" / "chrome_debug" / "Default" / "Preferences").read_text(encoding="utf-8"))
@@ -5535,6 +5538,52 @@ def test_logout_baidu_account_accepts_cas_after_account_click(monkeypatch):
     assert result["success"] is True
     assert result["message"] == "点击账号入口后已进入百度登录页"
     assert dump_calls == ["baidu_logout_candidates_before.json", "baidu_logout_candidates_after_account_click.json"]
+
+
+def test_logout_candidate_filter_ignores_large_container_and_accepts_menu_item():
+    """退出候选只接受明确菜单项，避免点到包含“退出”的整页大容器。"""
+    from modules.baidu_session import _is_logout_candidate
+
+    assert _is_logout_candidate({
+        "text": "首页 数据报告 退出登录 账户管理",
+        "tag": "DIV",
+        "class": "root",
+        "box": {"x": 0, "y": 0, "width": 1920, "height": 900},
+    }) is False
+    assert _is_logout_candidate({
+        "text": "退出登录",
+        "tag": "LI",
+        "class": "one-menu-item",
+        "box": {"x": 1700, "y": 160, "width": 120, "height": 36},
+    }) is True
+
+
+def test_click_element_center_uses_candidate_width_and_height():
+    """候选矩形带宽高时点击真实中心，而不是默认猜 40x24。"""
+    from modules.baidu_session import _click_element_center
+
+    class FakeMouse:
+        def __init__(self):
+            self.moves = []
+            self.clicks = []
+
+        def move(self, x, y):
+            self.moves.append((x, y))
+
+        def click(self, x, y):
+            self.clicks.append((x, y))
+
+    class FakePage:
+        def __init__(self):
+            self.mouse = FakeMouse()
+
+        def wait_for_timeout(self, timeout):
+            pass
+
+    page = FakePage()
+
+    assert _click_element_center(page, {"x": 100, "y": 50, "width": 160, "height": 40}) is True
+    assert page.mouse.clicks == [(180, 70)]
 
 
 def test_logout_baidu_account_no_entry_returns_false():

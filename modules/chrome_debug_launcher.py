@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from modules.browser_manager import DEFAULT_BAIDU_START_URL
-from modules.chrome_debug import build_chrome_debug_args, write_chrome_preferences
+from modules.chrome_debug import build_chrome_debug_args, build_chrome_startupinfo, write_chrome_preferences
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,6 +90,7 @@ def main() -> int:
             start_minimized=True,
             disable_password_manager=True,
         ),
+        startupinfo=build_chrome_startupinfo(start_minimized=True),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

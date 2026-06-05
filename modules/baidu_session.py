@@ -256,7 +256,12 @@ def _find_clickable_in_frame(frame, page) -> list[dict[str, Any]]:
                     "title": el.get_attribute("title") or "",
                     "aria_label": el.get_attribute("aria-label") or "",
                     "visible": True,
-                    "box": {"x": box["x"], "y": box["y"]} if box else None,
+                    "box": {
+                        "x": box["x"],
+                        "y": box["y"],
+                        "width": box.get("width", 0),
+                        "height": box.get("height", 0),
+                    } if box else None,
                     "frame_url": (frame.url or "")[:120],
                 }
                 items.append(info)
@@ -309,6 +314,43 @@ def _click_element_center(page, box: dict) -> bool:
         return True
     except Exception:
         return False
+
+
+def _compact_text(value: str) -> str:
+    return re.sub(r"\s+", "", value or "")
+
+
+def _is_logout_candidate(item: dict[str, Any]) -> bool:
+    text = _compact_text(item.get("text", ""))
+    if not any(keyword in text for keyword in LOGOUT_KEYWORDS):
+        return False
+    tag = str(item.get("tag", "")).upper()
+    cls = str(item.get("class", "")).lower()
+    element_id = str(item.get("id", "")).lower()
+    box = item.get("box") or {}
+    width = float(box.get("width") or 0)
+    height = float(box.get("height") or 0)
+    if "logout" in cls or "logout" in element_id:
+        return True
+    if tag in {"A", "BUTTON", "SPAN", "LI"} and len(text) <= 20:
+        return True
+    return len(text) <= 20 and (not width or width <= 260) and (not height or height <= 80)
+
+
+def _click_logout_selector(page) -> bool:
+    for sel in LOGOUT_SELECTORS:
+        try:
+            loc = page.locator(sel)
+            count = min(loc.count(), 8)
+            for index in range(count):
+                el = loc.nth(index)
+                if el.is_visible():
+                    el.click(timeout=3000)
+                    page.wait_for_timeout(2000)
+                    return True
+        except Exception:
+            continue
+    return False
 
 
 def wait_until_cas_login_page(page, timeout_ms: int = 2000) -> bool:
@@ -389,9 +431,16 @@ def logout_baidu_account(page, root: str | Path = ".") -> dict[str, Any]:
     # ── 2. 在 after candidates 中找"退出"并点击 ──
     after = _dump_candidates_to(page, root, "baidu_logout_candidates_after_account_click.json")
     clicked_logout = False
-    for item in after:
-        text = item.get("text", "")
-        if any(kw in text for kw in LOGOUT_KEYWORDS):
+    if _click_logout_selector(page):
+        clicked_logout = True
+
+    if not clicked_logout:
+        logout_items = [item for item in after if _is_logout_candidate(item)]
+        logout_items.sort(key=lambda item: (
+            len(_compact_text(item.get("text", ""))),
+            -float((item.get("box") or {}).get("x") or 0),
+        ))
+        for item in logout_items:
             box = item.get("box")
             if box:
                 if _click_element_center(page, box):
@@ -401,31 +450,15 @@ def logout_baidu_account(page, root: str | Path = ".") -> dict[str, Any]:
 
     # 兜底：选择器搜索退出
     if not clicked_logout:
-        for sel in LOGOUT_SELECTORS:
-            try:
-                el = page.locator(sel).first
-                if el.count() > 0 and el.is_visible():
-                    el.click(timeout=3000)
-                    page.wait_for_timeout(2000)
-                    clicked_logout = True
-                    break
-            except Exception:
-                continue
+        clicked_logout = _click_logout_selector(page)
 
     # ── 3. 验证退出 ──
     if clicked_logout and wait_until_cas_login_page(page, timeout_ms=6000):
         return {"success": True, "message": "已通过页面点击退出百度账号"}
 
     # 最后兜底
-    for sel in LOGOUT_SELECTORS:
-        try:
-            el = page.locator(sel).first
-            if el.count() > 0 and el.is_visible():
-                el.click(timeout=3000)
-                if wait_until_cas_login_page(page, timeout_ms=6000):
-                    return {"success": True, "message": "已退出百度账号"}
-        except Exception:
-            continue
+    if _click_logout_selector(page) and wait_until_cas_login_page(page, timeout_ms=6000):
+        return {"success": True, "message": "已退出百度账号"}
 
     return {"success": False, "message": "未找到退出登录入口"}
 
@@ -433,9 +466,10 @@ def logout_baidu_account(page, root: str | Path = ".") -> dict[str, Any]:
 # Keep selectors for fallback use
 LOGOUT_SELECTORS = [
     "a:has-text('退出')", "a:has-text('退出登录')", "a:has-text('安全退出')",
-    "span:has-text('退出')", "span:has-text('退出登录')",
-    "div:has-text('退出')", "div:has-text('退出登录')",
     "button:has-text('退出')", "button:has-text('退出登录')",
+    "li:has-text('退出')", "li:has-text('退出登录')",
+    "[role='menuitem']:has-text('退出')", "[role='menuitem']:has-text('退出登录')",
+    "span:has-text('退出')", "span:has-text('退出登录')",
     ".logout", ".logout-btn", "#logout",
 ]
 

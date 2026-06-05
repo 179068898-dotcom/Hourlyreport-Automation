@@ -30,6 +30,18 @@ PASSWORD_MANAGER_DISABLED_PREFS = {
 }
 
 
+SW_SHOWMINNOACTIVE = 7
+
+
+def build_chrome_startupinfo(*, start_minimized: bool = True):
+    if not start_minimized or not hasattr(subprocess, "STARTUPINFO"):
+        return None
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = SW_SHOWMINNOACTIVE
+    return startupinfo
+
+
 def _deep_update(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     for key, value in updates.items():
         if isinstance(value, dict) and isinstance(base.get(key), dict):
@@ -161,6 +173,7 @@ def start_debug_chrome(
     write_chrome_preferences(resolved_profile, disable_password_manager=disable_password_manager)
 
     try:
+        start_minimized = silent_automation and window_state == "minimized"
         subprocess.Popen(
             build_chrome_debug_args(
                 chrome_exe,
@@ -168,9 +181,10 @@ def start_debug_chrome(
                 port=port,
                 profile_dir=resolved_profile,
                 startup_url=None if silent_automation else startup_url,
-                start_minimized=silent_automation and window_state == "minimized",
+                start_minimized=start_minimized,
                 disable_password_manager=disable_password_manager,
             ),
+            startupinfo=build_chrome_startupinfo(start_minimized=start_minimized),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
