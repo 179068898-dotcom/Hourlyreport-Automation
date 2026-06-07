@@ -68,6 +68,42 @@ def clear_browser_login_state(root: str | Path) -> None:
     save_browser_login_state(root, {"last_profile": None})
 
 
+def reset_baidu_browser_session(page, root: str | Path) -> dict[str, Any]:
+    """清理当前浏览器上下文里的百度登录态，然后进入 CAS 登录页。"""
+    result = {
+        "success": False,
+        "cookies_cleared": False,
+        "storage_cleared": False,
+        "login_state_cleared": False,
+        "cas_opened": False,
+        "errors": [],
+    }
+    try:
+        clear_browser_login_state(root)
+        result["login_state_cleared"] = True
+    except Exception as exc:
+        result["errors"].append(f"clear login state failed: {exc}")
+
+    try:
+        page.context.clear_cookies()
+        result["cookies_cleared"] = True
+    except Exception as exc:
+        result["errors"].append(f"clear cookies failed: {exc}")
+
+    try:
+        page.evaluate("() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) {} }")
+        result["storage_cleared"] = True
+    except Exception as exc:
+        result["errors"].append(f"clear storage failed: {exc}")
+
+    entry = goto_baidu_login_page(page)
+    result["cas_opened"] = bool(entry.get("success"))
+    if not entry.get("success"):
+        result["errors"].append(str(entry.get("message") or "open CAS failed"))
+    result["success"] = result["cookies_cleared"] and result["cas_opened"]
+    return result
+
+
 # ── 项目 credential_profile ────────────────────────────────
 
 def get_current_project_credential_profile(config: dict[str, Any]) -> str:
@@ -514,8 +550,6 @@ def force_relogin_current_project(
     task: str | None = None,
     input_func: Any = None, output_func: Any = None,
 ) -> bool:
-    from modules.browser_manager import show_browser_page_for_manual_intervention
-
     import builtins
     if input_func is None:
         input_func = builtins.input
@@ -525,7 +559,11 @@ def force_relogin_current_project(
     if not get_current_project_credential_profile(config):
         return False
 
-    show_browser_page_for_manual_intervention(page, config)
+    def _logout_current_page() -> dict[str, Any]:
+        try:
+            return logout_baidu_account(page, root=root)
+        except TypeError:
+            return logout_baidu_account(page)
 
     project_id = config.get("project_id", "")
     project_name = config.get("project_name", "")
@@ -535,7 +573,7 @@ def force_relogin_current_project(
     if not on_cas_page and logged_in:
         logout_result = None
         for attempt in range(2):
-            logout_result = logout_baidu_account(page)
+            logout_result = _logout_current_page()
             if logout_result.get("success"):
                 output_func("  [\u901a\u8fc7] \u5df2\u9000\u51fa\u65e7\u767e\u5ea6\u8d26\u53f7\uff0c\u6b63\u5728\u767b\u5f55\u5f53\u524d\u9879\u76ee\u8d26\u53f7")
                 break
@@ -543,8 +581,13 @@ def force_relogin_current_project(
             if attempt == 0:
                 page.wait_for_timeout(1000)
         if not logout_result or not logout_result.get("success"):
-            output_func("  [\u5931\u8d25] \u672a\u80fd\u81ea\u52a8\u9000\u51fa\u65e7\u767e\u5ea6\u8d26\u53f7\uff0c\u8bf7\u624b\u52a8\u9000\u51fa\u540e\u91cd\u8bd5")
-            return False
+            logger.warning("logout_baidu_account failed twice, falling back to cookie reset")
+            output_func("  [\u6ce8\u610f] \u81ea\u52a8\u9000\u51fa\u65e7\u8d26\u53f7\u5931\u8d25\uff0c\u5df2\u6539\u7528\u6e05\u7406 cookie \u540e\u91cd\u65b0\u767b\u5f55")
+            reset_result = reset_baidu_browser_session(page, root)
+            if not reset_result.get("success"):
+                logger.error("reset_baidu_browser_session failed: %s", reset_result)
+                output_func("  [\u5931\u8d25] \u6e05\u7406\u767b\u5f55\u6001\u540e\u4ecd\u672a\u80fd\u6253\u5f00\u767e\u5ea6\u767b\u5f55\u9875")
+                return False
     else:
         logger.info("skip logout: cas=%s logged_in=%s", on_cas_page, logged_in)
 
@@ -611,10 +654,7 @@ def ensure_baidu_profile_session(
 
     result = {"passed": True, "decision": decision, "reason": reason}
     if decision == "relogin":
-        from modules.browser_manager import show_browser_page_for_manual_intervention
-
         output_func("  [\u6ce8\u610f] \u6b63\u5728\u5207\u6362\u5230\u5f53\u524d\u9879\u76ee\u767e\u5ea6\u8d26\u53f7")
-        show_browser_page_for_manual_intervention(page, config)
         result["passed"] = force_relogin_current_project(
             root, config, page, logger, task=task, input_func=input_func, output_func=output_func
         )

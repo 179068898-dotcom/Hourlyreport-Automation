@@ -37,6 +37,134 @@ def _write_text(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _metric_value(value: Any) -> int | float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return value
+    text = str(value).strip()
+    if text in {"", "-", "--"}:
+        return 0
+    cleaned = (
+        text.replace(",", "")
+        .replace("¥", "")
+        .replace("￥", "")
+        .replace("元", "")
+        .replace("次", "")
+        .replace(" ", "")
+    )
+    if "%" in cleaned:
+        return None
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return None
+    return int(number) if number.is_integer() else number
+
+
+def _field_from_header(header: Any) -> str | None:
+    normalized = normalize_text(str(header or ""))
+    if not normalized:
+        return None
+    if "占比" in normalized or "比例" in normalized or "%" in normalized:
+        return None
+    if "展现" in normalized:
+        return "展现"
+    if "点击" in normalized and "点击率" not in normalized:
+        return "点击"
+    if ("消费" in normalized or "花费" in normalized) and "消费占比" not in normalized:
+        return "消费"
+    return None
+
+
+def _account_from_row(row: dict[str, Any]) -> str:
+    for key, value in row.items():
+        if str(key).startswith("__"):
+            continue
+        if "账户" in normalize_text(str(key)):
+            return str(value or "").strip()
+    return ""
+
+
+def _total_metrics_from_rows(rows: list[dict[str, Any]]) -> dict[str, int | float]:
+    for row in rows:
+        account = normalize_text(_account_from_row(row))
+        if account.startswith(normalize_text("总计-")):
+            metrics: dict[str, int | float] = {}
+            for key, value in row.items():
+                field = _field_from_header(key)
+                if not field:
+                    continue
+                number = _metric_value(value)
+                if number is not None:
+                    metrics[field] = number
+            return metrics
+    return {}
+
+
+def _sum_account_metrics(accounts: dict[str, Any]) -> dict[str, int | float]:
+    totals = {"展现": 0, "点击": 0, "消费": 0.0}
+    for row in accounts.values():
+        if not isinstance(row, dict):
+            continue
+        for field in totals:
+            value = row.get(field)
+            if isinstance(value, int | float) and not isinstance(value, bool):
+                totals[field] += value
+    return {
+        "展现": int(totals["展现"]),
+        "点击": int(totals["点击"]),
+        "消费": round(float(totals["消费"]), 2),
+    }
+
+
+def _daily_report_signature(report: dict[str, Any], required_accounts: list[str]) -> tuple:
+    accounts = report.get("accounts") or {}
+    signature = []
+    for account in required_accounts:
+        row = accounts.get(account) or {}
+        signature.append((
+            account,
+            row.get("展现"),
+            row.get("点击"),
+            round(float(row.get("消费")), 2) if isinstance(row.get("消费"), int | float) and not isinstance(row.get("消费"), bool) else row.get("消费"),
+        ))
+    return tuple(signature)
+
+
+def validate_daily_baidu_snapshot(report: dict[str, Any], rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    required_accounts = get_required_accounts(config)
+    errors = list(validate_baidu_report(report, required_accounts))
+    total_metrics = _total_metrics_from_rows(rows)
+    account_totals = _sum_account_metrics(report.get("accounts") or {})
+    total_diff: dict[str, Any] = {}
+
+    for field, total_value in total_metrics.items():
+        account_value = account_totals.get(field)
+        if account_value is None:
+            continue
+        tolerance = 0.01 if field == "消费" else 0
+        diff = round(float(total_value) - float(account_value), 2)
+        total_diff[field] = {
+            "total_row": total_value,
+            "account_sum": account_value,
+            "diff": diff,
+        }
+        if abs(diff) > tolerance:
+            errors.append(f"百度日报表格总计校验失败：{field} 总计行 {total_value}，账户合计 {account_value}，差额 {diff}")
+
+    return {
+        "passed": not errors,
+        "errors": errors,
+        "required_accounts": required_accounts,
+        "actual_accounts": list((report.get("accounts") or {}).keys()),
+        "signature": _daily_report_signature(report, required_accounts),
+        "total_metrics": total_metrics,
+        "account_totals": account_totals,
+        "total_diff": total_diff,
+    }
+
+
 def build_baidu_daily_report_from_visible_text(
     visible_text: str,
     config: dict[str, Any],
@@ -178,6 +306,82 @@ def _wait_report_data_without_refresh(page, config: dict[str, Any], logger) -> s
     return last_text
 
 
+def _wait_stable_daily_report_snapshot(page, config: dict[str, Any], target_date: str, logger) -> dict[str, Any]:
+    wait_seconds = int(config.get("baidu", {}).get("report_table_wait_seconds", 30))
+    interval_ms = int(config.get("baidu", {}).get("daily_stability_interval_ms", 3000))
+    required_accounts = get_required_accounts(config)
+    deadline = datetime.now().timestamp() + wait_seconds
+    last_signature = None
+    last_snapshot: dict[str, Any] | None = None
+    attempts: list[dict[str, Any]] = []
+
+    while datetime.now().timestamp() < deadline:
+        visible_text = _read_page_text(page)
+        rows = extract_baidu_rows_from_visible_text(visible_text)
+        parsed_report = build_baidu_daily_report_from_visible_text(visible_text, config, target_date)
+        validation = validate_daily_baidu_snapshot(parsed_report, rows, config)
+        signature = validation["signature"]
+        attempt = {
+            "attempt": len(attempts) + 1,
+            "row_count": len(rows),
+            "signature": signature,
+            "passed": validation["passed"],
+            "errors": validation["errors"],
+            "total_diff": validation["total_diff"],
+        }
+        attempts.append(attempt)
+
+        if validation["passed"] and signature == last_signature and last_snapshot:
+            logger.info("百度日报 report 表格数据已稳定：attempts=%s", len(attempts))
+            return {
+                **last_snapshot,
+                "visible_text": visible_text,
+                "rows": rows,
+                "report": parsed_report,
+                "validation": validation,
+                "attempts": attempts,
+                "stable": True,
+            }
+
+        if validation["passed"]:
+            last_signature = signature
+            last_snapshot = {
+                "visible_text": visible_text,
+                "rows": rows,
+                "report": parsed_report,
+                "validation": validation,
+            }
+            logger.info("百度日报 report 首次读到有效快照，等待再次确认：accounts=%s", ",".join(required_accounts))
+        else:
+            last_signature = None
+            last_snapshot = None
+            logger.info("百度日报 report 快照未通过完整性校验：%s", "；".join(validation["errors"][:3]))
+
+        try:
+            page.wait_for_timeout(interval_ms)
+        except Exception:
+            break
+
+    fallback = last_snapshot or {
+        "visible_text": _read_page_text(page),
+        "rows": [],
+        "report": {
+            "date": target_date,
+            "target_date": target_date,
+            "source": "baidu_daily_report",
+            "accounts": {},
+            "errors": ["百度日报表格数据未稳定"],
+        },
+        "validation": {"passed": False, "errors": ["百度日报表格数据未稳定"]},
+    }
+    return {
+        **fallback,
+        "attempts": attempts,
+        "stable": False,
+        "errors": ["百度日报表格数据在等待时间内未连续两次保持一致，已中断以避免写入未加载完整的数据"],
+    }
+
+
 def _ensure_search_promotion_before_daily_date(page, config: dict[str, Any], logger, root=None) -> tuple[bool, str]:
     visible_text = _read_page_text(page)
     classification = classify_baidu_page(page.url, visible_text)
@@ -304,11 +508,24 @@ def _fetch_baidu_daily_single(
             return report
         if not _select_report_date(page, target_date, logger):
             report["errors"].append(f"百度日报日期选择失败：{target_date}")
-        visible_text = _wait_report_data_without_refresh(page, config, logger)
+        stable_snapshot = _wait_stable_daily_report_snapshot(page, config, target_date, logger)
+        visible_text = stable_snapshot.get("visible_text", "")
         _write_text(text_path, visible_text)
-        rows = extract_baidu_rows_from_visible_text(visible_text)
+        rows = stable_snapshot.get("rows") or extract_baidu_rows_from_visible_text(visible_text)
         _write_json(candidates_path, {"source": "visible_text", "rows": rows, "row_count": len(rows)})
-        parsed_report = build_baidu_daily_report_from_visible_text(visible_text, config, target_date, str(text_path))
+        parsed_report = stable_snapshot.get("report") or build_baidu_daily_report_from_visible_text(visible_text, config, target_date, str(text_path))
+        parsed_report.setdefault("exceptions", [])
+        parsed_report["exceptions"].append({"type": "visible_text_dump", "path": str(text_path)})
+        parsed_report["daily_stability_check"] = {
+            "stable": bool(stable_snapshot.get("stable")),
+            "attempts": stable_snapshot.get("attempts", []),
+            "validation": stable_snapshot.get("validation", {}),
+        }
+        if not stable_snapshot.get("stable"):
+            parsed_report.setdefault("errors", [])
+            for error in stable_snapshot.get("errors", []):
+                if error not in parsed_report["errors"]:
+                    parsed_report["errors"].append(error)
         report.update(parsed_report)
 
         # 日报页面复核通过 → 写 browser_login_state

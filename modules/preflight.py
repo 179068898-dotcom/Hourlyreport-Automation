@@ -114,13 +114,17 @@ def run_preflight(
     config: dict[str, Any],
     *,
     task: str = "hourly",
+    quick: bool = False,
     chrome_check_func: Callable[..., bool] = is_chrome_debug_port_alive,
 ) -> dict[str, Any]:
     root_path = Path(root)
     checks: list[dict[str, Any]] = []
 
-    def add(passed: bool, message: str) -> None:
-        checks.append({"passed": passed, "message": message})
+    def add(passed: bool, message: str, *, skipped: bool = False) -> None:
+        item = {"passed": passed, "message": message}
+        if skipped:
+            item["skipped"] = True
+        checks.append(item)
 
     add((root_path / "main.py").exists(), "项目根目录已识别" if (root_path / "main.py").exists() else "项目根目录无法识别")
 
@@ -140,7 +144,9 @@ def run_preflight(
     add(bool(excel_path and excel_path.exists()), "Excel 路径存在" if excel_path and excel_path.exists() else f"Excel 路径不存在：{excel_path or ''}")
     sheet_label = "日报" if task == "daily" else "小时报"
     structure_func = inspect_daily_excel_structure if task == "daily" else inspect_excel_structure
-    if excel_path and excel_path.exists():
+    if quick and excel_path and excel_path.exists():
+        add(True, f"快速预检已跳过{sheet_label} sheet 结构扫描；写入前仍会进行结构识别和复核", skipped=True)
+    elif excel_path and excel_path.exists():
         try:
             structure = structure_func(config=config, root=root_path, logger=_SilentLogger())
             errors = structure.get("errors") or []
@@ -162,6 +168,7 @@ def run_preflight(
         "passed": all(item["passed"] for item in checks),
         "mode": "preflight",
         "task": task,
+        "quick": quick,
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),
         "checks": checks,
@@ -171,5 +178,6 @@ def run_preflight(
 
 def print_preflight_report(report: dict[str, Any], output_func: Callable[[str], None] = print) -> None:
     for item in report.get("checks") or []:
-        output_func(f"[{'通过' if item.get('passed') else '失败'}] {item.get('message')}")
+        status = "跳过" if item.get("skipped") else ("通过" if item.get("passed") else "失败")
+        output_func(f"[{status}] {item.get('message')}")
     print_credential_report(report.get("credentials") or {}, output_func=output_func)

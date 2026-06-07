@@ -29,7 +29,7 @@
 6. Excel 表结构不能识别时立即停止，不猜测单元格位置。
 7. 百度使用本机已配置凭据与 Chrome 登录态，不向用户索要真实密码，不输出或提交 secrets。
 8. OpenClaw 自动执行必须调用固定 BAT 入口，不通过点击 Rich 菜单完成自动任务。
-9. Chrome 自动化默认使用项目专用调试目录静默最小化运行；只有验证码、登录确认、切换账号等人工介入场景才显示窗口。
+9. Chrome 自动化默认使用项目专用调试目录静默最小化运行；自动切换账号、自动清 cookie、自动 CAS 登录不应抢前台，只有验证码、安全校验、滑块或人工确认等确实需要人工介入的场景才显示窗口。
 
 ## 3. 执行前检查
 
@@ -47,10 +47,11 @@
 ### 3.1 Chrome 静默自动化说明
 
 - 调试 Chrome 使用项目专用目录 `browser_profile/chrome_debug`，不使用同事日常 Chrome 的个人资料目录。
-- `start_chrome_debug.bat` 会以最小化方式启动调试 Chrome，通常不需要关闭日常 Chrome。
+- `start_chrome_debug.bat` 会以最小化方式启动调试 Chrome；如果 `9222` 已经可连接，会复用现有实例，不会关闭老 Chrome，通常不需要关闭日常 Chrome。
 - 自动拉起调试 Chrome 时，不把百度 URL 直接作为 Chrome 启动参数传入，避免启动失败时 URL 被日常 Chrome 接管开新标签。
 - 自动读取百度数据时，程序默认不把 Chrome 抢到前台，也不会在连接后用 CDP 强制最小化窗口；窗口状态主要依赖启动时的 `--start-minimized`。
-- 遇到验证码、安全校验、账号确认、切换账号或人工退出登录时，程序才会显示 Chrome 窗口并等待人工处理。
+- 自动切换百度账号时，程序会先尝试页面退出；如果百度页面 dropdown 没弹出导致退出失败，会自动清理当前浏览器上下文 cookie / storage / 本地登录状态，再跳 CAS 登录当前项目账号。
+- 遇到验证码、安全校验、滑块或人工确认时，程序才会显示 Chrome 窗口并等待人工处理。
 - Chrome 保存密码提示已通过启动参数和 profile 偏好禁用；不要尝试通过页面脚本点击浏览器气泡。
 - 如果旧调试 profile 仍残留保存密码提示状态，可先关闭调试 Chrome，再清理 `browser_profile/chrome_debug` 后重新运行 `start_chrome_debug.bat`。
 
@@ -79,7 +80,9 @@ R. 刷新状态
 
 ## 5. OpenClaw 执行命令与固定入口
 
-菜单布局调整不影响 OpenClaw 固定入口。自动执行只使用下列命令。
+菜单布局调整不影响 OpenClaw 固定入口。自动执行只使用下列命令。OpenClaw 必须继续走 `run_openclaw_hourly.bat` / `run_openclaw_daily.bat` 专用窗口，不要绕过 BAT 自己拼 `main.py`，不要跳过 preflight，不要在失败后手工补 Excel 数字。
+
+OpenClaw 专用 BAT 默认执行快速预检：小时报使用 `main.py --mode preflight --quick`，日报使用 `main.py --mode preflight --task daily --quick`。快速预检跳过耗时的 Excel sheet 结构扫描，只保留路径、Chrome、项目配置、商务通目录和凭据等低成本检查；完整 preflight 仅用于新项目、Excel 模板变更、结构识别异常或排障。
 
 进入项目目录：
 
@@ -96,6 +99,7 @@ run_openclaw_hourly.bat 18点
 ```
 
 该入口先执行小时报预检，通过后才执行对应时段的完整流程。
+专用窗口标题应显示 `OpenClaw Hourly - fixed entry`，窗口会输出固定入口提示、当前工作目录和 preflight 结果。
 
 ### 5.2 日报
 
@@ -107,6 +111,7 @@ run_openclaw_daily.bat 2026-05-26
 - 不带日期：处理昨天。
 - 带日期：处理指定日期。
 - 该入口先执行日报预检，通过后才执行完整日报。
+专用窗口标题应显示 `OpenClaw Daily - fixed entry`，窗口会输出固定入口提示、当前工作目录和 preflight 结果。
 
 OpenClaw 不得绕过预检直接启动完整写入任务，不得在失败后手工补 Excel 数字。
 
@@ -253,10 +258,12 @@ logs/run.log
 | Chrome `9222` 无法连接 | 运行 `start_chrome_debug.bat` 启动项目专用调试 Chrome，再重新预检 |
 | Chrome 自动化窗口打断当前操作 | 确认配置保持 `silent_automation=true`、`window_state=minimized`，并通过 `start_chrome_debug.bat` 启动 |
 | Chrome 提示是否保存账号密码 | 调试 profile 默认禁用密码管理器；如旧状态残留，关闭调试 Chrome 后清理 `browser_profile/chrome_debug` 再重启 |
+| 旧百度账号自动退出失败 | 程序会自动清 cookie 后重登；仍失败时查看 `reports/baidu_session_check_report.json` 和 `logs/run.log`，不要手工补 Excel |
 | 百度需要验证码或安全校验 | 停止自动执行，等待人工处理 |
 | 商务通文件找不到 | 先人工导出正确日期/时段文件 |
 | Excel 写入失败 | 关闭 WPS/Excel 中打开的目标文件后重跑 |
 | 多百度来源任一来源失败 | 查看多来源报告，修正后整次重跑，不写部分结果 |
+| 百度日报表格数据未稳定 | 程序已阻止写入，等待页面/API 加载稳定后整次重跑，不手工补 Excel |
 | Excel 筛选按钮异常 | 停止继续覆盖写入，查看写入前备份及写入报告 |
 | 结构识别失败 | 查看结构报告，不猜测单元格写入 |
 

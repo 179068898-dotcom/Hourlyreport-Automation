@@ -3420,6 +3420,39 @@ def test_preflight_defaults_to_hourly_sheet_check(tmp_path, monkeypatch):
     assert selected == ["hourly"]
 
 
+def test_quick_preflight_skips_excel_structure_scan(tmp_path, monkeypatch):
+    import modules.preflight as preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {"profile_a": {"username": "quick-user", "password": "quick-password"}},
+    )
+
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+    monkeypatch.setattr(
+        preflight,
+        "inspect_excel_structure",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("快速预检不得扫描小时报 sheet")),
+    )
+    monkeypatch.setattr(
+        preflight,
+        "inspect_daily_excel_structure",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("快速预检不得扫描日报 sheet")),
+    )
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        quick=True,
+        chrome_check_func=lambda **kwargs: True,
+    )
+
+    assert report["passed"] is True
+    assert report["quick"] is True
+    assert any(item.get("skipped") for item in report["checks"])
+
+
 def test_cli_preflight_accepts_daily_task_and_passes_it_to_runner(tmp_path, monkeypatch):
     import main as cli_main
 
@@ -3431,14 +3464,14 @@ def test_cli_preflight_accepts_daily_task_and_passes_it_to_runner(tmp_path, monk
     monkeypatch.setattr(
         cli_main,
         "run_preflight",
-        lambda root, project, config, task="hourly": calls.append(task) or {"passed": True, "checks": [], "credentials": {}},
+        lambda root, project, config, task="hourly", quick=False: calls.append((task, quick)) or {"passed": True, "checks": [], "credentials": {}},
     )
-    monkeypatch.setattr("sys.argv", ["main.py", "--mode", "preflight", "--task", "daily"])
+    monkeypatch.setattr("sys.argv", ["main.py", "--mode", "preflight", "--task", "daily", "--quick"])
 
     result = cli_main.main()
 
     assert result == 0
-    assert calls == ["daily"]
+    assert calls == [("daily", True)]
 
 
 def test_cli_run_fails_before_baidu_pipeline_when_credential_precheck_fails(tmp_path, monkeypatch):
@@ -3595,6 +3628,23 @@ def test_start_debug_chrome_uses_minimized_debug_profile_and_disables_password_m
     prefs = json.loads((tmp_path / "browser_profile" / "chrome_debug" / "Default" / "Preferences").read_text(encoding="utf-8"))
     assert prefs["credentials_enable_service"] is False
     assert prefs["profile"]["password_manager_enabled"] is False
+
+
+def test_chrome_debug_launcher_reuses_existing_debug_port_without_killing_chrome(monkeypatch, tmp_path):
+    import modules.chrome_debug_launcher as launcher
+
+    chrome = tmp_path / "chrome.exe"
+    chrome.write_text("", encoding="utf-8")
+    monkeypatch.setattr(launcher, "CHROME_EXE", chrome)
+    monkeypatch.setattr(launcher, "_is_port_open", lambda port: True)
+    monkeypatch.setattr(launcher, "_run_connect_test", lambda: 0)
+    monkeypatch.setattr(
+        launcher.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("launcher must not inspect or close existing Chrome")),
+    )
+
+    assert launcher.main() == 0
 
 
 def test_menu_chrome_check_prints_status(tmp_path, capsys):
@@ -3754,11 +3804,11 @@ def test_openclaw_hourly_bat_fixes_utf8_and_runs_preflight_before_hourly_pipelin
     root = Path(__file__).resolve().parents[1]
     script = (root / "run_openclaw_hourly.bat").read_text(encoding="utf-8")
 
-    assert "cd /d D:\\自动化脚本\\hourly_report_bot_release_v0.4.4" in script
+    assert 'cd /d "%~dp0"' in script
     assert "chcp 65001" in script
     assert "PYTHONUTF8=1" in script
     assert "PYTHONIOENCODING=utf-8" in script
-    assert ".venv\\Scripts\\python.exe main.py --mode preflight" in script
+    assert ".venv\\Scripts\\python.exe main.py --mode preflight --quick" in script
     assert "main.py --mode run --period" in script
 
 
@@ -3778,11 +3828,11 @@ def test_openclaw_daily_bat_runs_daily_preflight_before_daily_pipeline():
     root = Path(__file__).resolve().parents[1]
     script = (root / "run_openclaw_daily.bat").read_text(encoding="utf-8")
 
-    assert "cd /d D:\\自动化脚本\\hourly_report_bot_release_v0.4.4" in script
+    assert 'cd /d "%~dp0"' in script
     assert "chcp 65001" in script
     assert "PYTHONUTF8=1" in script
     assert "PYTHONIOENCODING=utf-8" in script
-    assert "main.py --mode preflight --task daily" in script
+    assert "main.py --mode preflight --task daily --quick" in script
     assert "main.py --mode run-daily --yes" in script
     assert 'main.py --mode run-daily --date "%~1" --yes' in script
 
@@ -5399,6 +5449,30 @@ def test_force_relogin_uses_cas_page(tmp_path, monkeypatch):
     assert len(login_calls) >= 1
 
 
+def test_force_relogin_does_not_show_chrome_during_automatic_switch(tmp_path, monkeypatch):
+    """自动切换百度账号时不应把 Chrome 拉到前台。"""
+    import logging
+    from unittest.mock import MagicMock
+    from modules.baidu_session import force_relogin_current_project
+
+    (tmp_path / "reports").mkdir(exist_ok=True)
+    config = {"baidu": {"credential_profile": "kunming_niu_baidu"}, "project_id": "kunming_niu"}
+    fake_page = MagicMock()
+    fake_page.url = "https://cc.baidu.com/homepage"
+    logger = logging.getLogger("test")
+
+    monkeypatch.setattr("modules.baidu_session.logout_baidu_account", lambda page: {"success": True, "message": "ok"})
+    monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
+    monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
+    monkeypatch.setattr(
+        "modules.browser_manager.show_browser_page_for_manual_intervention",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("automatic relogin must stay silent")),
+    )
+
+    assert force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None) is True
+
+
 def test_force_relogin_login_failure_returns_false(tmp_path, monkeypatch):
     """CAS 登录失败时 force_relogin 返回 False。"""
     import logging
@@ -5633,8 +5707,8 @@ def test_force_relogin_tries_logout_then_cas(tmp_path, monkeypatch):
     assert len(login_calls) >= 1, "应登录"
 
 
-def test_logout_failure_stops_before_cas(tmp_path, monkeypatch):
-    """logout 失败且页面已登录 → force_relogin 返回 False，不进 CAS。"""
+def test_logout_failure_resets_cookies_then_uses_cas(tmp_path, monkeypatch):
+    """logout 失败且页面已登录时，清 cookie 后继续进入 CAS。"""
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import force_relogin_current_project
@@ -5652,10 +5726,12 @@ def test_logout_failure_stops_before_cas(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page",
                         lambda page: cas_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
 
     result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is False, "logout 失败且已登录应返回 False"
-    assert len(cas_calls) == 0, "logout 失败不应进 CAS"
+    assert result is True
+    assert len(cas_calls) >= 1
+    fake_page.context.clear_cookies.assert_called()
 
 
 def test_wait_until_cas_only_accepts_cas_url():
@@ -6185,7 +6261,7 @@ def test_force_relogin_retries_logout_once_before_cas(tmp_path, monkeypatch):
     assert len(cas_calls) == 1
 
 
-def test_force_relogin_double_logout_failure_blocks_cas(tmp_path, monkeypatch):
+def test_force_relogin_double_logout_failure_falls_back_to_cookie_reset(tmp_path, monkeypatch):
     import logging
     from unittest.mock import MagicMock
     from modules.baidu_session import force_relogin_current_project
@@ -6201,10 +6277,12 @@ def test_force_relogin_double_logout_failure_blocks_cas(tmp_path, monkeypatch):
     monkeypatch.setattr("modules.baidu_session.is_baidu_logged_in", lambda page: True)
     monkeypatch.setattr("modules.baidu_session.wait_until_cas_login_page", lambda page, timeout_ms=5000: False)
     monkeypatch.setattr("modules.baidu_session.goto_baidu_login_page", lambda page: cas_calls.append(1) or {"success": True})
+    monkeypatch.setattr("modules.baidu_overview._auto_login_if_needed", lambda p, r, c, l: True)
 
     result = force_relogin_current_project(tmp_path, config, fake_page, logger, input_func=lambda _: "", output_func=lambda _: None)
-    assert result is False
-    assert len(cas_calls) == 0
+    assert result is True
+    assert len(cas_calls) >= 1
+    fake_page.context.clear_cookies.assert_called()
 
 
 def test_session_detected_none_logged_in_uses_tentative_bypass(tmp_path, monkeypatch):
@@ -7749,6 +7827,83 @@ def test_build_baidu_daily_report_allows_missing_multi_source_candidate_account(
 
     assert report["accounts"]["写入A"]["消费"] == 1
     assert report["errors"] == []
+
+
+def test_daily_baidu_snapshot_rejects_total_row_mismatch():
+    import modules.baidu_daily as daily
+
+    report = {
+        "accounts": {
+            "A": {"展现": 10, "点击": 1, "消费": 1.0},
+            "B": {"展现": 20, "点击": 2, "消费": 2.0},
+            "C": {"展现": 30, "点击": 3, "消费": 3.0},
+        }
+    }
+    rows = [
+        {"账户": "总计-3", "展现": "60", "点击": "6", "消费": "100"},
+        {"账户": "A", "展现": "10", "点击": "1", "消费": "1"},
+        {"账户": "B", "展现": "20", "点击": "2", "消费": "2"},
+        {"账户": "C", "展现": "30", "点击": "3", "消费": "3"},
+    ]
+
+    result = daily.validate_daily_baidu_snapshot(report, rows, {"accounts": {"A": {}, "B": {}, "C": {}}})
+
+    assert result["passed"] is False
+    assert any("总计校验失败" in error for error in result["errors"])
+
+
+def test_wait_stable_daily_report_ignores_first_unstable_snapshot(monkeypatch):
+    import logging
+    import modules.baidu_daily as daily
+
+    class FakePage:
+        def __init__(self):
+            self.read_index = 0
+            self.waits = []
+
+        def wait_for_timeout(self, timeout):
+            self.waits.append(timeout)
+
+    page = FakePage()
+    texts = ["low", "correct", "correct"]
+
+    def fake_read(_page):
+        value = texts[min(_page.read_index, len(texts) - 1)]
+        _page.read_index += 1
+        return value
+
+    def fake_report(text, config, target_date, visible_text_path=None):
+        cost = 1.0 if text == "low" else 10.0
+        return {
+            "date": target_date,
+            "target_date": target_date,
+            "accounts": {"A": {"展现": 1, "点击": 1, "消费": cost}},
+            "errors": [],
+        }
+
+    def fake_validate(report, rows, config):
+        return {
+            "passed": True,
+            "errors": [],
+            "signature": daily._daily_report_signature(report, ["A"]),
+            "total_diff": {},
+        }
+
+    monkeypatch.setattr(daily, "_read_page_text", fake_read)
+    monkeypatch.setattr(daily, "extract_baidu_rows_from_visible_text", lambda text: [])
+    monkeypatch.setattr(daily, "build_baidu_daily_report_from_visible_text", fake_report)
+    monkeypatch.setattr(daily, "validate_daily_baidu_snapshot", fake_validate)
+
+    snapshot = daily._wait_stable_daily_report_snapshot(
+        page,
+        {"accounts": {"A": {}}, "baidu": {"report_table_wait_seconds": 10, "daily_stability_interval_ms": 1}},
+        "2026-05-23",
+        logging.getLogger("test"),
+    )
+
+    assert snapshot["stable"] is True
+    assert snapshot["report"]["accounts"]["A"]["消费"] == 10.0
+    assert len(snapshot["attempts"]) == 3
 
 
 def test_fetch_baidu_daily_multi_source_uses_shared_aggregation_and_is_merge_compatible(tmp_path, monkeypatch):

@@ -36,22 +36,6 @@ def _is_port_open(port: int) -> bool:
         return sock.connect_ex(("127.0.0.1", port)) == 0
 
 
-def _chrome_is_running() -> bool:
-    result = subprocess.run(
-        ["tasklist", "/FI", "IMAGENAME eq chrome.exe"],
-        capture_output=True,
-        text=True,
-        encoding="mbcs",
-        errors="ignore",
-        check=False,
-    )
-    return "chrome.exe" in result.stdout.lower()
-
-
-def _kill_chrome() -> None:
-    subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-
-
 def _run_connect_test() -> int:
     return subprocess.call([sys.executable, "main.py", "--mode", "test-browser-connect"], cwd=ROOT)
 
