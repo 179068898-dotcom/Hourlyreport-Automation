@@ -22,11 +22,11 @@ PATH_PATTERN = re.compile(r"([A-Za-z]:\\[^\s，。；;]+|(?:reports|logs|configs
 
 
 STYLE_BY_CLASS = {
-    "log-path": "color:#93c5fd;font-weight:700;",
-    "log-pass": "color:#86efac;font-weight:800;",
-    "log-error": "color:#fca5a5;font-weight:800;",
-    "log-project": "color:#fcd34d;font-weight:800;",
-    "log-excel": "color:#c4b5fd;font-weight:800;",
+    "log-path": "color:#93c5fd;",
+    "log-pass": "color:#86efac;",
+    "log-error": "color:#fca5a5;",
+    "log-project": "color:#fcd34d;",
+    "log-excel": "color:#c4b5fd;",
 }
 
 

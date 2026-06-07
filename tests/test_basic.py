@@ -5356,6 +5356,7 @@ def test_desktop_gui_resolves_project_root_from_workspace():
 
 def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from gui.main_window import MainWindow
 
@@ -5371,6 +5372,7 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
 
 def test_desktop_gui_window_is_compact_fixed_and_header_hidden(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     from gui.main_window import MainWindow
 
@@ -5382,6 +5384,10 @@ def test_desktop_gui_window_is_compact_fixed_and_header_hidden(monkeypatch):
     assert window.height() <= 700
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
+    assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
+    assert window.title_bar.objectName() == "titleBar"
+    assert window.title_label.text() == "百度日报小时报控制台"
+    assert window.windowIcon().isNull()
     assert window.font().family() == "Microsoft YaHei UI"
     assert window.font().pointSize() == 9
     window.close()
@@ -5413,6 +5419,7 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     assert SUB_FONT_PT == 8
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
+    assert "font-weight" not in window.styleSheet()
     window.close()
 
 

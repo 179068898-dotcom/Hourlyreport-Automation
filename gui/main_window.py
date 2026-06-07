@@ -6,7 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -60,9 +60,12 @@ class MainWindow(QMainWindow):
         self.runner.finished.connect(self.on_task_finished)
         self.runner.failed_to_start.connect(self.show_task_error)
 
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setWindowIcon(QIcon())
         self.setWindowTitle("百度日报小时报控制台")
         self.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
-        self.setFixedSize(1000, 680)
+        self.setFixedSize(980, 660)
+        self._drag_offset = None
         self._build_ui()
         self._apply_style()
         self.refresh_projects()
@@ -71,9 +74,35 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         root_widget = QWidget()
         self.setCentralWidget(root_widget)
-        shell = QHBoxLayout(root_widget)
-        shell.setContentsMargins(18, 18, 18, 18)
+        root_layout = QVBoxLayout(root_widget)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self.title_bar = QFrame()
+        self.title_bar.setObjectName("titleBar")
+        self.title_bar.setFixedHeight(34)
+        title_layout = QHBoxLayout(self.title_bar)
+        title_layout.setContentsMargins(14, 0, 8, 0)
+        title_layout.setSpacing(8)
+        self.title_label = QLabel("百度日报小时报控制台")
+        self.title_label.setObjectName("windowTitleLabel")
+        title_layout.addWidget(self.title_label)
+        title_layout.addStretch(1)
+        self.minimize_button = QPushButton("—")
+        self.minimize_button.setObjectName("windowControlButton")
+        self.close_button = QPushButton("×")
+        self.close_button.setObjectName("windowCloseButton")
+        for button in [self.minimize_button, self.close_button]:
+            button.setFixedSize(34, 28)
+            title_layout.addWidget(button)
+        self.minimize_button.clicked.connect(self.showMinimized)
+        self.close_button.clicked.connect(self.close)
+        root_layout.addWidget(self.title_bar)
+
+        shell = QHBoxLayout()
+        shell.setContentsMargins(18, 16, 18, 18)
         shell.setSpacing(14)
+        root_layout.addLayout(shell, 1)
 
         left = QFrame()
         left.setObjectName("leftRail")
@@ -94,9 +123,10 @@ class MainWindow(QMainWindow):
         left_layout.addSpacing(8)
         project_card = QFrame()
         project_card.setObjectName("projectCard")
+        project_card.setMinimumHeight(132)
         project_layout = QVBoxLayout(project_card)
-        project_layout.setContentsMargins(12, 12, 12, 12)
-        project_layout.setSpacing(8)
+        project_layout.setContentsMargins(12, 10, 12, 10)
+        project_layout.setSpacing(10)
         project_title_row = QHBoxLayout()
         project_title = QLabel("项目")
         project_title.setObjectName("sectionTitle")
@@ -108,7 +138,7 @@ class MainWindow(QMainWindow):
         project_layout.addLayout(project_title_row)
         self.project_combo = QComboBox()
         self.project_combo.setObjectName("projectCombo")
-        self.project_combo.setMinimumHeight(38)
+        self.project_combo.setMinimumHeight(self.fontMetrics().height() + 16)
         project_layout.addWidget(self.project_combo)
         self.progress_text = QLabel("项目就绪后会显示任务进度")
         self.progress_text.setObjectName("taskProgressText")
@@ -242,6 +272,28 @@ class MainWindow(QMainWindow):
                 font-family: "Microsoft YaHei UI";
                 font-size: 9pt;
             }
+            QFrame#titleBar {
+                background: #eef2f7;
+                border: 0;
+            }
+            QLabel#windowTitleLabel {
+                color: #172033;
+                font-size: 9pt;
+            }
+            QPushButton#windowControlButton, QPushButton#windowCloseButton {
+                background: transparent;
+                border: 0;
+                border-radius: 6px;
+                color: #334155;
+                padding: 0;
+            }
+            QPushButton#windowControlButton:hover {
+                background: #dbe6f2;
+            }
+            QPushButton#windowCloseButton:hover {
+                background: #f3d5d8;
+                color: #8f1d2c;
+            }
             QFrame#leftRail, QFrame#contentPanel {
                 background: #fbfcff;
                 border: 1px solid #dde5f0;
@@ -254,16 +306,13 @@ class MainWindow(QMainWindow):
             }
             QLabel#appTitle {
                 font-size: 10pt;
-                font-weight: 700;
                 color: #111827;
             }
             QLabel#statusTitle {
                 font-size: 10pt;
-                font-weight: 700;
             }
             QLabel#sectionTitle {
                 font-size: 9pt;
-                font-weight: 700;
             }
             QLabel#pillHint {
                 color: #426985;
@@ -272,7 +321,6 @@ class MainWindow(QMainWindow):
                 border-radius: 9px;
                 padding: 3px 8px;
                 font-size: 8pt;
-                font-weight: 700;
             }
             QLabel#mutedText {
                 color: #64748b;
@@ -289,7 +337,6 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 padding: 8px 12px;
                 color: #1f2937;
-                font-weight: 600;
             }
             QPushButton:hover {
                 background: #e8f0fb;
@@ -308,17 +355,16 @@ class MainWindow(QMainWindow):
                 padding: 8px 10px;
                 background: #ffffff;
             }
-            QComboBox#projectCombo {
-                min-height: 42px;
+            QComboBox#projectCombo, QDateEdit#projectCombo {
+                min-height: 30px;
                 border-radius: 13px;
                 border: 1px solid #b8cce4;
-                padding: 8px 12px;
+                padding: 6px 12px;
                 background: #ffffff;
                 color: #172033;
                 font-size: 9pt;
-                font-weight: 700;
             }
-            QComboBox#projectCombo:hover {
+            QComboBox#projectCombo:hover, QDateEdit#projectCombo:hover {
                 border-color: #7fb2ea;
                 background: #fafdff;
             }
@@ -328,7 +374,6 @@ class MainWindow(QMainWindow):
             }
             QRadioButton {
                 spacing: 6px;
-                font-weight: 600;
             }
             QLabel#stageBadge {
                 min-height: 34px;
@@ -336,7 +381,6 @@ class MainWindow(QMainWindow):
                 background: #eef4fb;
                 color: #496176;
                 border: 1px solid #d7e2ee;
-                font-weight: 600;
             }
             QLabel#stageBadge[active="true"] {
                 background: #d9ecff;
@@ -357,23 +401,18 @@ class MainWindow(QMainWindow):
             }
             QTextEdit#logConsole .log-path {
                 color: #93c5fd;
-                font-weight: 700;
             }
             QTextEdit#logConsole .log-pass {
                 color: #86efac;
-                font-weight: 800;
             }
             QTextEdit#logConsole .log-error {
                 color: #fca5a5;
-                font-weight: 800;
             }
             QTextEdit#logConsole .log-project {
                 color: #fcd34d;
-                font-weight: 800;
             }
             QTextEdit#logConsole .log-excel {
                 color: #c4b5fd;
-                font-weight: 800;
             }
             QProgressBar {
                 height: 12px;
@@ -396,6 +435,24 @@ class MainWindow(QMainWindow):
                 background: #5ea0ef;
             }
         """)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() <= self.title_bar.height():
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_offset = None
+        super().mouseReleaseEvent(event)
 
     def refresh_projects(self) -> None:
         self.projects = load_project_summaries(self.root)
