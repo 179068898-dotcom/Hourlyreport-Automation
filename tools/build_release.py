@@ -21,6 +21,9 @@ REQUIRED_INTERNAL_PROFILES = [
     "changsha_niu_baidu",
     "shenyang_niu_zhongya_baidu",
     "shenyang_niu_yinkang_baidu",
+    "qingdao_bai_baidu",
+    "shenyang_bai_source_a_baidu",
+    "shenyang_bai_source_b_baidu",
 ]
 
 

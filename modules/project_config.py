@@ -399,8 +399,8 @@ def validate_project_config(project: dict[str, Any]) -> list[str]:
         errors.extend(_validate_baidu_sources(project))
 
     accounts = project.get("accounts")
-    if not isinstance(accounts, list) or (not has_sources and len(accounts) != 3) or (has_sources and len(accounts) < 1):
-        errors.append("账户数量必须为 3" if not has_sources else "多百度来源项目至少需要 1 个账户")
+    if not isinstance(accounts, list) or len(accounts) < 1:
+        errors.append("项目至少需要 1 个账户")
         return errors
 
     promotion_ids = set()

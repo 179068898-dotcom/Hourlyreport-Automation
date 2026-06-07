@@ -2,7 +2,7 @@
   "project_id": "shenyang_bai",
   "project_name": "沈阳白",
   "excel": {
-    "path": "D:\\Seafile\\【竞价】\\【❤沈阳白】\\【2026年】【沈阳白】竞价数据\\【沈阳白】2026竞价数据.xlsx",
+    "path": "D:\\Seafile\\【竞价】\\【❤沈阳白】\\【2026年】【沈阳中亚】竞价数据\\【沈阳白】2026竞价数据.xlsx",
     "hourly_sheet": "时段数据",
     "daily_sheet": "百度",
     "engine": "openpyxl"
@@ -13,7 +13,6 @@
     "max_file_age_hours": 2
   },
   "baidu": {
-    "credential_profile": "",
     "data_path": [
       "首页",
       "数据报告",
@@ -24,194 +23,68 @@
   "baidu_sources": [
     {
       "source_id": "shenyang_bai_source_a",
-      "source_name": "沈阳白来源A",
+      "source_name": "沈阳大中亚",
       "credential_profile": "shenyang_bai_source_a_baidu",
       "accounts": [
         {
-          "standard_name": "沈阳白来源A账户01",
+          "standard_name": "沈阳中亚白癜风1",
           "baidu_names": [
-            "沈阳白来源A账户01"
+            "沈阳中亚白癜风1"
           ],
-          "excel_name": "沈阳白来源A账户01",
+          "excel_name": "沈阳中亚白癜风1",
           "kst_ids": [
-            "TODO_SHENYANG_BAI_A_KST_ID_01"
+            "36607524"
           ],
           "kst_names": [
-            "沈阳白来源A账户01"
+            "沈阳中亚白癜风1"
           ]
         },
         {
-          "standard_name": "沈阳白来源A账户02",
+          "standard_name": "中亚白癜风3",
           "baidu_names": [
-            "沈阳白来源A账户02"
+            "中亚白癜风3"
           ],
-          "excel_name": "沈阳白来源A账户02",
+          "excel_name": "中亚白癜风3",
           "kst_ids": [
-            "TODO_SHENYANG_BAI_A_KST_ID_02"
+            "51639657"
           ],
           "kst_names": [
-            "沈阳白来源A账户02"
+            "中亚白癜风3"
           ]
         },
         {
-          "standard_name": "沈阳白来源A账户03",
+          "standard_name": "中亚白癜风5",
           "baidu_names": [
-            "沈阳白来源A账户03"
+            "中亚白癜风5"
           ],
-          "excel_name": "沈阳白来源A账户03",
+          "excel_name": "中亚白癜风5",
           "kst_ids": [
-            "TODO_SHENYANG_BAI_A_KST_ID_03"
+            "54566968"
           ],
           "kst_names": [
-            "沈阳白来源A账户03"
+            "中亚白癜风5"
           ]
         }
       ]
     },
     {
       "source_id": "shenyang_bai_source_b",
-      "source_name": "沈阳白来源B",
+      "source_name": "沈阳大银康",
       "credential_profile": "shenyang_bai_source_b_baidu",
       "accounts": [
         {
-          "standard_name": "沈阳白来源B账户01",
+          "standard_name": "沈阳银康银屑病6",
           "baidu_names": [
-            "沈阳白来源B账户01"
+            "沈阳银康银屑病6"
           ],
-          "excel_name": "沈阳白来源B账户01",
+          "excel_name": "沈阳银康银屑病6",
           "kst_ids": [
-            "TODO_SHENYANG_BAI_B_KST_ID_01"
+            "69976114"
           ],
           "kst_names": [
-            "沈阳白来源B账户01"
-          ]
-        },
-        {
-          "standard_name": "沈阳白来源B账户02",
-          "baidu_names": [
-            "沈阳白来源B账户02"
-          ],
-          "excel_name": "沈阳白来源B账户02",
-          "kst_ids": [
-            "TODO_SHENYANG_BAI_B_KST_ID_02"
-          ],
-          "kst_names": [
-            "沈阳白来源B账户02"
-          ]
-        },
-        {
-          "standard_name": "沈阳白来源B账户03",
-          "baidu_names": [
-            "沈阳白来源B账户03"
-          ],
-          "excel_name": "沈阳白来源B账户03",
-          "kst_ids": [
-            "TODO_SHENYANG_BAI_B_KST_ID_03"
-          ],
-          "kst_names": [
-            "沈阳白来源B账户03"
+            "沈阳银康银屑病6"
           ]
         }
-      ]
-    }
-  ],
-  "excel_accounts": [
-    {
-      "standard_name": "沈阳白来源A账户01"
-    },
-    {
-      "standard_name": "沈阳白来源A账户02"
-    },
-    {
-      "standard_name": "沈阳白来源A账户03"
-    },
-    {
-      "standard_name": "沈阳白来源B账户01"
-    },
-    {
-      "standard_name": "沈阳白来源B账户02"
-    },
-    {
-      "standard_name": "沈阳白来源B账户03"
-    }
-  ],
-  "accounts": [
-    {
-      "standard_name": "沈阳白来源A账户01",
-      "baidu_names": [
-        "沈阳白来源A账户01"
-      ],
-      "excel_name": "沈阳白来源A账户01",
-      "kst_ids": [
-        "TODO_SHENYANG_BAI_A_KST_ID_01"
-      ],
-      "kst_names": [
-        "沈阳白来源A账户01"
-      ]
-    },
-    {
-      "standard_name": "沈阳白来源A账户02",
-      "baidu_names": [
-        "沈阳白来源A账户02"
-      ],
-      "excel_name": "沈阳白来源A账户02",
-      "kst_ids": [
-        "TODO_SHENYANG_BAI_A_KST_ID_02"
-      ],
-      "kst_names": [
-        "沈阳白来源A账户02"
-      ]
-    },
-    {
-      "standard_name": "沈阳白来源A账户03",
-      "baidu_names": [
-        "沈阳白来源A账户03"
-      ],
-      "excel_name": "沈阳白来源A账户03",
-      "kst_ids": [
-        "TODO_SHENYANG_BAI_A_KST_ID_03"
-      ],
-      "kst_names": [
-        "沈阳白来源A账户03"
-      ]
-    },
-    {
-      "standard_name": "沈阳白来源B账户01",
-      "baidu_names": [
-        "沈阳白来源B账户01"
-      ],
-      "excel_name": "沈阳白来源B账户01",
-      "kst_ids": [
-        "TODO_SHENYANG_BAI_B_KST_ID_01"
-      ],
-      "kst_names": [
-        "沈阳白来源B账户01"
-      ]
-    },
-    {
-      "standard_name": "沈阳白来源B账户02",
-      "baidu_names": [
-        "沈阳白来源B账户02"
-      ],
-      "excel_name": "沈阳白来源B账户02",
-      "kst_ids": [
-        "TODO_SHENYANG_BAI_B_KST_ID_02"
-      ],
-      "kst_names": [
-        "沈阳白来源B账户02"
-      ]
-    },
-    {
-      "standard_name": "沈阳白来源B账户03",
-      "baidu_names": [
-        "沈阳白来源B账户03"
-      ],
-      "excel_name": "沈阳白来源B账户03",
-      "kst_ids": [
-        "TODO_SHENYANG_BAI_B_KST_ID_03"
-      ],
-      "kst_names": [
-        "沈阳白来源B账户03"
       ]
     }
   ],

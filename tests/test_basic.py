@@ -276,7 +276,28 @@ def test_project_config_validation_reports_missing_required_fields():
     })
 
     assert any("缺少字段：excel.path" in error for error in errors)
-    assert any("账户数量必须为 3" in error for error in errors)
+    assert any("项目至少需要 1 个账户" in error for error in errors)
+
+
+def test_project_config_allows_two_account_single_source_project():
+    project = {
+        "project_id": "two_account_project",
+        "project_name": "两账户项目",
+        "excel": {"path": "samples/two.xlsx", "hourly_sheet": "时段数据", "daily_sheet": "百度", "engine": "openpyxl"},
+        "kst": {"export_dir": "kst_exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+        "baidu": {"credential_profile": "two_profile", "data_path": ["首页", "数据报告", "数据概览", "搜索推广"]},
+        "accounts": [
+            {"standard_name": "账户1", "baidu_names": ["账户1"], "excel_name": "账户1", "kst_ids": ["1001"], "kst_names": ["账户1"]},
+            {"standard_name": "账户2", "baidu_names": ["账户2"], "excel_name": "账户2", "kst_ids": ["1002"], "kst_names": ["账户2"]},
+        ],
+        "hourly": {"periods": ["11点", "15点", "18点"]},
+        "daily": {
+            "write_fields": ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"],
+            "do_not_write_fields": ["总对话", "预约", "到诊", "就诊"],
+        },
+    }
+
+    assert validate_project_config(project) == []
 
 
 def test_project_config_can_switch_current_project_and_normalize_new_schema(tmp_path):
@@ -5150,15 +5171,18 @@ def test_internal_build_validates_all_complete(tmp_path):
 
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
-        "baidu": {
-            "kunming_niu_baidu": {"username": "a", "password": "b"},
-            "nanjing_niu_baidu": {"username": "a", "password": "b"},
-            "ningbo_niu_baidu": {"username": "a", "password": "b"},
-            "changsha_niu_baidu": {"username": "a", "password": "b"},
-            "shenyang_niu_zhongya_baidu": {"username": "a", "password": "b"},
-            "shenyang_niu_yinkang_baidu": {"username": "a", "password": "b"},
-        }
-    }, ensure_ascii=False), encoding="utf-8")
+            "baidu": {
+                "kunming_niu_baidu": {"username": "a", "password": "b"},
+                "nanjing_niu_baidu": {"username": "a", "password": "b"},
+                "ningbo_niu_baidu": {"username": "a", "password": "b"},
+                "changsha_niu_baidu": {"username": "a", "password": "b"},
+                "shenyang_niu_zhongya_baidu": {"username": "a", "password": "b"},
+                "shenyang_niu_yinkang_baidu": {"username": "a", "password": "b"},
+                "qingdao_bai_baidu": {"username": "a", "password": "b"},
+                "shenyang_bai_source_a_baidu": {"username": "a", "password": "b"},
+                "shenyang_bai_source_b_baidu": {"username": "a", "password": "b"},
+            }
+        }, ensure_ascii=False), encoding="utf-8")
 
     errors = _validate_internal_secrets(tmp_path)
     assert errors == []
