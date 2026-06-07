@@ -5383,7 +5383,7 @@ def test_desktop_gui_window_is_compact_fixed_and_header_hidden(monkeypatch):
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert window.font().family() == "Microsoft YaHei UI"
-    assert window.font().pointSize() == 14
+    assert window.font().pointSize() == 9
     window.close()
 
 
@@ -5398,6 +5398,64 @@ def test_desktop_gui_daily_date_uses_project_card_style(monkeypatch):
     assert window.date_card.objectName() == "projectCard"
     assert window.date_edit.objectName() == "projectCombo"
     assert window.date_edit.minimumHeight() >= window.date_edit.fontMetrics().height() + 2
+    window.close()
+
+
+def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow, MAIN_FONT_PT, SUB_FONT_PT
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert MAIN_FONT_PT == 9
+    assert SUB_FONT_PT == 8
+    assert window.font().pointSize() == MAIN_FONT_PT
+    assert window.progress_text.font().pointSize() == SUB_FONT_PT
+    window.close()
+
+
+def test_desktop_gui_left_shortcuts_are_config_actions(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert window.excel_config_button.text() == "Excel路径配置"
+    assert window.credentials_config_button.text() == "账号密码配置"
+    assert window.guide_button.text() == "配置说明"
+    assert window.selected_project_config_path().name.endswith(".json")
+    assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
+    window.close()
+
+
+def test_desktop_gui_creates_local_secrets_template_when_missing(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    (tmp_path / "configs" / "projects").mkdir(parents=True)
+    (tmp_path / "configs" / "app_config.json").write_text(json.dumps({
+        "default_project_id": "demo",
+        "projects_dir": "configs/projects",
+        "secrets_file": "secrets/secrets.json",
+    }, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "configs" / "projects" / "demo.json").write_text(json.dumps({
+        "project_id": "demo",
+        "project_name": "演示项目",
+    }, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.example.json").write_text(json.dumps({"baidu": {}}, ensure_ascii=False), encoding="utf-8")
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    path = window.ensure_credentials_file()
+
+    assert path == tmp_path / "secrets" / "secrets.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == {"baidu": {}}
     window.close()
 
 

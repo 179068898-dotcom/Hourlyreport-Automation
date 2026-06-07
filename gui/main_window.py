@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -42,6 +43,8 @@ STAGES = [
     ("excel", "Excel 写入"),
     ("done", "报告输出"),
 ]
+MAIN_FONT_PT = 9
+SUB_FONT_PT = 8
 
 
 class MainWindow(QMainWindow):
@@ -58,7 +61,7 @@ class MainWindow(QMainWindow):
         self.runner.failed_to_start.connect(self.show_task_error)
 
         self.setWindowTitle("百度日报小时报控制台")
-        self.setFont(QFont("Microsoft YaHei UI", 14))
+        self.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
         self.setFixedSize(1000, 680)
         self._build_ui()
         self._apply_style()
@@ -83,6 +86,7 @@ class MainWindow(QMainWindow):
         title.setObjectName("appTitle")
         subtitle = QLabel("选择项目和任务，执行过程会实时显示。")
         subtitle.setObjectName("mutedText")
+        subtitle.setFont(QFont("Microsoft YaHei UI", SUB_FONT_PT))
         subtitle.setWordWrap(True)
         left_layout.addWidget(title)
         left_layout.addWidget(subtitle)
@@ -108,6 +112,7 @@ class MainWindow(QMainWindow):
         project_layout.addWidget(self.project_combo)
         self.progress_text = QLabel("项目就绪后会显示任务进度")
         self.progress_text.setObjectName("taskProgressText")
+        self.progress_text.setFont(QFont("Microsoft YaHei UI", SUB_FONT_PT))
         self.progress_text.setWordWrap(True)
         project_layout.addWidget(self.progress_text)
         self.progress = QProgressBar()
@@ -169,18 +174,18 @@ class MainWindow(QMainWindow):
 
         left_layout.addStretch(1)
         shortcut_row = QGridLayout()
-        self.logs_button = QPushButton("打开日志")
-        self.reports_button = QPushButton("打开报告")
-        self.folder_button = QPushButton("打开目录")
+        self.excel_config_button = QPushButton("Excel路径配置")
+        self.credentials_config_button = QPushButton("账号密码配置")
+        self.guide_button = QPushButton("配置说明")
         self.refresh_button = QPushButton("重新检测")
-        shortcut_row.addWidget(self.logs_button, 0, 0)
-        shortcut_row.addWidget(self.reports_button, 0, 1)
-        shortcut_row.addWidget(self.folder_button, 1, 0)
+        shortcut_row.addWidget(self.excel_config_button, 0, 0)
+        shortcut_row.addWidget(self.credentials_config_button, 0, 1)
+        shortcut_row.addWidget(self.guide_button, 1, 0)
         shortcut_row.addWidget(self.refresh_button, 1, 1)
         left_layout.addLayout(shortcut_row)
-        self.logs_button.clicked.connect(lambda: self.open_path(self.root / "logs"))
-        self.reports_button.clicked.connect(lambda: self.open_path(self.root / "reports"))
-        self.folder_button.clicked.connect(lambda: self.open_path(self.root))
+        self.excel_config_button.clicked.connect(self.open_selected_project_config)
+        self.credentials_config_button.clicked.connect(self.open_credentials_config)
+        self.guide_button.clicked.connect(self.open_config_guide)
         self.refresh_button.clicked.connect(self.run_startup_check)
 
         content = QFrame()
@@ -222,7 +227,7 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logConsole")
-        self.log_view.setFont(QFont("Microsoft YaHei UI", 14))
+        self.log_view.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
         self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         content_layout.addWidget(self.log_view, 1)
 
@@ -235,7 +240,7 @@ class MainWindow(QMainWindow):
                 background: #eef2f7;
                 color: #172033;
                 font-family: "Microsoft YaHei UI";
-                font-size: 14pt;
+                font-size: 9pt;
             }
             QFrame#leftRail, QFrame#contentPanel {
                 background: #fbfcff;
@@ -248,16 +253,16 @@ class MainWindow(QMainWindow):
                 border-radius: 14px;
             }
             QLabel#appTitle {
-                font-size: 24px;
+                font-size: 10pt;
                 font-weight: 700;
                 color: #111827;
             }
             QLabel#statusTitle {
-                font-size: 22px;
+                font-size: 10pt;
                 font-weight: 700;
             }
             QLabel#sectionTitle {
-                font-size: 15px;
+                font-size: 9pt;
                 font-weight: 700;
             }
             QLabel#pillHint {
@@ -266,16 +271,16 @@ class MainWindow(QMainWindow):
                 border: 1px solid #c7ddf4;
                 border-radius: 9px;
                 padding: 3px 8px;
-                font-size: 11px;
+                font-size: 8pt;
                 font-weight: 700;
             }
             QLabel#mutedText {
                 color: #64748b;
-                font-size: 12px;
+                font-size: 8pt;
             }
             QLabel#taskProgressText {
                 color: #64748b;
-                font-size: 12px;
+                font-size: 8pt;
                 line-height: 16px;
             }
             QPushButton {
@@ -310,7 +315,7 @@ class MainWindow(QMainWindow):
                 padding: 8px 12px;
                 background: #ffffff;
                 color: #172033;
-                font-size: 14px;
+                font-size: 9pt;
                 font-weight: 700;
             }
             QComboBox#projectCombo:hover {
@@ -403,6 +408,54 @@ class MainWindow(QMainWindow):
 
     def selected_project_id(self) -> str:
         return str(self.project_combo.currentData() or "")
+
+    def selected_project_config_path(self) -> Path:
+        project_id = self.selected_project_id()
+        for project in self.projects:
+            if project.project_id == project_id:
+                return Path(project.path)
+        return self.root / "configs" / "projects" / f"{project_id}.json"
+
+    def credentials_config_path(self) -> Path:
+        return self.root / "secrets" / "secrets.json"
+
+    def ensure_credentials_file(self) -> Path:
+        path = self.credentials_config_path()
+        if path.exists():
+            return path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        example = path.parent / "secrets.example.json"
+        if example.exists():
+            shutil.copyfile(example, path)
+        else:
+            path.write_text('{\n  "baidu": {}\n}\n', encoding="utf-8")
+        return path
+
+    def open_selected_project_config(self) -> None:
+        path = self.selected_project_config_path()
+        if path.exists():
+            self.open_path(path)
+            self.append_log(f"已打开当前项目配置：{path}")
+        else:
+            QMessageBox.warning(self, "未找到项目配置", f"没有找到项目配置文件：{path}")
+
+    def open_credentials_config(self) -> None:
+        path = self.ensure_credentials_file()
+        self.open_path(path)
+        self.append_log(f"已打开账号密码配置：{path}")
+
+    def open_config_guide(self) -> None:
+        candidates = [
+            self.root / "docs" / "如何新增一个项目.md",
+            self.root / "README_同事使用说明.md",
+            self.root / "README.md",
+        ]
+        for path in candidates:
+            if path.exists():
+                self.open_path(path)
+                self.append_log(f"已打开配置说明：{path}")
+                return
+        QMessageBox.warning(self, "未找到配置说明", "没有找到配置说明文档。")
 
     def selected_period(self) -> str:
         for button in self.period_buttons:
