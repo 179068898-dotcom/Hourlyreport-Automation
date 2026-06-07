@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def python_exe(root: str | Path) -> Path:
-    return Path(root) / ".venv" / "Scripts" / "python.exe"
+    return Path(root) / ".venv" / "Scripts" / "pythonw.exe"
 
 
 def _main_py(root: str | Path) -> Path:

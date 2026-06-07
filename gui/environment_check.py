@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,18 @@ def _python_path(root: Path) -> Path:
     return root / ".venv" / "Scripts" / "python.exe"
 
 
+def hidden_subprocess_kwargs() -> dict[str, Any]:
+    if os.name != "nt":
+        return {}
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    startupinfo.wShowWindow = 0
+    return {
+        "startupinfo": startupinfo,
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    }
+
+
 def _imports_available(python: Path) -> tuple[bool, str]:
     code = "import " + ", ".join(REQUIRED_IMPORTS)
     try:
@@ -28,6 +41,7 @@ def _imports_available(python: Path) -> tuple[bool, str]:
             encoding="utf-8",
             errors="replace",
             timeout=20,
+            **hidden_subprocess_kwargs(),
         )
     except Exception as exc:
         return False, str(exc)

@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from datetime import date
 
@@ -5292,7 +5293,7 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
     root = Path("D:/app")
 
     assert build_hourly_command(root, "15", project_id="qingdao_bai") == [
-        str(root / ".venv" / "Scripts" / "python.exe"),
+        str(root / ".venv" / "Scripts" / "pythonw.exe"),
         str(root / "main.py"),
         "--mode",
         "run",
@@ -5303,7 +5304,7 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
         "--yes",
     ]
     assert build_daily_command(root, "2026-06-06", project_id="shenyang_bai") == [
-        str(root / ".venv" / "Scripts" / "python.exe"),
+        str(root / ".venv" / "Scripts" / "pythonw.exe"),
         str(root / "main.py"),
         "--mode",
         "run-daily",
@@ -5314,7 +5315,7 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
         "--yes",
     ]
     assert build_preflight_command(root, "daily", project_id="shenyang_bai") == [
-        str(root / ".venv" / "Scripts" / "python.exe"),
+        str(root / ".venv" / "Scripts" / "pythonw.exe"),
         str(root / "main.py"),
         "--mode",
         "preflight",
@@ -5324,6 +5325,18 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
         "daily",
         "--quick",
     ]
+
+
+def test_desktop_gui_environment_subprocess_is_hidden():
+    from gui.environment_check import hidden_subprocess_kwargs
+
+    kwargs = hidden_subprocess_kwargs()
+
+    if os.name == "nt":
+        assert kwargs["creationflags"] != 0
+        assert kwargs["startupinfo"].dwFlags != 0
+    else:
+        assert kwargs == {}
 
 
 def test_desktop_gui_requirements_include_gui_packaging_deps():
