@@ -5,10 +5,11 @@ import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtCore import QDate, QPoint, QTimer, Qt
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCalendarWidget,
     QComboBox,
     QDialog,
@@ -18,9 +19,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QMenu,
     QPushButton,
     QProgressBar,
-    QRadioButton,
     QSizeGrip,
     QSizePolicy,
     QTextEdit,
@@ -46,6 +47,39 @@ STAGES = [
 ]
 MAIN_FONT_PT = 9
 SUB_FONT_PT = 8
+
+
+class PixelSnakeSpinner(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("pixelSnakeSpinner")
+        self.setFixedSize(18, 18)
+        self._tick = 0
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._advance)
+        self._timer.start(120)
+
+    def _advance(self) -> None:
+        self._tick = (self._tick + 1) % 8
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        points = [(7, 1), (11, 3), (14, 7), (12, 12), (7, 15), (3, 12), (1, 7), (3, 3)]
+        colors = ["#17643b", "#2f8f52", "#54b875", "#80d99d", "#a8e9bc", "#c9f3d5", "#e2f8e8", "#edf9f0"]
+        for offset in range(8):
+            index = (self._tick - offset) % 8
+            x, y = points[index]
+            painter.fillRect(x, y, 3, 3, QColor(colors[offset]))
+
+
+class HoverMenuButton(QPushButton):
+    def enterEvent(self, event) -> None:
+        menu = self.menu()
+        if menu:
+            menu.popup(self.mapToGlobal(QPoint(0, self.height())))
+        super().enterEvent(event)
 
 
 class MainWindow(QMainWindow):
@@ -86,10 +120,23 @@ class MainWindow(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(14, 0, 8, 0)
         title_layout.setSpacing(8)
+        self.spinner = PixelSnakeSpinner(self.title_bar)
+        title_layout.addWidget(self.spinner)
         self.title_label = QLabel("百度数据自动化控制台")
         self.title_label.setObjectName("windowTitleLabel")
         self.title_label.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT + 2))
         title_layout.addWidget(self.title_label)
+        self.system_config_button = HoverMenuButton("系统配置")
+        self.system_config_button.setObjectName("systemConfigButton")
+        self.system_config_menu = QMenu(self.system_config_button)
+        update_path_action = QAction("更新路径", self.system_config_menu)
+        update_credentials_action = QAction("更新账号密码", self.system_config_menu)
+        update_path_action.triggered.connect(self.open_selected_project_config)
+        update_credentials_action.triggered.connect(self.open_credentials_config)
+        self.system_config_menu.addAction(update_path_action)
+        self.system_config_menu.addAction(update_credentials_action)
+        self.system_config_button.setMenu(self.system_config_menu)
+        title_layout.addWidget(self.system_config_button)
         title_layout.addStretch(1)
         self.minimize_button = QPushButton("—")
         self.minimize_button.setObjectName("windowControlButton")
@@ -163,23 +210,43 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(project_card)
 
         left_layout.addSpacing(8)
-        left_layout.addWidget(QLabel("小时报时段"))
-        period_row = QHBoxLayout()
-        self.period_buttons: list[QRadioButton] = []
-        for text in ["11点", "15点", "18点"]:
-            button = QRadioButton(text)
-            button.setObjectName("periodButton")
-            self.period_buttons.append(button)
-            period_row.addWidget(button)
-        self.period_buttons[1].setChecked(True)
-        left_layout.addLayout(period_row)
-
+        task_card = QFrame()
+        task_card.setObjectName("projectCard")
+        task_card.setFixedHeight(178)
+        task_layout = QHBoxLayout(task_card)
+        task_layout.setContentsMargins(12, 12, 12, 12)
+        task_layout.setSpacing(10)
+        task_buttons_layout = QVBoxLayout()
+        task_buttons_layout.setSpacing(8)
         self.hourly_button = QPushButton("运行小时报")
         self.daily_button = QPushButton("运行日报")
         self.environment_check_button = QPushButton("执行环境自检")
         for button in [self.hourly_button, self.daily_button, self.environment_check_button]:
             button.setMinimumHeight(42)
-            left_layout.addWidget(button)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            task_buttons_layout.addWidget(button)
+        task_layout.addLayout(task_buttons_layout, 1)
+
+        period_column = QVBoxLayout()
+        period_column.setSpacing(8)
+        period_label = QLabel("小时段")
+        period_label.setObjectName("sectionTitle")
+        period_column.addWidget(period_label)
+        self.period_group = QButtonGroup(self)
+        self.period_group.setExclusive(True)
+        self.period_buttons: list[QPushButton] = []
+        for text in ["11点", "15点", "18点"]:
+            button = QPushButton(text)
+            button.setObjectName("periodButton")
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            button.setMinimumSize(76, 28)
+            self.period_group.addButton(button)
+            self.period_buttons.append(button)
+            period_column.addWidget(button)
+        self.period_buttons[1].setChecked(True)
+        task_layout.addLayout(period_column)
+        left_layout.addWidget(task_card)
 
         self.hourly_button.clicked.connect(self.run_hourly)
         self.daily_button.clicked.connect(self.run_daily)
@@ -209,14 +276,6 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.date_card)
 
         left_layout.addStretch(1)
-        shortcut_row = QGridLayout()
-        self.excel_config_button = QPushButton("Excel路径配置")
-        self.credentials_config_button = QPushButton("账号密码配置")
-        shortcut_row.addWidget(self.excel_config_button, 0, 0)
-        shortcut_row.addWidget(self.credentials_config_button, 0, 1)
-        left_layout.addLayout(shortcut_row)
-        self.excel_config_button.clicked.connect(self.open_selected_project_config)
-        self.credentials_config_button.clicked.connect(self.open_credentials_config)
 
         content = QFrame()
         content.setObjectName("contentPanel")
@@ -284,6 +343,17 @@ class MainWindow(QMainWindow):
                 border-radius: 6px;
                 color: #334155;
                 padding: 0;
+            }
+            QPushButton#systemConfigButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                padding: 4px 10px;
+                color: #334155;
+            }
+            QPushButton#systemConfigButton:hover {
+                background: #e5eef8;
+                border-color: #cbd8e8;
             }
             QPushButton#windowControlButton:hover {
                 background: #dbe6f2;
@@ -373,12 +443,25 @@ class MainWindow(QMainWindow):
             QRadioButton {
                 spacing: 6px;
             }
-            QRadioButton#periodButton:checked {
+            QPushButton#periodButton {
+                background: #ffffff;
+                border: 1px solid #cbd8e8;
+                border-radius: 10px;
+                padding: 4px 8px;
+                color: #1f2937;
+                text-align: center;
+                outline: 0;
+            }
+            QPushButton#periodButton:checked {
                 background: #dff7ea;
                 border: 1px solid #8bd8a8;
                 border-radius: 10px;
                 padding: 4px 8px;
                 color: #17643b;
+            }
+            QPushButton#periodButton:focus {
+                outline: 0;
+                border: 1px solid #8bd8a8;
             }
             QLabel#stageBadge {
                 min-height: 34px;
@@ -517,6 +600,7 @@ class MainWindow(QMainWindow):
 
     def pick_daily_date(self) -> None:
         dialog = QDialog(self)
+        dialog.setWindowFlags(Qt.WindowType.Popup)
         dialog.setWindowTitle("选择日报日期")
         layout = QVBoxLayout(dialog)
         calendar = QCalendarWidget(dialog)
@@ -525,6 +609,10 @@ class MainWindow(QMainWindow):
         ok_button = QPushButton("确定")
         ok_button.clicked.connect(dialog.accept)
         layout.addWidget(ok_button)
+        calendar.activated.connect(lambda selected: (calendar.setSelectedDate(selected), dialog.accept()))
+        dialog.adjustSize()
+        top_left = self.date_button.mapToGlobal(QPoint(0, -dialog.sizeHint().height() - 6))
+        dialog.move(top_left)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             selected = calendar.selectedDate().toPython()
             self.current_daily_date = selected

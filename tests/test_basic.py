@@ -5398,8 +5398,11 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
     assert window.title_bar.objectName() == "titleBar"
+    assert window.spinner.objectName() == "pixelSnakeSpinner"
     assert window.title_label.text() == "百度数据自动化控制台"
     assert window.title_label.font().pointSize() == 11
+    assert window.system_config_button.text() == "系统配置"
+    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码"]
     assert window.maximize_button.text() == "□"
     assert window.windowIcon().isNull()
     assert window.font().family() == "Microsoft YaHei UI"
@@ -5438,7 +5441,7 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     window.close()
 
 
-def test_desktop_gui_left_shortcuts_are_config_actions(monkeypatch):
+def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
     from gui.main_window import MainWindow
@@ -5446,8 +5449,10 @@ def test_desktop_gui_left_shortcuts_are_config_actions(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert window.excel_config_button.text() == "Excel路径配置"
-    assert window.credentials_config_button.text() == "账号密码配置"
+    assert not hasattr(window, "excel_config_button")
+    assert not hasattr(window, "credentials_config_button")
+    assert window.system_config_button.text() == "系统配置"
+    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码"]
     assert window.environment_check_button.text() == "执行环境自检"
     assert not hasattr(window, "guide_button")
     assert not hasattr(window, "refresh_button")
@@ -5467,8 +5472,9 @@ def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert 'QRadioButton#periodButton:checked' in window.styleSheet()
+    assert 'QPushButton#periodButton:checked' in window.styleSheet()
     assert '#dff7ea' in window.styleSheet()
+    assert all(not button.autoDefault() for button in window.period_buttons)
     window.close()
 
 
