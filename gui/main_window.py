@@ -5,17 +5,17 @@ import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCalendarWidget,
     QComboBox,
-    QDateEdit,
+    QDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
         self.setWindowIcon(QIcon())
-        self.setWindowTitle("百度日报小时报控制台")
+        self.setWindowTitle("百度数据自动化控制台")
         self.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
         self.resize(1040, 700)
         self.setMinimumSize(980, 660)
@@ -86,18 +86,22 @@ class MainWindow(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(14, 0, 8, 0)
         title_layout.setSpacing(8)
-        self.title_label = QLabel("百度日报小时报控制台")
+        self.title_label = QLabel("百度数据自动化控制台")
         self.title_label.setObjectName("windowTitleLabel")
+        self.title_label.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT + 2))
         title_layout.addWidget(self.title_label)
         title_layout.addStretch(1)
         self.minimize_button = QPushButton("—")
         self.minimize_button.setObjectName("windowControlButton")
+        self.maximize_button = QPushButton("□")
+        self.maximize_button.setObjectName("windowControlButton")
         self.close_button = QPushButton("×")
         self.close_button.setObjectName("windowCloseButton")
-        for button in [self.minimize_button, self.close_button]:
+        for button in [self.minimize_button, self.maximize_button, self.close_button]:
             button.setFixedSize(34, 28)
             title_layout.addWidget(button)
         self.minimize_button.clicked.connect(self.showMinimized)
+        self.maximize_button.clicked.connect(self.toggle_maximized)
         self.close_button.clicked.connect(self.close)
         root_layout.addWidget(self.title_bar)
 
@@ -109,9 +113,9 @@ class MainWindow(QMainWindow):
         self.left_panel = QFrame()
         left = self.left_panel
         left.setObjectName("leftRail")
-        left.setMinimumWidth(300)
-        left.setMaximumWidth(420)
-        left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        left.setMinimumWidth(320)
+        left.setMaximumWidth(320)
+        left.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(18, 18, 18, 18)
         left_layout.setSpacing(12)
@@ -172,16 +176,14 @@ class MainWindow(QMainWindow):
 
         self.hourly_button = QPushButton("运行小时报")
         self.daily_button = QPushButton("运行日报")
-        self.preflight_hourly_button = QPushButton("小时报快速自检")
-        self.preflight_daily_button = QPushButton("日报快速自检")
-        for button in [self.hourly_button, self.daily_button, self.preflight_hourly_button, self.preflight_daily_button]:
+        self.environment_check_button = QPushButton("执行环境自检")
+        for button in [self.hourly_button, self.daily_button, self.environment_check_button]:
             button.setMinimumHeight(42)
             left_layout.addWidget(button)
 
         self.hourly_button.clicked.connect(self.run_hourly)
         self.daily_button.clicked.connect(self.run_daily)
-        self.preflight_hourly_button.clicked.connect(lambda: self.run_preflight("hourly"))
-        self.preflight_daily_button.clicked.connect(lambda: self.run_preflight("daily"))
+        self.environment_check_button.clicked.connect(self.run_environment_preflight)
 
         self.date_card = QFrame()
         self.date_card.setObjectName("projectCard")
@@ -197,31 +199,24 @@ class MainWindow(QMainWindow):
         date_title_row.addStretch(1)
         date_title_row.addWidget(date_hint)
         date_layout.addLayout(date_title_row)
-        self.date_edit = QDateEdit()
-        self.date_edit.setObjectName("projectCombo")
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDisplayFormat("yyyy-MM-dd")
         yesterday = date.today() - timedelta(days=1)
-        self.date_edit.setDate(yesterday)
-        self.date_edit.setMinimumHeight(self.fontMetrics().height() + 2)
-        date_layout.addWidget(self.date_edit)
+        self.current_daily_date = yesterday
+        self.date_button = QPushButton(yesterday.isoformat())
+        self.date_button.setObjectName("projectCombo")
+        self.date_button.setMinimumHeight(self.fontMetrics().height() + 2)
+        self.date_button.clicked.connect(self.pick_daily_date)
+        date_layout.addWidget(self.date_button)
         left_layout.addWidget(self.date_card)
 
         left_layout.addStretch(1)
         shortcut_row = QGridLayout()
         self.excel_config_button = QPushButton("Excel路径配置")
         self.credentials_config_button = QPushButton("账号密码配置")
-        self.guide_button = QPushButton("配置说明")
-        self.refresh_button = QPushButton("重新检测")
         shortcut_row.addWidget(self.excel_config_button, 0, 0)
         shortcut_row.addWidget(self.credentials_config_button, 0, 1)
-        shortcut_row.addWidget(self.guide_button, 1, 0)
-        shortcut_row.addWidget(self.refresh_button, 1, 1)
         left_layout.addLayout(shortcut_row)
         self.excel_config_button.clicked.connect(self.open_selected_project_config)
         self.credentials_config_button.clicked.connect(self.open_credentials_config)
-        self.guide_button.clicked.connect(self.open_config_guide)
-        self.refresh_button.clicked.connect(self.run_startup_check)
 
         content = QFrame()
         content.setObjectName("contentPanel")
@@ -250,11 +245,6 @@ class MainWindow(QMainWindow):
             self.stage_labels[key] = badge
             stage_grid.addWidget(badge, index // 4, index % 4)
         content_layout.addLayout(stage_grid)
-
-        self.command_line = QLineEdit()
-        self.command_line.setReadOnly(True)
-        self.command_line.setPlaceholderText("这里会显示即将执行的命令。")
-        content_layout.addWidget(self.command_line)
 
         log_header = QLabel("实时日志")
         log_header.setObjectName("sectionTitle")
@@ -286,7 +276,7 @@ class MainWindow(QMainWindow):
             }
             QLabel#windowTitleLabel {
                 color: #172033;
-                font-size: 9pt;
+                font-size: 11pt;
             }
             QPushButton#windowControlButton, QPushButton#windowCloseButton {
                 background: transparent;
@@ -357,13 +347,13 @@ class MainWindow(QMainWindow):
                 color: #94a3b8;
                 background: #f4f6f8;
             }
-            QComboBox, QDateEdit, QLineEdit {
+            QComboBox, QLineEdit {
                 border: 1px solid #d8e1ee;
                 border-radius: 10px;
                 padding: 8px 10px;
                 background: #ffffff;
             }
-            QComboBox#projectCombo, QDateEdit#projectCombo {
+            QComboBox#projectCombo, QPushButton#projectCombo {
                 min-height: 30px;
                 border-radius: 13px;
                 border: 1px solid #b8cce4;
@@ -372,7 +362,7 @@ class MainWindow(QMainWindow):
                 color: #172033;
                 font-size: 9pt;
             }
-            QComboBox#projectCombo:hover, QDateEdit#projectCombo:hover {
+            QComboBox#projectCombo:hover, QPushButton#projectCombo:hover {
                 border-color: #7fb2ea;
                 background: #fafdff;
             }
@@ -382,6 +372,13 @@ class MainWindow(QMainWindow):
             }
             QRadioButton {
                 spacing: 6px;
+            }
+            QRadioButton#periodButton:checked {
+                background: #dff7ea;
+                border: 1px solid #8bd8a8;
+                border-radius: 10px;
+                padding: 4px 8px;
+                color: #17643b;
             }
             QLabel#stageBadge {
                 min-height: 34px;
@@ -468,7 +465,7 @@ class MainWindow(QMainWindow):
         for project in self.projects:
             self.project_combo.addItem(project.label, project.project_id)
         has_projects = bool(self.projects)
-        for button in [self.hourly_button, self.daily_button, self.preflight_hourly_button, self.preflight_daily_button]:
+        for button in [self.hourly_button, self.daily_button, self.environment_check_button]:
             button.setEnabled(has_projects)
 
     def selected_project_id(self) -> str:
@@ -509,24 +506,29 @@ class MainWindow(QMainWindow):
         self.open_path(path)
         self.append_log(f"已打开账号密码配置：{path}")
 
-    def open_config_guide(self) -> None:
-        candidates = [
-            self.root / "docs" / "如何新增一个项目.md",
-            self.root / "README_同事使用说明.md",
-            self.root / "README.md",
-        ]
-        for path in candidates:
-            if path.exists():
-                self.open_path(path)
-                self.append_log(f"已打开配置说明：{path}")
-                return
-        QMessageBox.warning(self, "未找到配置说明", "没有找到配置说明文档。")
-
     def selected_period(self) -> str:
         for button in self.period_buttons:
             if button.isChecked():
                 return button.text()
         return "15点"
+
+    def selected_daily_date(self) -> str:
+        return self.current_daily_date.isoformat()
+
+    def pick_daily_date(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择日报日期")
+        layout = QVBoxLayout(dialog)
+        calendar = QCalendarWidget(dialog)
+        calendar.setSelectedDate(QDate(self.current_daily_date.year, self.current_daily_date.month, self.current_daily_date.day))
+        layout.addWidget(calendar)
+        ok_button = QPushButton("确定")
+        ok_button.clicked.connect(dialog.accept)
+        layout.addWidget(ok_button)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            selected = calendar.selectedDate().toPython()
+            self.current_daily_date = selected
+            self.date_button.setText(selected.isoformat())
 
     def run_startup_check(self) -> None:
         self.reset_stages()
@@ -553,9 +555,12 @@ class MainWindow(QMainWindow):
 
     def run_daily(self) -> None:
         project_id = self.selected_project_id()
-        date_text = self.date_edit.date().toString("yyyy-MM-dd")
+        date_text = self.selected_daily_date()
         command = build_daily_command(self.root, date_text, project_id=project_id)
         self.start_command("日报执行中", command)
+
+    def run_environment_preflight(self) -> None:
+        self.run_preflight("daily" if self.date_card.hasFocus() else "hourly")
 
     def run_preflight(self, task: str) -> None:
         project_id = self.selected_project_id()
@@ -567,9 +572,7 @@ class MainWindow(QMainWindow):
         self.status_title.setText(title)
         self.status_detail.setText("任务正在运行，请不要关闭窗口。")
         self.progress_text.setText("任务已创建，等待启动...")
-        self.command_line.setText(" ".join(command))
         self.log_view.clear()
-        self.append_log("启动命令：" + " ".join(command))
         self.runner.start(command, self.root)
 
     def on_task_started(self) -> None:
@@ -599,7 +602,7 @@ class MainWindow(QMainWindow):
 
     def set_task_buttons_enabled(self, enabled: bool) -> None:
         has_projects = bool(self.projects)
-        for button in [self.hourly_button, self.daily_button, self.preflight_hourly_button, self.preflight_daily_button]:
+        for button in [self.hourly_button, self.daily_button, self.environment_check_button]:
             button.setEnabled(enabled and has_projects)
 
     def reset_stages(self) -> None:
@@ -636,6 +639,14 @@ class MainWindow(QMainWindow):
             os.startfile(str(path))
         except Exception as exc:
             QMessageBox.warning(self, "无法打开", str(exc))
+
+    def toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self.maximize_button.setText("□")
+        else:
+            self.showMaximized()
+            self.maximize_button.setText("❐")
 
 
 def create_window(root: str | Path) -> MainWindow:

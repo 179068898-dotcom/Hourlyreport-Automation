@@ -5339,6 +5339,15 @@ def test_desktop_gui_environment_subprocess_is_hidden():
         assert kwargs == {}
 
 
+def test_desktop_gui_task_runner_forces_utf8_environment():
+    from gui.task_runner import build_process_environment
+
+    env = build_process_environment()
+
+    assert env.value("PYTHONUTF8") == "1"
+    assert env.value("PYTHONIOENCODING") == "utf-8"
+
+
 def test_desktop_gui_requirements_include_gui_packaging_deps():
     requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
@@ -5383,13 +5392,15 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.minimumHeight() >= 660
     assert window.maximumWidth() > window.minimumWidth()
     assert window.maximumHeight() > window.minimumHeight()
-    assert window.left_panel.minimumWidth() >= 300
-    assert window.left_panel.maximumWidth() > window.left_panel.minimumWidth()
+    assert window.left_panel.minimumWidth() == 320
+    assert window.left_panel.maximumWidth() == 320
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
     assert window.title_bar.objectName() == "titleBar"
-    assert window.title_label.text() == "百度日报小时报控制台"
+    assert window.title_label.text() == "百度数据自动化控制台"
+    assert window.title_label.font().pointSize() == 11
+    assert window.maximize_button.text() == "□"
     assert window.windowIcon().isNull()
     assert window.font().family() == "Microsoft YaHei UI"
     assert window.font().pointSize() == 9
@@ -5405,8 +5416,9 @@ def test_desktop_gui_daily_date_uses_project_card_style(monkeypatch):
     window = MainWindow(Path(__file__).resolve().parents[1])
 
     assert window.date_card.objectName() == "projectCard"
-    assert window.date_edit.objectName() == "projectCombo"
-    assert window.date_edit.minimumHeight() >= window.date_edit.fontMetrics().height() + 2
+    assert window.date_button.objectName() == "projectCombo"
+    assert window.date_button.minimumHeight() >= window.date_button.fontMetrics().height() + 2
+    assert window.selected_daily_date() == window.date_button.text()
     window.close()
 
 
@@ -5436,9 +5448,27 @@ def test_desktop_gui_left_shortcuts_are_config_actions(monkeypatch):
 
     assert window.excel_config_button.text() == "Excel路径配置"
     assert window.credentials_config_button.text() == "账号密码配置"
-    assert window.guide_button.text() == "配置说明"
+    assert window.environment_check_button.text() == "执行环境自检"
+    assert not hasattr(window, "guide_button")
+    assert not hasattr(window, "refresh_button")
+    assert not hasattr(window, "preflight_hourly_button")
+    assert not hasattr(window, "preflight_daily_button")
+    assert not hasattr(window, "command_line")
     assert window.selected_project_config_path().name.endswith(".json")
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
+    window.close()
+
+
+def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert 'QRadioButton#periodButton:checked' in window.styleSheet()
+    assert '#dff7ea' in window.styleSheet()
     window.close()
 
 

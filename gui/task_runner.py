@@ -23,14 +23,24 @@ def infer_stage(line: str) -> str | None:
 
 
 try:  # pragma: no cover - import depends on optional GUI dependencies.
-    from PySide6.QtCore import QObject, QProcess, Signal
+    from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 except Exception:  # pragma: no cover
     QObject = object  # type: ignore[assignment,misc]
     QProcess = None  # type: ignore[assignment]
+    QProcessEnvironment = None  # type: ignore[assignment]
 
     class Signal:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs):
             pass
+
+
+def build_process_environment():
+    if QProcessEnvironment is None:  # pragma: no cover
+        raise RuntimeError("PySide6 is required for process environment")
+    env = QProcessEnvironment.systemEnvironment()
+    env.insert("PYTHONUTF8", "1")
+    env.insert("PYTHONIOENCODING", "utf-8")
+    return env
 
 
 class QtTaskRunner(QObject):
@@ -45,6 +55,7 @@ class QtTaskRunner(QObject):
             raise RuntimeError("PySide6 is required for QtTaskRunner")
         super().__init__(parent)
         self._process = QProcess(self)
+        self._process.setProcessEnvironment(build_process_environment())
         self._process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         self._process.readyReadStandardOutput.connect(self._read_output)
         self._process.started.connect(self.started.emit)
