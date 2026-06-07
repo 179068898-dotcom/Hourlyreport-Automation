@@ -5341,6 +5341,21 @@ def test_desktop_gui_resolves_project_root_from_workspace():
     assert resolve_app_root() == root
 
 
+def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert window.progress.objectName() == "taskProgress"
+    assert window.progress_text.objectName() == "taskProgressText"
+    assert window.progress.maximum() == 7
+    assert "项目" in window.progress_text.text()
+    window.close()
+
+
 def test_desktop_gui_environment_check_reports_missing_python(tmp_path):
     from gui.environment_check import run_environment_check
 

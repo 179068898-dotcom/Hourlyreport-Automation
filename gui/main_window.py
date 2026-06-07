@@ -88,10 +88,35 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(subtitle)
 
         left_layout.addSpacing(8)
-        left_layout.addWidget(QLabel("项目"))
+        project_card = QFrame()
+        project_card.setObjectName("projectCard")
+        project_layout = QVBoxLayout(project_card)
+        project_layout.setContentsMargins(12, 12, 12, 12)
+        project_layout.setSpacing(8)
+        project_title_row = QHBoxLayout()
+        project_title = QLabel("项目")
+        project_title.setObjectName("sectionTitle")
+        project_hint = QLabel("当前任务")
+        project_hint.setObjectName("pillHint")
+        project_title_row.addWidget(project_title)
+        project_title_row.addStretch(1)
+        project_title_row.addWidget(project_hint)
+        project_layout.addLayout(project_title_row)
         self.project_combo = QComboBox()
+        self.project_combo.setObjectName("projectCombo")
         self.project_combo.setMinimumHeight(38)
-        left_layout.addWidget(self.project_combo)
+        project_layout.addWidget(self.project_combo)
+        self.progress_text = QLabel("项目就绪后会显示任务进度")
+        self.progress_text.setObjectName("taskProgressText")
+        self.progress_text.setWordWrap(True)
+        project_layout.addWidget(self.progress_text)
+        self.progress = QProgressBar()
+        self.progress.setObjectName("taskProgress")
+        self.progress.setRange(0, len(STAGES))
+        self.progress.setValue(0)
+        self.progress.setTextVisible(False)
+        project_layout.addWidget(self.progress)
+        left_layout.addWidget(project_card)
 
         left_layout.addSpacing(8)
         left_layout.addWidget(QLabel("小时报时段"))
@@ -149,7 +174,6 @@ class MainWindow(QMainWindow):
         content_layout.setContentsMargins(20, 18, 20, 18)
         content_layout.setSpacing(14)
 
-        header_row = QHBoxLayout()
         self.status_title = QLabel("准备就绪")
         self.status_title.setObjectName("statusTitle")
         self.status_detail = QLabel("先确认环境状态，再选择任务。")
@@ -157,14 +181,7 @@ class MainWindow(QMainWindow):
         header_text = QVBoxLayout()
         header_text.addWidget(self.status_title)
         header_text.addWidget(self.status_detail)
-        header_row.addLayout(header_text)
-        self.progress = QProgressBar()
-        self.progress.setRange(0, len(STAGES))
-        self.progress.setValue(0)
-        self.progress.setTextVisible(False)
-        self.progress.setFixedWidth(220)
-        header_row.addWidget(self.progress)
-        content_layout.addLayout(header_row)
+        content_layout.addLayout(header_text)
 
         stage_grid = QGridLayout()
         stage_grid.setHorizontalSpacing(10)
@@ -207,6 +224,11 @@ class MainWindow(QMainWindow):
                 border: 1px solid #dde5f0;
                 border-radius: 16px;
             }
+            QFrame#projectCard {
+                background: #f7faff;
+                border: 1px solid #dce7f5;
+                border-radius: 14px;
+            }
             QLabel#appTitle {
                 font-size: 24px;
                 font-weight: 700;
@@ -220,9 +242,23 @@ class MainWindow(QMainWindow):
                 font-size: 15px;
                 font-weight: 700;
             }
+            QLabel#pillHint {
+                color: #426985;
+                background: #e5f1ff;
+                border: 1px solid #c7ddf4;
+                border-radius: 9px;
+                padding: 3px 8px;
+                font-size: 11px;
+                font-weight: 700;
+            }
             QLabel#mutedText {
                 color: #64748b;
                 font-size: 12px;
+            }
+            QLabel#taskProgressText {
+                color: #64748b;
+                font-size: 12px;
+                line-height: 16px;
             }
             QPushButton {
                 background: #f2f6fb;
@@ -248,6 +284,24 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 padding: 8px 10px;
                 background: #ffffff;
+            }
+            QComboBox#projectCombo {
+                min-height: 42px;
+                border-radius: 13px;
+                border: 1px solid #b8cce4;
+                padding: 8px 12px;
+                background: #ffffff;
+                color: #172033;
+                font-size: 14px;
+                font-weight: 700;
+            }
+            QComboBox#projectCombo:hover {
+                border-color: #7fb2ea;
+                background: #fafdff;
+            }
+            QComboBox#projectCombo::drop-down {
+                width: 32px;
+                border: 0;
             }
             QRadioButton {
                 spacing: 6px;
@@ -284,8 +338,18 @@ class MainWindow(QMainWindow):
                 border-radius: 6px;
                 background: #edf2f7;
             }
+            QProgressBar#taskProgress {
+                height: 8px;
+                border: 0;
+                border-radius: 4px;
+                background: #e6edf6;
+            }
             QProgressBar::chunk {
                 border-radius: 6px;
+                background: #5ea0ef;
+            }
+            QProgressBar#taskProgress::chunk {
+                border-radius: 4px;
                 background: #5ea0ef;
             }
         """)
@@ -310,7 +374,7 @@ class MainWindow(QMainWindow):
 
     def run_startup_check(self) -> None:
         self.reset_stages()
-        self.mark_stage("environment")
+        self.progress_text.setText("正在检查环境...")
         report = run_environment_check(self.root)
         self.log_view.clear()
         self.append_log("环境检测开始")
@@ -320,10 +384,11 @@ class MainWindow(QMainWindow):
         if report["passed"]:
             self.status_title.setText("环境状态良好")
             self.status_detail.setText("可以选择项目并执行任务。")
-            self.mark_stage("done")
+            self.progress_text.setText("环境已就绪，请选择项目和任务。")
         else:
             self.status_title.setText("环境需要确认")
             self.status_detail.setText("请查看日志里的提示，必要时先运行安装脚本。")
+            self.progress_text.setText("环境检查未完全通过，请先看日志提示。")
 
     def run_hourly(self) -> None:
         project_id = self.selected_project_id()
@@ -345,6 +410,7 @@ class MainWindow(QMainWindow):
         self.reset_stages()
         self.status_title.setText(title)
         self.status_detail.setText("任务正在运行，请不要关闭窗口。")
+        self.progress_text.setText("任务已创建，等待启动...")
         self.command_line.setText(" ".join(command))
         self.log_view.clear()
         self.append_log("启动命令：" + " ".join(command))
@@ -360,16 +426,19 @@ class MainWindow(QMainWindow):
             self.mark_stage("done")
             self.status_title.setText("任务完成")
             self.status_detail.setText("运行结束，可以打开报告或日志复核。")
+            self.progress_text.setText("任务完成，可以打开报告复核。")
             self.append_log("任务完成，退出码 0")
         else:
             self.status_title.setText("任务失败")
             self.status_detail.setText("请查看错误日志和 reports 目录下的报告。")
+            self.progress_text.setText("任务失败，请查看实时日志和报告。")
             self.append_log(f"任务失败，退出码 {exit_code}")
 
     def show_task_error(self, message: str) -> None:
         self.set_task_buttons_enabled(True)
         self.status_title.setText("任务无法启动")
         self.status_detail.setText(message)
+        self.progress_text.setText("任务没有启动，请查看提示。")
         self.append_log("任务无法启动：" + message)
 
     def set_task_buttons_enabled(self, enabled: bool) -> None:
@@ -379,6 +448,7 @@ class MainWindow(QMainWindow):
 
     def reset_stages(self) -> None:
         self.progress.setValue(0)
+        self.progress_text.setText("项目就绪后会显示任务进度")
         for label in self.stage_labels.values():
             label.setProperty("active", False)
             label.setProperty("done", False)
@@ -391,6 +461,7 @@ class MainWindow(QMainWindow):
             return
         index = keys.index(stage)
         self.progress.setValue(index + 1)
+        self.progress_text.setText(f"当前进度：{STAGES[index][1]}")
         for pos, key in enumerate(keys):
             label = self.stage_labels[key]
             label.setProperty("active", key == stage)
