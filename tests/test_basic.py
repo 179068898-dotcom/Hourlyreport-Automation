@@ -5370,7 +5370,7 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
     window.close()
 
 
-def test_desktop_gui_window_is_compact_fixed_and_header_hidden(monkeypatch):
+def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
@@ -5379,9 +5379,12 @@ def test_desktop_gui_window_is_compact_fixed_and_header_hidden(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert window.minimumSize() == window.maximumSize()
-    assert window.width() <= 1040
-    assert window.height() <= 700
+    assert window.minimumWidth() >= 980
+    assert window.minimumHeight() >= 660
+    assert window.maximumWidth() > window.minimumWidth()
+    assert window.maximumHeight() > window.minimumHeight()
+    assert window.left_panel.minimumWidth() >= 300
+    assert window.left_panel.maximumWidth() > window.left_panel.minimumWidth()
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)

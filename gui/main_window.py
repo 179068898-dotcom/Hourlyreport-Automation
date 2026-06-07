@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QProgressBar,
     QRadioButton,
+    QSizeGrip,
     QSizePolicy,
     QTextEdit,
     QVBoxLayout,
@@ -64,7 +65,8 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon())
         self.setWindowTitle("百度日报小时报控制台")
         self.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
-        self.setFixedSize(980, 660)
+        self.resize(1040, 700)
+        self.setMinimumSize(980, 660)
         self._drag_offset = None
         self._build_ui()
         self._apply_style()
@@ -104,9 +106,12 @@ class MainWindow(QMainWindow):
         shell.setSpacing(14)
         root_layout.addLayout(shell, 1)
 
-        left = QFrame()
+        self.left_panel = QFrame()
+        left = self.left_panel
         left.setObjectName("leftRail")
-        left.setFixedWidth(282)
+        left.setMinimumWidth(300)
+        left.setMaximumWidth(420)
+        left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(18, 18, 18, 18)
         left_layout.setSpacing(12)
@@ -263,6 +268,9 @@ class MainWindow(QMainWindow):
 
         shell.addWidget(left)
         shell.addWidget(content, 1)
+        self.size_grip = QSizeGrip(root_widget)
+        self.size_grip.setObjectName("sizeGrip")
+        root_layout.addWidget(self.size_grip, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
 
     def _apply_style(self) -> None:
         self.setStyleSheet("""
