@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -19,16 +18,17 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QPlainTextEdit,
     QProgressBar,
     QRadioButton,
     QSizePolicy,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
 from gui.environment_check import run_environment_check
+from gui.log_formatter import format_log_html
 from gui.project_store import ProjectSummary, load_project_summaries
 from gui.task_runner import QtTaskRunner
 
@@ -58,8 +58,8 @@ class MainWindow(QMainWindow):
         self.runner.failed_to_start.connect(self.show_task_error)
 
         self.setWindowTitle("百度日报小时报控制台")
-        self.resize(1160, 760)
-        self.setMinimumSize(980, 640)
+        self.setFont(QFont("Microsoft YaHei UI", 14))
+        self.setFixedSize(1000, 680)
         self._build_ui()
         self._apply_style()
         self.refresh_projects()
@@ -74,7 +74,7 @@ class MainWindow(QMainWindow):
 
         left = QFrame()
         left.setObjectName("leftRail")
-        left.setFixedWidth(300)
+        left.setFixedWidth(282)
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(18, 18, 18, 18)
         left_layout.setSpacing(12)
@@ -143,14 +143,29 @@ class MainWindow(QMainWindow):
         self.preflight_hourly_button.clicked.connect(lambda: self.run_preflight("hourly"))
         self.preflight_daily_button.clicked.connect(lambda: self.run_preflight("daily"))
 
-        left_layout.addWidget(QLabel("日报日期"))
+        self.date_card = QFrame()
+        self.date_card.setObjectName("projectCard")
+        date_layout = QVBoxLayout(self.date_card)
+        date_layout.setContentsMargins(12, 12, 12, 12)
+        date_layout.setSpacing(8)
+        date_title_row = QHBoxLayout()
+        date_title = QLabel("日报日期")
+        date_title.setObjectName("sectionTitle")
+        date_hint = QLabel("默认昨天")
+        date_hint.setObjectName("pillHint")
+        date_title_row.addWidget(date_title)
+        date_title_row.addStretch(1)
+        date_title_row.addWidget(date_hint)
+        date_layout.addLayout(date_title_row)
         self.date_edit = QDateEdit()
+        self.date_edit.setObjectName("projectCombo")
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("yyyy-MM-dd")
         yesterday = date.today() - timedelta(days=1)
         self.date_edit.setDate(yesterday)
-        self.date_edit.setMinimumHeight(36)
-        left_layout.addWidget(self.date_edit)
+        self.date_edit.setMinimumHeight(self.fontMetrics().height() + 2)
+        date_layout.addWidget(self.date_edit)
+        left_layout.addWidget(self.date_card)
 
         left_layout.addStretch(1)
         shortcut_row = QGridLayout()
@@ -178,6 +193,8 @@ class MainWindow(QMainWindow):
         self.status_title.setObjectName("statusTitle")
         self.status_detail = QLabel("先确认环境状态，再选择任务。")
         self.status_detail.setObjectName("mutedText")
+        self.status_title.hide()
+        self.status_detail.hide()
         header_text = QVBoxLayout()
         header_text.addWidget(self.status_title)
         header_text.addWidget(self.status_detail)
@@ -202,10 +219,10 @@ class MainWindow(QMainWindow):
         log_header = QLabel("实时日志")
         log_header.setObjectName("sectionTitle")
         content_layout.addWidget(log_header)
-        self.log_view = QPlainTextEdit()
+        self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logConsole")
-        self.log_view.setFont(QFont("Cascadia Mono", 10))
+        self.log_view.setFont(QFont("Microsoft YaHei UI", 14))
         self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         content_layout.addWidget(self.log_view, 1)
 
@@ -218,6 +235,7 @@ class MainWindow(QMainWindow):
                 background: #eef2f7;
                 color: #172033;
                 font-family: "Microsoft YaHei UI";
+                font-size: 14pt;
             }
             QFrame#leftRail, QFrame#contentPanel {
                 background: #fbfcff;
@@ -325,12 +343,32 @@ class MainWindow(QMainWindow):
                 color: #17643b;
                 border-color: #9dd9b7;
             }
-            QPlainTextEdit#logConsole {
+            QTextEdit#logConsole {
                 background: #101827;
                 color: #dbeafe;
                 border-radius: 14px;
                 border: 1px solid #243247;
                 padding: 12px;
+            }
+            QTextEdit#logConsole .log-path {
+                color: #93c5fd;
+                font-weight: 700;
+            }
+            QTextEdit#logConsole .log-pass {
+                color: #86efac;
+                font-weight: 800;
+            }
+            QTextEdit#logConsole .log-error {
+                color: #fca5a5;
+                font-weight: 800;
+            }
+            QTextEdit#logConsole .log-project {
+                color: #fcd34d;
+                font-weight: 800;
+            }
+            QTextEdit#logConsole .log-excel {
+                color: #c4b5fd;
+                font-weight: 800;
             }
             QProgressBar {
                 height: 12px;
@@ -470,7 +508,7 @@ class MainWindow(QMainWindow):
             label.style().polish(label)
 
     def append_log(self, text: str) -> None:
-        self.log_view.appendPlainText(text)
+        self.log_view.append(format_log_html(text))
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
 

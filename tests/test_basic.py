@@ -5356,6 +5356,49 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
     window.close()
 
 
+def test_desktop_gui_window_is_compact_fixed_and_header_hidden(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert window.minimumSize() == window.maximumSize()
+    assert window.width() <= 1040
+    assert window.height() <= 700
+    assert window.status_title.isHidden()
+    assert window.status_detail.isHidden()
+    assert window.font().family() == "Microsoft YaHei UI"
+    assert window.font().pointSize() == 14
+    window.close()
+
+
+def test_desktop_gui_daily_date_uses_project_card_style(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert window.date_card.objectName() == "projectCard"
+    assert window.date_edit.objectName() == "projectCombo"
+    assert window.date_edit.minimumHeight() >= window.date_edit.fontMetrics().height() + 2
+    window.close()
+
+
+def test_desktop_gui_log_formatter_highlights_key_content():
+    from gui.log_formatter import format_log_html
+
+    html = format_log_html("项目 青岛白 通过，Excel D:\\数据\\青岛.xlsx，报告 reports/final_run_report.json")
+
+    assert "log-pass" in html
+    assert "log-path" in html
+    assert "log-project" in html
+    assert "青岛白" in html
+
+
 def test_desktop_gui_environment_check_reports_missing_python(tmp_path):
     from gui.environment_check import run_environment_check
 
