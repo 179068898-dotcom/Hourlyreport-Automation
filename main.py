@@ -30,7 +30,7 @@ from modules.excel_writer import mock_write_excel, write_merged_daily_data, writ
 from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file
 from modules.kst_daily_parser import parse_kst_daily_file
 from modules.logger import setup_logger
-from modules.project_config import build_runtime_config_from_project, get_current_project, list_projects, validate_project_config
+from modules.project_config import build_runtime_config_from_project, get_current_project, list_projects, load_project_config, validate_project_config
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
@@ -81,6 +81,7 @@ def main() -> int | None:
     parser.add_argument("--kst-file", dest="file", default=None, help="同 --file，快商通人工导出的 Excel/CSV 文件路径")
     parser.add_argument("--yes", action="store_true", help="run 模式跳过运行前确认清单")
     parser.add_argument("--date", default=None, help="日报日期，例如：2026-05-07；不传则默认昨天")
+    parser.add_argument("--project", default=None, help="临时指定项目 ID，不修改 configs/app_config.json")
     parser.add_argument("--task", choices=["hourly", "daily"], default="hourly", help="preflight 任务类型，默认检查小时报")
     parser.add_argument("--quick", action="store_true", help="preflight 快速模式：跳过耗时的 Excel sheet 结构扫描")
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
@@ -94,7 +95,7 @@ def main() -> int | None:
     base_config = load_config(args.config, fallback_path=ROOT / "config.example.json")
     config_error: Exception | None = None
     try:
-        current_project = get_current_project(ROOT)
+        current_project = load_project_config(ROOT, args.project) if args.project else get_current_project(ROOT)
         config = build_runtime_config_from_project(current_project, base_config)
     except Exception as exc:
         config_error = exc

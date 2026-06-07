@@ -5038,12 +5038,14 @@ def test_list_projects_excludes_old_kunming():
     assert "kunming_npx" not in ids
 
 
-def test_default_project_is_kunming_niu():
-    """默认项目是 kunming_niu。"""
+def test_current_project_is_listed_and_valid():
+    """当前选中项目可以随运行切换，但必须存在且配置有效。"""
     root = Path(__file__).resolve().parents[1]
     current = get_current_project(root)
-    assert current["project_id"] == "kunming_niu"
-    assert current["project_name"] == "昆明牛"
+    project_ids = {project["project_id"] for project in list_projects(root)}
+    assert current["project_id"] in project_ids
+    assert current["project_name"]
+    assert validate_project_config(current) == []
 
 
 def test_kunming_niu_accounts():
@@ -5257,6 +5259,107 @@ def test_internal_build_includes_xia_sidao_readme():
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
     assert "xia_sidao使用说明.md" in names
+
+
+def test_desktop_gui_project_store_excludes_templates(tmp_path):
+    projects_dir = tmp_path / "configs" / "projects"
+    projects_dir.mkdir(parents=True)
+    (tmp_path / "configs" / "app_config.json").write_text(json.dumps({
+        "default_project_id": "alpha",
+        "projects_dir": "configs/projects",
+        "secrets_file": "secrets/secrets.json",
+    }, ensure_ascii=False), encoding="utf-8")
+    (projects_dir / "alpha.json").write_text(json.dumps({
+        "project_id": "alpha",
+        "project_name": "项目A",
+    }, ensure_ascii=False), encoding="utf-8")
+    (projects_dir / "project_template.json").write_text(json.dumps({
+        "project_id": "your_project_id",
+        "project_name": "模板",
+        "is_template": True,
+    }, ensure_ascii=False), encoding="utf-8")
+
+    from gui.project_store import load_project_summaries
+
+    projects = load_project_summaries(tmp_path)
+
+    assert [(item.project_id, item.project_name) for item in projects] == [("alpha", "项目A")]
+
+
+def test_desktop_gui_command_builder_uses_existing_main_entry():
+    from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
+
+    root = Path("D:/app")
+
+    assert build_hourly_command(root, "15", project_id="qingdao_bai") == [
+        str(root / ".venv" / "Scripts" / "python.exe"),
+        str(root / "main.py"),
+        "--mode",
+        "run",
+        "--project",
+        "qingdao_bai",
+        "--period",
+        "15点",
+        "--yes",
+    ]
+    assert build_daily_command(root, "2026-06-06", project_id="shenyang_bai") == [
+        str(root / ".venv" / "Scripts" / "python.exe"),
+        str(root / "main.py"),
+        "--mode",
+        "run-daily",
+        "--project",
+        "shenyang_bai",
+        "--date",
+        "2026-06-06",
+        "--yes",
+    ]
+    assert build_preflight_command(root, "daily", project_id="shenyang_bai") == [
+        str(root / ".venv" / "Scripts" / "python.exe"),
+        str(root / "main.py"),
+        "--mode",
+        "preflight",
+        "--project",
+        "shenyang_bai",
+        "--task",
+        "daily",
+        "--quick",
+    ]
+
+
+def test_desktop_gui_requirements_include_gui_packaging_deps():
+    requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "PySide6" in requirements
+    assert "pyinstaller" in requirements
+
+
+def test_desktop_gui_resolves_project_root_from_workspace():
+    from gui.app import resolve_app_root
+
+    root = Path(__file__).resolve().parents[1]
+
+    assert resolve_app_root() == root
+
+
+def test_desktop_gui_environment_check_reports_missing_python(tmp_path):
+    from gui.environment_check import run_environment_check
+
+    report = run_environment_check(tmp_path)
+
+    python_check = next(item for item in report["checks"] if item["name"] == "Python environment")
+    assert report["passed"] is False
+    assert python_check["passed"] is False
+    assert python_check["severity"] == "error"
+
+
+def test_desktop_gui_task_runner_infers_progress_stages():
+    from gui.task_runner import infer_stage
+
+    assert infer_stage("[OpenClaw] Running hourly quick preflight...") == "preflight"
+    assert infer_stage("fetch-baidu-auto started") == "baidu"
+    assert infer_stage("parse-kst-export completed") == "kst"
+    assert infer_stage("Excel 写入完成") == "excel"
+    assert infer_stage("[ERROR] Preflight failed") == "error"
 
 
 # ── 百度登录状态守卫测试 (CAS 兜底版) ─────────────────────
