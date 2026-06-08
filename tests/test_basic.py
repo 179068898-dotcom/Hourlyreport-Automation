@@ -5402,7 +5402,7 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.title_label.text() == "百度数据自动化控制台"
     assert window.title_label.font().pointSize() == 11
     assert window.system_config_button.text() == "系统配置"
-    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码"]
+    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.maximize_button.text() == "□"
     assert window.windowIcon().isNull()
     assert window.font().family() == "Microsoft YaHei UI"
@@ -5452,7 +5452,7 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "excel_config_button")
     assert not hasattr(window, "credentials_config_button")
     assert window.system_config_button.text() == "系统配置"
-    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码"]
+    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.environment_check_button.text() == "执行环境自检"
     assert not hasattr(window, "guide_button")
     assert not hasattr(window, "refresh_button")
@@ -5461,6 +5461,44 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "command_line")
     assert window.selected_project_config_path().name.endswith(".json")
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
+    window.close()
+
+
+def test_desktop_gui_restore_backup_overwrites_project_excel_after_safety_backup(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    from gui.main_window import MainWindow
+
+    target_excel = tmp_path / "target.xlsx"
+    selected_backup = tmp_path / "backups" / "target_backup.xlsx"
+    selected_backup.parent.mkdir()
+    target_excel.write_text("current excel", encoding="utf-8")
+    selected_backup.write_text("restored excel", encoding="utf-8")
+    (tmp_path / "configs" / "projects").mkdir(parents=True)
+    (tmp_path / "configs" / "app_config.json").write_text(json.dumps({
+        "default_project_id": "demo",
+        "projects_dir": "configs/projects",
+        "secrets_file": "secrets/secrets.json",
+    }, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "configs" / "projects" / "demo.json").write_text(json.dumps({
+        "project_id": "demo",
+        "project_name": "演示项目",
+        "excel": {"path": str(target_excel)},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args, **kwargs: (str(selected_backup), "Excel"))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    window.restore_backup()
+
+    safety_backups = list((tmp_path / "backups").glob("target_before_manual_restore_*.xlsx"))
+    assert target_excel.read_text(encoding="utf-8") == "restored excel"
+    assert len(safety_backups) == 1
+    assert safety_backups[0].read_text(encoding="utf-8") == "current excel"
+    assert "恢复备份完成" in window.log_view.toPlainText()
     window.close()
 
 

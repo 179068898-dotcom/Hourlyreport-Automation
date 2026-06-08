@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QDate, QPoint, QTimer, Qt
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QCalendarWidget,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -34,6 +35,7 @@ from gui.environment_check import run_environment_check
 from gui.log_formatter import format_log_html
 from gui.project_store import ProjectSummary, load_project_summaries
 from gui.task_runner import QtTaskRunner
+from modules.project_config import get_excel_path, load_project_config
 
 
 STAGES = [
@@ -131,10 +133,13 @@ class MainWindow(QMainWindow):
         self.system_config_menu = QMenu(self.system_config_button)
         update_path_action = QAction("更新路径", self.system_config_menu)
         update_credentials_action = QAction("更新账号密码", self.system_config_menu)
+        restore_backup_action = QAction("恢复备份", self.system_config_menu)
         update_path_action.triggered.connect(self.open_selected_project_config)
         update_credentials_action.triggered.connect(self.open_credentials_config)
+        restore_backup_action.triggered.connect(self.restore_backup)
         self.system_config_menu.addAction(update_path_action)
         self.system_config_menu.addAction(update_credentials_action)
+        self.system_config_menu.addAction(restore_backup_action)
         self.system_config_button.setMenu(self.system_config_menu)
         title_layout.addWidget(self.system_config_button)
         title_layout.addStretch(1)
@@ -564,6 +569,11 @@ class MainWindow(QMainWindow):
     def credentials_config_path(self) -> Path:
         return self.root / "secrets" / "secrets.json"
 
+    def selected_project_excel_path(self) -> Path:
+        project_id = self.selected_project_id()
+        project = load_project_config(self.root, project_id)
+        return get_excel_path(project, self.root)
+
     def ensure_credentials_file(self) -> Path:
         path = self.credentials_config_path()
         if path.exists():
@@ -588,6 +598,64 @@ class MainWindow(QMainWindow):
         path = self.ensure_credentials_file()
         self.open_path(path)
         self.append_log(f"已打开账号密码配置：{path}")
+
+    def restore_backup(self) -> None:
+        try:
+            target_path = self.selected_project_excel_path()
+        except Exception as exc:
+            QMessageBox.warning(self, "无法恢复备份", f"读取当前项目 Excel 路径失败：{exc}")
+            return
+
+        backup_dir = self.root / "backups"
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择要恢复的备份",
+            str(backup_dir),
+            "Excel 备份 (*.xlsx *.xlsm *.xls);;所有文件 (*.*)",
+        )
+        if not selected:
+            return
+
+        backup_path = Path(selected)
+        if not backup_path.exists():
+            QMessageBox.warning(self, "无法恢复备份", f"没有找到备份文件：{backup_path}")
+            return
+        if not target_path.exists():
+            QMessageBox.warning(self, "无法恢复备份", f"没有找到当前项目 Excel：{target_path}")
+            return
+
+        project_name = self.project_combo.currentText()
+        message = (
+            f"当前项目：{project_name}\n\n"
+            f"将被覆盖的 Excel：\n{target_path}\n\n"
+            f"用于恢复的备份：\n{backup_path}\n\n"
+            "确认恢复后，程序会先保存当前 Excel 的一份安全备份。"
+        )
+        answer = QMessageBox.question(
+            self,
+            "确认恢复备份",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self.append_log("已取消恢复备份。")
+            return
+
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safety_backup = backup_dir / f"{target_path.stem}_before_manual_restore_{timestamp}{target_path.suffix}"
+            shutil.copy2(target_path, safety_backup)
+            shutil.copy2(backup_path, target_path)
+        except Exception as exc:
+            QMessageBox.warning(self, "恢复备份失败", str(exc))
+            self.append_log(f"恢复备份失败：{exc}")
+            return
+
+        self.append_log(f"恢复备份完成：{backup_path} -> {target_path}")
+        self.append_log(f"恢复前安全备份已保存：{safety_backup}")
+        QMessageBox.information(self, "恢复完成", f"已恢复备份。\n\n恢复前安全备份：\n{safety_backup}")
 
     def selected_period(self) -> str:
         for button in self.period_buttons:
