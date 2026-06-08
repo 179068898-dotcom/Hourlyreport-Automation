@@ -51,8 +51,8 @@ STAGES = [
 TITLE_FONT_PT = 10
 MAIN_FONT_PT = 9
 SUB_FONT_PT = 9
-FONT_FAMILY = "Microsoft YaHei UI"
-FONT_STACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
+FONT_FAMILY = "Microsoft YaHei Light"
+FONT_STACK = '"Microsoft YaHei Light", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
 
 
 def app_icon_path(root: str | Path) -> Path:
@@ -142,6 +142,22 @@ def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
     elif kind == "check":
         painter.drawLine(round(s * 0.28), round(s * 0.52), round(s * 0.43), round(s * 0.67))
         painter.drawLine(round(s * 0.43), round(s * 0.67), round(s * 0.74), round(s * 0.34))
+    elif kind == "minimize":
+        painter.drawLine(round(s * 0.30), round(s * 0.60), round(s * 0.70), round(s * 0.60))
+        painter.setPen(QPen(QColor("#8fb6e6"), max(1, size / 18), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(round(s * 0.34), round(s * 0.66), round(s * 0.66), round(s * 0.66))
+    elif kind == "maximize":
+        painter.drawRoundedRect(QRectF(s * 0.30, s * 0.28, s * 0.42, s * 0.42), s * 0.04, s * 0.04)
+        painter.setPen(QPen(QColor("#8fb6e6"), max(1, size / 18), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        painter.drawRoundedRect(QRectF(s * 0.36, s * 0.34, s * 0.36, s * 0.36), s * 0.04, s * 0.04)
+    elif kind == "restore":
+        painter.drawRoundedRect(QRectF(s * 0.27, s * 0.36, s * 0.38, s * 0.38), s * 0.04, s * 0.04)
+        painter.drawRoundedRect(QRectF(s * 0.37, s * 0.25, s * 0.38, s * 0.38), s * 0.04, s * 0.04)
+    elif kind == "close":
+        painter.drawLine(round(s * 0.34), round(s * 0.34), round(s * 0.68), round(s * 0.68))
+        painter.drawLine(round(s * 0.68), round(s * 0.34), round(s * 0.34), round(s * 0.68))
+        painter.setPen(QPen(QColor("#f2a7b1"), max(1, size / 18), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(round(s * 0.38), round(s * 0.72), round(s * 0.72), round(s * 0.38))
     elif kind == "task":
         painter.drawRoundedRect(QRectF(s * 0.25, s * 0.16, s * 0.50, s * 0.68), s * 0.06, s * 0.06)
         painter.drawLine(round(s * 0.36), round(s * 0.42), round(s * 0.64), round(s * 0.42))
@@ -327,14 +343,18 @@ class MainWindow(QMainWindow):
         title_layout.addWidget(self.system_config_button)
         title_layout.addStretch(1)
 
-        self.minimize_button = QPushButton("—")
-        self.maximize_button = QPushButton("□")
-        self.close_button = QPushButton("×")
+        self.minimize_button = QPushButton("")
+        self.maximize_button = QPushButton("")
+        self.close_button = QPushButton("")
         self.minimize_button.setObjectName("windowControlButton")
         self.maximize_button.setObjectName("windowControlButton")
         self.close_button.setObjectName("windowCloseButton")
+        self.minimize_button.setIcon(make_line_icon("minimize", "#1f2a44", 22))
+        self.maximize_button.setIcon(make_line_icon("maximize", "#1f2a44", 22))
+        self.close_button.setIcon(make_line_icon("close", "#8f1d2c", 22))
         for button in [self.minimize_button, self.maximize_button, self.close_button]:
             button.setFixedSize(30, 28)
+            button.setIconSize(QSize(18, 18))
             title_layout.addWidget(button)
         self.minimize_button.clicked.connect(self.showMinimized)
         self.maximize_button.clicked.connect(self.toggle_maximized)
@@ -617,7 +637,7 @@ class MainWindow(QMainWindow):
             QMainWindow {
                 background: #eef3f8;
                 color: #16233b;
-                font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+                font-family: "Microsoft YaHei Light", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
                 font-size: 9pt;
             }
             QFrame#titleBar {
@@ -645,16 +665,18 @@ class MainWindow(QMainWindow):
             QPushButton#windowControlButton, QPushButton#windowCloseButton {
                 background: transparent;
                 border: 0;
-                border-radius: 8px;
+                border-radius: 7px;
                 color: #12213d;
                 font-size: 11pt;
                 padding: 0;
             }
             QPushButton#windowControlButton:hover {
-                background: #dbe6f2;
+                background: #dce9f7;
+                border: 1px solid #c4d8ef;
             }
             QPushButton#windowCloseButton:hover {
-                background: #f3d5d8;
+                background: #f6dce1;
+                border: 1px solid #efb8c2;
                 color: #8f1d2c;
             }
             QFrame#leftRail {
@@ -1204,10 +1226,10 @@ class MainWindow(QMainWindow):
     def toggle_maximized(self) -> None:
         if self.isMaximized():
             self.showNormal()
-            self.maximize_button.setText("□")
+            self.maximize_button.setIcon(make_line_icon("maximize", "#1f2a44", 22))
         else:
             self.showMaximized()
-            self.maximize_button.setText("❐")
+            self.maximize_button.setIcon(make_line_icon("restore", "#1f2a44", 22))
 
 
 def create_window(root: str | Path) -> MainWindow:
