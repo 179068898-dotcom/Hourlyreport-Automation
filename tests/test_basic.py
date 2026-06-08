@@ -5388,12 +5388,12 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert window.minimumWidth() >= 980
-    assert window.minimumHeight() >= 660
+    assert window.minimumWidth() >= 1100
+    assert window.minimumHeight() >= 720
     assert window.maximumWidth() > window.minimumWidth()
     assert window.maximumHeight() > window.minimumHeight()
-    assert window.left_panel.minimumWidth() == 320
-    assert window.left_panel.maximumWidth() == 320
+    assert window.left_panel.minimumWidth() == 470
+    assert window.left_panel.maximumWidth() == 470
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
@@ -5401,12 +5401,41 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.spinner.objectName() == "pixelSnakeSpinner"
     assert window.title_label.text() == "百度数据自动化控制台"
     assert window.title_label.font().pointSize() == 11
-    assert window.system_config_button.text() == "系统配置"
+    assert window.system_config_button.text().startswith("系统配置")
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.maximize_button.text() == "□"
     assert window.windowIcon().isNull()
     assert window.font().family() == "Microsoft YaHei UI"
     assert window.font().pointSize() == 9
+    window.close()
+
+
+def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert window.task_control_card.objectName() == "dashboardCard"
+    assert window.hourly_card.objectName() == "dashboardCard"
+    assert window.daily_card.objectName() == "dashboardCard"
+    assert window.current_flow_panel.objectName() == "currentFlowPanel"
+    assert window.current_flow_title.text() == "当前流程"
+    assert window.current_task_title.text() == "暂无运行任务"
+    assert window.current_task_subtitle.text() == "请选择左侧任务开始执行"
+    assert window.current_status_badge.text() == "空闲"
+    assert [button.objectName() for button in window.stage_buttons] == ["stageActionButton"] * 7
+    assert [button.text().split("  ", 1)[-1] for button in window.stage_buttons] == [
+        "环境检测",
+        "项目配置",
+        "快速自检",
+        "百度数据",
+        "快商通数据",
+        "Excel写入",
+        "报告输出",
+    ]
     window.close()
 
 
@@ -5418,10 +5447,10 @@ def test_desktop_gui_daily_date_uses_project_card_style(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert window.date_card.objectName() == "projectCard"
-    assert window.date_button.objectName() == "projectCombo"
+    assert window.date_card.objectName() == "dashboardCard"
+    assert window.date_button.objectName() == "datePickerButton"
     assert window.date_button.minimumHeight() >= window.date_button.fontMetrics().height() + 2
-    assert window.selected_daily_date() == window.date_button.text()
+    assert window.selected_daily_date() in window.date_button.text()
     window.close()
 
 
@@ -5437,7 +5466,7 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     assert SUB_FONT_PT == 8
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
-    assert "font-weight" not in window.styleSheet()
+    assert "QLabel#cardTitle" in window.styleSheet()
     window.close()
 
 
@@ -5451,9 +5480,9 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
 
     assert not hasattr(window, "excel_config_button")
     assert not hasattr(window, "credentials_config_button")
-    assert window.system_config_button.text() == "系统配置"
+    assert window.system_config_button.text().startswith("系统配置")
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
-    assert window.environment_check_button.text() == "执行环境自检"
+    assert window.environment_check_button.text().endswith("执行环境自检")
     assert not hasattr(window, "guide_button")
     assert not hasattr(window, "refresh_button")
     assert not hasattr(window, "preflight_hourly_button")
@@ -5513,6 +5542,31 @@ def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
     assert 'QPushButton#periodButton:checked' in window.styleSheet()
     assert '#dff7ea' in window.styleSheet()
     assert all(not button.autoDefault() for button in window.period_buttons)
+    assert window.period_buttons[1].text().endswith("✓")
+    window.close()
+
+
+def test_desktop_gui_current_flow_updates_for_hourly_and_daily(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.runner.start = lambda command, root: None
+
+    window.period_buttons[0].setChecked(True)
+    window.update_period_button_texts()
+    window.run_hourly()
+    assert window.current_task_title.text() == "运行小时报"
+    assert "11点" in window.current_task_subtitle.text()
+    assert window.current_status_badge.text() == "运行中"
+    assert window.current_start_time_label.text().startswith("开始时间：")
+
+    window.run_daily()
+    assert window.current_task_title.text() == "运行日报"
+    assert "月" in window.current_task_subtitle.text()
+    assert "日" in window.current_task_subtitle.text()
     window.close()
 
 
@@ -5546,7 +5600,7 @@ def test_desktop_gui_creates_local_secrets_template_when_missing(tmp_path, monke
 def test_desktop_gui_log_formatter_highlights_key_content():
     from gui.log_formatter import format_log_html
 
-    html = format_log_html("项目 青岛白 通过，Excel D:\\数据\\青岛.xlsx，报告 reports/final_run_report.json")
+    html = format_log_html("项目 青岛白 [通知] 通过，Excel D:\\数据\\青岛.xlsx，报告 reports/final_run_report.json")
 
     assert "log-pass" in html
     assert "log-path" in html

@@ -18,12 +18,15 @@ PROJECT_NAMES = [
 ]
 
 
-PATH_PATTERN = re.compile(r"([A-Za-z]:\\[^\s，。；;]+|(?:reports|logs|configs|dist|backups|kst_exports)/[^\s，。；;]+|[^\s，。；;]+\.xlsx)")
+PATH_PATTERN = re.compile(
+    r"([A-Za-z]:\\[^\s，。；;]+|(?:reports|logs|configs|dist|backups|kst_exports)/[^\s，。；;]+|[^\s，。；;]+\.xlsx)"
+)
 
 
 STYLE_BY_CLASS = {
-    "log-path": "color:#93c5fd;",
-    "log-pass": "color:#86efac;",
+    "log-path": "color:#38d7ff;",
+    "log-pass": "color:#56e58f;",
+    "log-warn": "color:#facc15;",
     "log-error": "color:#fca5a5;",
     "log-project": "color:#fcd34d;",
     "log-excel": "color:#c4b5fd;",
@@ -34,17 +37,22 @@ def _wrap(text: str, class_name: str) -> str:
     return f'<span class="{class_name}" style="{STYLE_BY_CLASS[class_name]}">{text}</span>'
 
 
+def _replace_words(escaped: str, words: list[str], class_name: str) -> str:
+    for word in words:
+        escaped = escaped.replace(html.escape(word), _wrap(html.escape(word), class_name))
+    return escaped
+
+
 def format_log_html(line: str) -> str:
     escaped = html.escape(str(line or ""))
 
     escaped = PATH_PATTERN.sub(lambda match: _wrap(match.group(0), "log-path"), escaped)
     for project_name in PROJECT_NAMES:
         escaped = escaped.replace(html.escape(project_name), _wrap(html.escape(project_name), "log-project"))
-    for word in ["通过", "成功", "完成", "OK", "passed"]:
-        escaped = escaped.replace(html.escape(word), _wrap(html.escape(word), "log-pass"))
-    for word in ["失败", "错误", "ERROR", "failed"]:
-        escaped = escaped.replace(html.escape(word), _wrap(html.escape(word), "log-error"))
-    for word in ["Excel", ".xlsx"]:
-        escaped = escaped.replace(html.escape(word), _wrap(html.escape(word), "log-excel"))
+
+    escaped = _replace_words(escaped, ["[通知]", "通过", "成功", "完成", "复核通过", "OK", "passed"], "log-pass")
+    escaped = _replace_words(escaped, ["[注意]", "注意", "覆盖"], "log-warn")
+    escaped = _replace_words(escaped, ["失败", "错误", "ERROR", "failed"], "log-error")
+    escaped = _replace_words(escaped, ["Excel", ".xlsx"], "log-excel")
 
     return f"<div>{escaped}</div>"
