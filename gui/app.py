@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from gui.main_window import create_window
@@ -27,6 +28,11 @@ def main() -> int:
     root = resolve_app_root()
     app = QApplication(sys.argv)
     app.setApplicationName("百度日报小时报控制台")
+    icon = root / "assets" / "app_icon.png"
+    if not icon.exists():
+        icon = root / "assets" / "app_icon.ico"
+    if icon.exists():
+        app.setWindowIcon(QIcon(str(icon)))
     window = create_window(root)
     window.raise_()
     return app.exec()

@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from PySide6.QtCore import QDate, QPoint, QRectF, QSize, QTimer, Qt
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -48,8 +48,17 @@ STAGES = [
     ("excel", "Excel写入", "sheet"),
     ("done", "报告输出", "report"),
 ]
-MAIN_FONT_PT = 8
-SUB_FONT_PT = 7
+TITLE_FONT_PT = 10
+MAIN_FONT_PT = 9
+SUB_FONT_PT = 9
+FONT_FAMILY = "Microsoft YaHei Light"
+
+
+def app_icon_path(root: str | Path) -> Path:
+    png = Path(root) / "assets" / "app_icon.png"
+    if png.exists():
+        return png
+    return Path(root) / "assets" / "app_icon.ico"
 
 
 def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
@@ -125,6 +134,9 @@ def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
             QPoint(round(s * 0.78), round(s * 0.50)),
         ]
         painter.drawPolygon(points)
+    elif kind == "check":
+        painter.drawLine(round(s * 0.28), round(s * 0.52), round(s * 0.43), round(s * 0.67))
+        painter.drawLine(round(s * 0.43), round(s * 0.67), round(s * 0.74), round(s * 0.34))
     elif kind == "task":
         painter.drawRoundedRect(QRectF(s * 0.25, s * 0.16, s * 0.50, s * 0.68), s * 0.06, s * 0.06)
         painter.drawLine(round(s * 0.36), round(s * 0.42), round(s * 0.64), round(s * 0.42))
@@ -145,7 +157,7 @@ class PixelSnakeSpinner(QWidget):
         self._tick = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
-        self._timer.start(120)
+        self._timer.start(260)
 
     def _advance(self) -> None:
         self._tick = (self._tick + 1) % 8
@@ -154,22 +166,44 @@ class PixelSnakeSpinner(QWidget):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        scale = self._size / 22
-        points = [(9, 2), (14, 4), (18, 9), (16, 16), (9, 19), (4, 16), (2, 9), (4, 4)]
-        colors = ["#1f9b61", "#38ad73", "#62c68c", "#8addaa", "#b2ecc8", "#d4f6e1", "#e9faf0", "#f2fbf6"]
-        block = max(3, round(4 * scale))
+        scale = self._size / 18
+        points = [(7, 1), (11, 1), (15, 5), (15, 9), (11, 13), (7, 13), (3, 9), (3, 5)]
+        colors = ["#2f80ed", "#2f80ed", "#5fa2f4", "#8fc1fa", "#bfdcff", "#dcecff", "#edf6ff", "#f5faff"]
+        width = max(2, round(3 * scale))
+        height = max(5, round(7 * scale))
         for offset in range(8):
             index = (self._tick - offset) % 8
             x, y = points[index]
-            painter.fillRect(round(x * scale), round(y * scale), block, block, QColor(colors[offset]))
+            painter.fillRect(round(x * scale), round(y * scale), width, height, QColor(colors[offset]))
 
 
 class HoverMenuButton(QPushButton):
+    def __init__(self, text: str, parent=None):
+        super().__init__(text, parent)
+        self._close_timer = QTimer(self)
+        self._close_timer.setSingleShot(True)
+        self._close_timer.timeout.connect(self._close_if_outside)
+
     def enterEvent(self, event) -> None:
         menu = self.menu()
         if menu:
+            self._close_timer.stop()
             menu.popup(self.mapToGlobal(QPoint(0, self.height())))
         super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        self._close_timer.start(220)
+        super().leaveEvent(event)
+
+    def _close_if_outside(self) -> None:
+        menu = self.menu()
+        if not menu or not menu.isVisible():
+            return
+        cursor = QCursor.pos()
+        if self.rect().contains(self.mapFromGlobal(cursor)) or menu.geometry().contains(cursor):
+            self._close_timer.start(220)
+            return
+        menu.hide()
 
 
 class MainWindow(QMainWindow):
@@ -195,9 +229,10 @@ class MainWindow(QMainWindow):
         self.runner.failed_to_start.connect(self.show_task_error)
 
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
-        self.setWindowIcon(QIcon())
+        icon = QIcon(str(app_icon_path(self.root)))
+        self.setWindowIcon(icon)
         self.setWindowTitle("百度数据自动化控制台")
-        self.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
+        self.setFont(QFont(FONT_FAMILY, MAIN_FONT_PT))
         self.resize(1120, 740)
         self.setMinimumSize(960, 640)
         self._drag_offset = None
@@ -259,15 +294,16 @@ class MainWindow(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(22, 0, 14, 0)
         title_layout.setSpacing(12)
-        self.spinner = PixelSnakeSpinner(self.title_bar, size=26)
+        self.spinner = PixelSnakeSpinner(self.title_bar, size=18)
         title_layout.addWidget(self.spinner)
         self.title_label = QLabel("百度数据自动化控制台")
         self.title_label.setObjectName("windowTitleLabel")
-        self.title_label.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT + 2))
+        self.title_label.setFont(QFont(FONT_FAMILY, TITLE_FONT_PT))
         title_layout.addWidget(self.title_label)
 
-        self.system_config_button = HoverMenuButton("系统配置  ▾")
+        self.system_config_button = HoverMenuButton("系统配置")
         self.system_config_button.setObjectName("systemConfigButton")
+        self.system_config_button.setFont(QFont(FONT_FAMILY, TITLE_FONT_PT))
         self.system_config_menu = QMenu(self.system_config_button)
         update_path_action = QAction("更新路径", self.system_config_menu)
         update_credentials_action = QAction("更新账号密码", self.system_config_menu)
@@ -362,7 +398,7 @@ class MainWindow(QMainWindow):
 
         self.progress_text = QLabel("项目就绪后会显示任务进度")
         self.progress_text.setObjectName("taskProgressText")
-        self.progress_text.setFont(QFont("Microsoft YaHei UI", SUB_FONT_PT))
+        self.progress_text.setFont(QFont(FONT_FAMILY, SUB_FONT_PT))
         self.progress_text.setWordWrap(True)
         task_layout.addWidget(self.progress_text)
         self.progress = QProgressBar()
@@ -405,9 +441,6 @@ class MainWindow(QMainWindow):
 
         period_column = QVBoxLayout()
         period_column.setSpacing(10)
-        period_label = QLabel("小时段")
-        period_label.setObjectName("sectionTitle")
-        period_column.addWidget(period_label)
         self.period_group = QButtonGroup(self)
         self.period_group.setExclusive(True)
         self.period_buttons: list[QPushButton] = []
@@ -416,6 +449,7 @@ class MainWindow(QMainWindow):
             button.setProperty("periodValue", text)
             button.setObjectName("periodButton")
             button.setCheckable(True)
+            button.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             button.setMinimumSize(116, 32)
             button.toggled.connect(self.update_period_button_texts)
@@ -517,10 +551,12 @@ class MainWindow(QMainWindow):
         flow_card_layout = QHBoxLayout(flow_card)
         flow_card_layout.setContentsMargins(18, 16, 22, 16)
         flow_card_layout.setSpacing(16)
-        accent = QFrame()
-        accent.setObjectName("flowAccent")
-        accent.setFixedWidth(5)
-        flow_card_layout.addWidget(accent)
+        self.flow_idle_icon = QLabel()
+        self.flow_idle_icon.setObjectName("flowIdleIcon")
+        self.flow_idle_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.flow_idle_icon.setFixedSize(24, 24)
+        self.flow_idle_icon.setPixmap(make_line_icon("play", "#2f80ed", 22).pixmap(22, 22))
+        flow_card_layout.addWidget(self.flow_idle_icon)
         self.flow_spinner = PixelSnakeSpinner(flow_card, size=24)
         flow_card_layout.addWidget(self.flow_spinner)
         flow_text = QVBoxLayout()
@@ -563,7 +599,7 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logConsole")
-        self.log_view.setFont(QFont("Consolas", MAIN_FONT_PT))
+        self.log_view.setFont(QFont("Consolas", MAIN_FONT_PT + 2))
         self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         content_layout.addWidget(self.log_view, 1)
 
@@ -572,7 +608,7 @@ class MainWindow(QMainWindow):
             QMainWindow {
                 background: #eef3f8;
                 color: #16233b;
-                font-family: "Microsoft YaHei UI";
+                font-family: "Microsoft YaHei Light";
                 font-size: 9pt;
             }
             QFrame#titleBar {
@@ -582,7 +618,6 @@ class MainWindow(QMainWindow):
             QLabel#windowTitleLabel {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 600;
             }
             QPushButton#systemConfigButton {
                 background: transparent;
@@ -590,7 +625,7 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 padding: 4px 10px;
                 color: #1f2a44;
-                font-size: 8pt;
+                font-size: 10pt;
                 text-align: left;
             }
             QPushButton#systemConfigButton:hover {
@@ -629,13 +664,11 @@ class MainWindow(QMainWindow):
             }
             QLabel#cardTitle {
                 color: #0f172a;
-                font-size: 12pt;
-                font-weight: 600;
+                font-size: 10pt;
             }
             QLabel#sectionTitle {
                 color: #111827;
-                font-size: 8pt;
-                font-weight: 600;
+                font-size: 9pt;
             }
             QLabel#mutedText, QLabel#taskProgressText {
                 color: #53647e;
@@ -744,7 +777,6 @@ class MainWindow(QMainWindow):
             QLabel#flowTitle, QLabel#logTitle {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 600;
             }
             QFrame#flowStatusCard {
                 background: #fbfdff;
@@ -758,8 +790,7 @@ class MainWindow(QMainWindow):
             }
             QLabel#currentTaskTitle {
                 color: #0f172a;
-                font-size: 12pt;
-                font-weight: 600;
+                font-size: 10pt;
             }
             QLabel#currentTaskSubtitle {
                 color: #1f2a44;
@@ -968,7 +999,12 @@ class MainWindow(QMainWindow):
     def update_period_button_texts(self) -> None:
         for button in self.period_buttons:
             value = str(button.property("periodValue") or button.text().replace("✓", "").strip())
-            button.setText(f"{value}  ✓" if button.isChecked() else value)
+            button.setText(value)
+            if button.isChecked():
+                button.setIcon(make_line_icon("check", "#087a46", 18))
+                button.setIconSize(QSize(16, 16))
+            else:
+                button.setIcon(QIcon())
 
     def selected_daily_date(self) -> str:
         return self.current_daily_date.isoformat()
@@ -1047,6 +1083,8 @@ class MainWindow(QMainWindow):
         self.current_status_badge.setText(status)
         self.current_status_badge.setProperty("status", "running")
         self.current_start_time_label.setText(f"开始时间：{self.current_start_time}")
+        self.flow_idle_icon.hide()
+        self.flow_spinner.show()
         self._refresh_widget_style(self.current_status_badge)
 
     def set_current_flow_idle(self) -> None:
@@ -1056,6 +1094,8 @@ class MainWindow(QMainWindow):
         self.current_status_badge.setText("空闲")
         self.current_status_badge.setProperty("status", "idle")
         self.current_start_time_label.setText("开始时间：--")
+        self.flow_spinner.hide()
+        self.flow_idle_icon.show()
         self._refresh_widget_style(self.current_status_badge)
 
     def start_command(self, title: str, command: list[str]) -> None:
@@ -1079,6 +1119,8 @@ class MainWindow(QMainWindow):
             self.progress_text.setText("任务完成，可以打开报告复核。")
             self.current_status_badge.setText("已完成")
             self.current_status_badge.setProperty("status", "done")
+            self.flow_spinner.hide()
+            self.flow_idle_icon.show()
             self.append_log("任务完成，退出码 0")
         else:
             self.status_title.setText("任务失败")
@@ -1086,6 +1128,8 @@ class MainWindow(QMainWindow):
             self.progress_text.setText("任务失败，请查看实时日志和报告。")
             self.current_status_badge.setText("失败")
             self.current_status_badge.setProperty("status", "failed")
+            self.flow_spinner.hide()
+            self.flow_idle_icon.show()
             self.append_log(f"任务失败，退出码 {exit_code}")
         self._refresh_widget_style(self.current_status_badge)
 
@@ -1096,6 +1140,8 @@ class MainWindow(QMainWindow):
         self.progress_text.setText("任务没有启动，请查看提示。")
         self.current_status_badge.setText("失败")
         self.current_status_badge.setProperty("status", "failed")
+        self.flow_spinner.hide()
+        self.flow_idle_icon.show()
         self._refresh_widget_style(self.current_status_badge)
         self.append_log("任务无法启动：" + message)
 

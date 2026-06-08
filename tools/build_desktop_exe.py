@@ -14,6 +14,7 @@ def build_desktop_exe(root: str | Path) -> int:
     if not python.exists():
         print("[失败] 缺少 .venv\\Scripts\\python.exe，请先运行 install_env.bat")
         return 1
+    icon = root_path / "assets" / "app_icon.ico"
     command = [
         str(python),
         "-m",
@@ -21,6 +22,8 @@ def build_desktop_exe(root: str | Path) -> int:
         "--noconfirm",
         "--onedir",
         "--windowed",
+        "--icon",
+        str(icon),
         "--name",
         APP_NAME,
         str(root_path / "gui" / "app.py"),

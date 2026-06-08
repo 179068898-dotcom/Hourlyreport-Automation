@@ -5406,9 +5406,9 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.system_config_button.text().startswith("系统配置")
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.maximize_button.text() == "□"
-    assert window.windowIcon().isNull()
-    assert window.font().family() == "Microsoft YaHei UI"
-    assert window.font().pointSize() == 8
+    assert not window.windowIcon().isNull()
+    assert window.font().family() == "Microsoft YaHei Light"
+    assert window.font().pointSize() == 9
     window.close()
 
 
@@ -5428,6 +5428,8 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
     assert window.current_task_title.text() == "暂无运行任务"
     assert window.current_task_subtitle.text() == "请选择左侧任务开始执行"
     assert window.current_status_badge.text() == "空闲"
+    assert not window.flow_idle_icon.isHidden()
+    assert window.flow_spinner.isHidden()
     assert [button.objectName() for button in window.stage_buttons] == ["stageActionButton"] * 8
     assert [button.text() for button in window.stage_buttons] == [
         "环境检测",
@@ -5467,8 +5469,8 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert MAIN_FONT_PT == 8
-    assert SUB_FONT_PT == 7
+    assert MAIN_FONT_PT == 9
+    assert SUB_FONT_PT == 9
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
     assert "QLabel#cardTitle" in window.styleSheet()
@@ -5485,7 +5487,8 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
 
     assert not hasattr(window, "excel_config_button")
     assert not hasattr(window, "credentials_config_button")
-    assert window.system_config_button.text().startswith("系统配置")
+    assert window.system_config_button.text() == "系统配置"
+    assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize()
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.environment_check_button.text() == "执行环境自检"
     assert not hasattr(window, "guide_button")
@@ -5547,7 +5550,8 @@ def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
     assert 'QPushButton#periodButton:checked' in window.styleSheet()
     assert '#dff7ea' in window.styleSheet()
     assert all(not button.autoDefault() for button in window.period_buttons)
-    assert window.period_buttons[1].text().endswith("✓")
+    assert window.period_buttons[1].text() == "15点"
+    assert window.period_buttons[1].icon().isNull() is False
     window.close()
 
 
@@ -5567,6 +5571,8 @@ def test_desktop_gui_current_flow_updates_for_hourly_and_daily(monkeypatch):
     assert "11点" in window.current_task_subtitle.text()
     assert window.current_status_badge.text() == "运行中"
     assert window.current_start_time_label.text().startswith("开始时间：")
+    assert window.flow_idle_icon.isHidden()
+    assert not window.flow_spinner.isHidden()
 
     window.run_daily()
     assert window.current_task_title.text() == "运行日报"
@@ -5633,6 +5639,18 @@ def test_desktop_gui_task_runner_infers_progress_stages():
     assert infer_stage("parse-kst-export completed") == "kst"
     assert infer_stage("Excel 写入完成") == "excel"
     assert infer_stage("[ERROR] Preflight failed") == "error"
+
+
+def test_desktop_gui_app_icon_assets_and_build_icon_are_configured():
+    root = Path(__file__).resolve().parents[1]
+    icon = root / "assets" / "app_icon.ico"
+    source = root / "assets" / "app_icon.png"
+    build_script = (root / "tools" / "build_desktop_exe.py").read_text(encoding="utf-8")
+
+    assert icon.exists()
+    assert source.exists()
+    assert "--icon" in build_script
+    assert "app_icon.ico" in build_script
 
 
 # ── 百度登录状态守卫测试 (CAS 兜底版) ─────────────────────
