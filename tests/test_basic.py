@@ -5400,14 +5400,18 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
     assert window.title_bar.objectName() == "titleBar"
+    assert window.title_bar.height() <= 44
     assert window.spinner.objectName() == "pixelSnakeSpinner"
     assert window.title_label.text() == "百度数据自动化控制台"
     assert window.title_label.font().pointSize() == 10
     assert window.system_config_button.text().startswith("系统配置")
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.maximize_button.text() == "□"
+    assert window.minimize_button.width() <= 30
+    assert window.maximize_button.width() <= 30
+    assert window.close_button.width() <= 30
     assert not window.windowIcon().isNull()
-    assert window.font().family() == "Microsoft YaHei Light"
+    assert window.font().family() == "Microsoft YaHei UI"
     assert window.font().pointSize() == 9
     window.close()
 
@@ -5428,6 +5432,9 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
     assert window.current_task_title.text() == "暂无运行任务"
     assert window.current_task_subtitle.text() == "请选择左侧任务开始执行"
     assert window.current_status_badge.text() == "空闲"
+    assert window.flow_header_icon.objectName() == "flowHeaderIcon"
+    assert window.flow_header_icon.pixmap().width() >= 22
+    assert window.flow_idle_icon.width() >= 30
     assert not window.flow_idle_icon.isHidden()
     assert window.flow_spinner.isHidden()
     assert [button.objectName() for button in window.stage_buttons] == ["stageActionButton"] * 8
@@ -5473,6 +5480,11 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     assert SUB_FONT_PT == 9
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
+    assert window.title_label.font().family() == "Microsoft YaHei UI"
+    assert window.title_label.font().weight() >= 600
+    assert window.system_config_button.font().family() == "Microsoft YaHei UI"
+    assert window.log_view.font().family() in {"Consolas", "Cascadia Mono"}
+    assert 'font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
     window.close()
 

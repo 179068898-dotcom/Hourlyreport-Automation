@@ -51,7 +51,8 @@ STAGES = [
 TITLE_FONT_PT = 10
 MAIN_FONT_PT = 9
 SUB_FONT_PT = 9
-FONT_FAMILY = "Microsoft YaHei Light"
+FONT_FAMILY = "Microsoft YaHei UI"
+FONT_STACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
 
 
 def app_icon_path(root: str | Path) -> Path:
@@ -94,6 +95,10 @@ def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
         painter.drawLine(round(s * 0.36), round(s * 0.58), round(s * 0.36), round(s * 0.72))
         painter.drawLine(round(s * 0.36), round(s * 0.72), round(s * 0.68), round(s * 0.72))
         painter.drawEllipse(QRectF(s * 0.66, s * 0.64, s * 0.16, s * 0.16))
+    elif kind == "loop":
+        painter.drawArc(QRectF(s * 0.18, s * 0.18, s * 0.64, s * 0.64), 35 * 16, 285 * 16)
+        painter.drawLine(round(s * 0.30), round(s * 0.29), round(s * 0.18), round(s * 0.30))
+        painter.drawLine(round(s * 0.30), round(s * 0.29), round(s * 0.27), round(s * 0.42))
     elif kind == "login":
         painter.drawEllipse(QRectF(s * 0.18, s * 0.15, s * 0.28, s * 0.28))
         painter.drawArc(QRectF(s * 0.10, s * 0.48, s * 0.44, s * 0.34), 25 * 16, 130 * 16)
@@ -290,20 +295,24 @@ class MainWindow(QMainWindow):
 
         self.title_bar = QFrame()
         self.title_bar.setObjectName("titleBar")
-        self.title_bar.setFixedHeight(54)
+        self.title_bar.setFixedHeight(42)
         title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(22, 0, 14, 0)
-        title_layout.setSpacing(12)
-        self.spinner = PixelSnakeSpinner(self.title_bar, size=18)
+        title_layout.setContentsMargins(20, 0, 12, 0)
+        title_layout.setSpacing(10)
+        self.spinner = PixelSnakeSpinner(self.title_bar, size=16)
         title_layout.addWidget(self.spinner)
         self.title_label = QLabel("百度数据自动化控制台")
         self.title_label.setObjectName("windowTitleLabel")
-        self.title_label.setFont(QFont(FONT_FAMILY, TITLE_FONT_PT))
+        title_font = QFont(FONT_FAMILY, TITLE_FONT_PT)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        self.title_label.setFont(title_font)
         title_layout.addWidget(self.title_label)
 
         self.system_config_button = HoverMenuButton("系统配置")
         self.system_config_button.setObjectName("systemConfigButton")
-        self.system_config_button.setFont(QFont(FONT_FAMILY, TITLE_FONT_PT))
+        config_font = QFont(FONT_FAMILY, TITLE_FONT_PT)
+        config_font.setWeight(QFont.Weight.Normal)
+        self.system_config_button.setFont(config_font)
         self.system_config_menu = QMenu(self.system_config_button)
         update_path_action = QAction("更新路径", self.system_config_menu)
         update_credentials_action = QAction("更新账号密码", self.system_config_menu)
@@ -325,7 +334,7 @@ class MainWindow(QMainWindow):
         self.maximize_button.setObjectName("windowControlButton")
         self.close_button.setObjectName("windowCloseButton")
         for button in [self.minimize_button, self.maximize_button, self.close_button]:
-            button.setFixedSize(36, 30)
+            button.setFixedSize(30, 28)
             title_layout.addWidget(button)
         self.minimize_button.clicked.connect(self.showMinimized)
         self.maximize_button.clicked.connect(self.toggle_maximized)
@@ -333,7 +342,7 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.title_bar)
 
         shell = QHBoxLayout()
-        shell.setContentsMargins(18, 4, 18, 18)
+        shell.setContentsMargins(18, 0, 18, 18)
         shell.setSpacing(14)
         root_layout.addLayout(shell, 1)
 
@@ -534,14 +543,14 @@ class MainWindow(QMainWindow):
         flow_layout.setContentsMargins(22, 18, 22, 18)
         flow_layout.setSpacing(14)
         flow_header = QHBoxLayout()
-        flow_icon = QLabel()
-        flow_icon.setObjectName("flowHeaderIcon")
-        flow_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        flow_icon.setFixedSize(24, 24)
-        flow_icon.setPixmap(make_line_icon("stethoscope", "#1f2a44", 20).pixmap(20, 20))
+        self.flow_header_icon = QLabel()
+        self.flow_header_icon.setObjectName("flowHeaderIcon")
+        self.flow_header_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.flow_header_icon.setFixedSize(26, 26)
+        self.flow_header_icon.setPixmap(make_line_icon("loop", "#1f2a44", 24).pixmap(24, 24))
         self.current_flow_title = QLabel("当前流程")
         self.current_flow_title.setObjectName("flowTitle")
-        flow_header.addWidget(flow_icon)
+        flow_header.addWidget(self.flow_header_icon)
         flow_header.addWidget(self.current_flow_title)
         flow_header.addStretch(1)
         flow_layout.addLayout(flow_header)
@@ -554,8 +563,8 @@ class MainWindow(QMainWindow):
         self.flow_idle_icon = QLabel()
         self.flow_idle_icon.setObjectName("flowIdleIcon")
         self.flow_idle_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.flow_idle_icon.setFixedSize(24, 24)
-        self.flow_idle_icon.setPixmap(make_line_icon("play", "#2f80ed", 22).pixmap(22, 22))
+        self.flow_idle_icon.setFixedSize(30, 30)
+        self.flow_idle_icon.setPixmap(make_line_icon("play", "#2f80ed", 28).pixmap(28, 28))
         flow_card_layout.addWidget(self.flow_idle_icon)
         self.flow_spinner = PixelSnakeSpinner(flow_card, size=24)
         flow_card_layout.addWidget(self.flow_spinner)
@@ -608,7 +617,7 @@ class MainWindow(QMainWindow):
             QMainWindow {
                 background: #eef3f8;
                 color: #16233b;
-                font-family: "Microsoft YaHei Light";
+                font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
                 font-size: 9pt;
             }
             QFrame#titleBar {
@@ -618,6 +627,7 @@ class MainWindow(QMainWindow):
             QLabel#windowTitleLabel {
                 color: #0f172a;
                 font-size: 10pt;
+                font-weight: 600;
             }
             QPushButton#systemConfigButton {
                 background: transparent;
@@ -665,10 +675,12 @@ class MainWindow(QMainWindow):
             QLabel#cardTitle {
                 color: #0f172a;
                 font-size: 10pt;
+                font-weight: 600;
             }
             QLabel#sectionTitle {
                 color: #111827;
                 font-size: 9pt;
+                font-weight: 500;
             }
             QLabel#mutedText, QLabel#taskProgressText {
                 color: #53647e;
@@ -777,6 +789,7 @@ class MainWindow(QMainWindow):
             QLabel#flowTitle, QLabel#logTitle {
                 color: #0f172a;
                 font-size: 10pt;
+                font-weight: 600;
             }
             QFrame#flowStatusCard {
                 background: #fbfdff;
@@ -791,6 +804,7 @@ class MainWindow(QMainWindow):
             QLabel#currentTaskTitle {
                 color: #0f172a;
                 font-size: 10pt;
+                font-weight: 600;
             }
             QLabel#currentTaskSubtitle {
                 color: #1f2a44;
