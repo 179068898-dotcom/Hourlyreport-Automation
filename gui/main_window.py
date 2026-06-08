@@ -5,8 +5,8 @@ import shutil
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from PySide6.QtCore import QDate, QPoint, QTimer, Qt
-from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter
+from PySide6.QtCore import QDate, QPoint, QRectF, QSize, QTimer, Qt
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -39,16 +39,101 @@ from modules.project_config import get_excel_path, load_project_config
 
 
 STAGES = [
-    ("environment", "环境检测", "🛡"),
-    ("config", "项目配置", "⚙"),
-    ("preflight", "快速自检", "♧"),
-    ("baidu", "百度数据", "♟"),
-    ("kst", "快商通数据", "☵"),
-    ("excel", "Excel写入", "▣"),
-    ("done", "报告输出", "□"),
+    ("environment", "环境检测", "shield"),
+    ("config", "项目配置", "gear"),
+    ("preflight", "快速自检", "stethoscope"),
+    ("login", "登录账号", "login"),
+    ("baidu", "百度数据", "paw"),
+    ("kst", "快商通数据", "chat"),
+    ("excel", "Excel写入", "sheet"),
+    ("done", "报告输出", "report"),
 ]
-MAIN_FONT_PT = 9
-SUB_FONT_PT = 8
+MAIN_FONT_PT = 8
+SUB_FONT_PT = 7
+
+
+def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(color), max(1.6, size / 13), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    s = float(size)
+
+    if kind == "shield":
+        points = [
+            QPoint(round(s * 0.50), round(s * 0.12)),
+            QPoint(round(s * 0.82), round(s * 0.25)),
+            QPoint(round(s * 0.76), round(s * 0.66)),
+            QPoint(round(s * 0.50), round(s * 0.88)),
+            QPoint(round(s * 0.24), round(s * 0.66)),
+            QPoint(round(s * 0.18), round(s * 0.25)),
+        ]
+        painter.drawPolygon(points)
+        painter.drawLine(round(s * 0.36), round(s * 0.50), round(s * 0.46), round(s * 0.61))
+        painter.drawLine(round(s * 0.46), round(s * 0.61), round(s * 0.66), round(s * 0.39))
+    elif kind == "gear":
+        painter.drawEllipse(QRectF(s * 0.34, s * 0.34, s * 0.32, s * 0.32))
+        for x1, y1, x2, y2 in [(0.50, 0.10, 0.50, 0.24), (0.50, 0.76, 0.50, 0.90), (0.10, 0.50, 0.24, 0.50), (0.76, 0.50, 0.90, 0.50), (0.22, 0.22, 0.32, 0.32), (0.68, 0.68, 0.78, 0.78), (0.78, 0.22, 0.68, 0.32), (0.32, 0.68, 0.22, 0.78)]:
+            painter.drawLine(round(s * x1), round(s * y1), round(s * x2), round(s * y2))
+    elif kind == "stethoscope":
+        painter.drawArc(QRectF(s * 0.18, s * 0.16, s * 0.36, s * 0.42), 180 * 16, 180 * 16)
+        painter.drawLine(round(s * 0.18), round(s * 0.36), round(s * 0.18), round(s * 0.54))
+        painter.drawLine(round(s * 0.54), round(s * 0.36), round(s * 0.54), round(s * 0.54))
+        painter.drawLine(round(s * 0.36), round(s * 0.58), round(s * 0.36), round(s * 0.72))
+        painter.drawLine(round(s * 0.36), round(s * 0.72), round(s * 0.68), round(s * 0.72))
+        painter.drawEllipse(QRectF(s * 0.66, s * 0.64, s * 0.16, s * 0.16))
+    elif kind == "login":
+        painter.drawEllipse(QRectF(s * 0.18, s * 0.15, s * 0.28, s * 0.28))
+        painter.drawArc(QRectF(s * 0.10, s * 0.48, s * 0.44, s * 0.34), 25 * 16, 130 * 16)
+        painter.drawLine(round(s * 0.58), round(s * 0.50), round(s * 0.88), round(s * 0.50))
+        painter.drawLine(round(s * 0.76), round(s * 0.38), round(s * 0.88), round(s * 0.50))
+        painter.drawLine(round(s * 0.76), round(s * 0.62), round(s * 0.88), round(s * 0.50))
+    elif kind == "paw":
+        painter.drawEllipse(QRectF(s * 0.34, s * 0.42, s * 0.32, s * 0.34))
+        for x, y in [(0.22, 0.24), (0.40, 0.16), (0.58, 0.16), (0.76, 0.24)]:
+            painter.drawEllipse(QRectF(s * x - s * 0.055, s * y, s * 0.11, s * 0.16))
+    elif kind == "chat":
+        painter.drawRoundedRect(QRectF(s * 0.15, s * 0.22, s * 0.70, s * 0.48), s * 0.10, s * 0.10)
+        painter.drawLine(round(s * 0.36), round(s * 0.70), round(s * 0.25), round(s * 0.84))
+        for x in [0.34, 0.50, 0.66]:
+            painter.drawPoint(round(s * x), round(s * 0.47))
+    elif kind == "sheet":
+        painter.drawRect(QRectF(s * 0.22, s * 0.14, s * 0.56, s * 0.72))
+        painter.drawLine(round(s * 0.38), round(s * 0.34), round(s * 0.62), round(s * 0.66))
+        painter.drawLine(round(s * 0.62), round(s * 0.34), round(s * 0.38), round(s * 0.66))
+    elif kind == "report":
+        painter.drawRect(QRectF(s * 0.24, s * 0.12, s * 0.52, s * 0.74))
+        for y in [0.36, 0.52, 0.68]:
+            painter.drawLine(round(s * 0.36), round(s * y), round(s * 0.64), round(s * y))
+    elif kind == "clock":
+        painter.drawEllipse(QRectF(s * 0.18, s * 0.18, s * 0.64, s * 0.64))
+        painter.drawLine(round(s * 0.50), round(s * 0.50), round(s * 0.50), round(s * 0.30))
+        painter.drawLine(round(s * 0.50), round(s * 0.50), round(s * 0.64), round(s * 0.58))
+    elif kind == "calendar":
+        painter.drawRoundedRect(QRectF(s * 0.18, s * 0.22, s * 0.64, s * 0.58), s * 0.06, s * 0.06)
+        painter.drawLine(round(s * 0.18), round(s * 0.38), round(s * 0.82), round(s * 0.38))
+        painter.drawLine(round(s * 0.34), round(s * 0.14), round(s * 0.34), round(s * 0.28))
+        painter.drawLine(round(s * 0.66), round(s * 0.14), round(s * 0.66), round(s * 0.28))
+    elif kind == "play":
+        painter.setBrush(QColor(color))
+        points = [
+            QPoint(round(s * 0.36), round(s * 0.24)),
+            QPoint(round(s * 0.36), round(s * 0.76)),
+            QPoint(round(s * 0.78), round(s * 0.50)),
+        ]
+        painter.drawPolygon(points)
+    elif kind == "task":
+        painter.drawRoundedRect(QRectF(s * 0.25, s * 0.16, s * 0.50, s * 0.68), s * 0.06, s * 0.06)
+        painter.drawLine(round(s * 0.36), round(s * 0.42), round(s * 0.64), round(s * 0.42))
+        painter.drawLine(round(s * 0.36), round(s * 0.58), round(s * 0.58), round(s * 0.58))
+    else:
+        painter.drawEllipse(QRectF(s * 0.22, s * 0.22, s * 0.56, s * 0.56))
+
+    painter.end()
+    return QIcon(pixmap)
 
 
 class PixelSnakeSpinner(QWidget):
@@ -113,8 +198,8 @@ class MainWindow(QMainWindow):
         self.setWindowIcon(QIcon())
         self.setWindowTitle("百度数据自动化控制台")
         self.setFont(QFont("Microsoft YaHei UI", MAIN_FONT_PT))
-        self.resize(1500, 1000)
-        self.setMinimumSize(1100, 720)
+        self.resize(1120, 740)
+        self.setMinimumSize(960, 640)
         self._drag_offset = None
         self._build_ui()
         self._apply_style()
@@ -131,20 +216,33 @@ class MainWindow(QMainWindow):
         label = QLabel(text)
         label.setObjectName(name)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setFixedSize(32, 32)
+        label.setFixedSize(28, 28)
         return label
 
-    def _make_primary_button(self, text: str, icon: str = "▶") -> QPushButton:
-        button = QPushButton(f"{icon}  {text}")
+    def _make_icon_box(self, kind: str, color: str = "#2f80ed") -> QLabel:
+        label = QLabel()
+        label.setObjectName("cardIcon")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFixedSize(28, 28)
+        label.setPixmap(make_line_icon(kind, color, 20).pixmap(20, 20))
+        return label
+
+    def _make_primary_button(self, text: str, icon: str = "play") -> QPushButton:
+        button = QPushButton(text)
         button.setObjectName("primaryActionButton")
-        button.setMinimumHeight(58)
+        button.setIcon(make_line_icon(icon, "#ffffff", 20))
+        button.setIconSize(QSize(18, 18))
+        button.setMinimumHeight(42)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return button
 
     def _make_secondary_button(self, text: str, icon: str = "") -> QPushButton:
-        button = QPushButton(f"{icon}  {text}" if icon else text)
+        button = QPushButton(text)
         button.setObjectName("secondaryActionButton")
-        button.setMinimumHeight(54)
+        if icon:
+            button.setIcon(make_line_icon(icon, "#2f80ed", 20))
+            button.setIconSize(QSize(18, 18))
+        button.setMinimumHeight(40)
         button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         return button
 
@@ -157,11 +255,11 @@ class MainWindow(QMainWindow):
 
         self.title_bar = QFrame()
         self.title_bar.setObjectName("titleBar")
-        self.title_bar.setFixedHeight(66)
+        self.title_bar.setFixedHeight(54)
         title_layout = QHBoxLayout(self.title_bar)
-        title_layout.setContentsMargins(24, 0, 18, 0)
-        title_layout.setSpacing(14)
-        self.spinner = PixelSnakeSpinner(self.title_bar, size=30)
+        title_layout.setContentsMargins(22, 0, 14, 0)
+        title_layout.setSpacing(12)
+        self.spinner = PixelSnakeSpinner(self.title_bar, size=26)
         title_layout.addWidget(self.spinner)
         self.title_label = QLabel("百度数据自动化控制台")
         self.title_label.setObjectName("windowTitleLabel")
@@ -191,7 +289,7 @@ class MainWindow(QMainWindow):
         self.maximize_button.setObjectName("windowControlButton")
         self.close_button.setObjectName("windowCloseButton")
         for button in [self.minimize_button, self.maximize_button, self.close_button]:
-            button.setFixedSize(44, 38)
+            button.setFixedSize(36, 30)
             title_layout.addWidget(button)
         self.minimize_button.clicked.connect(self.showMinimized)
         self.maximize_button.clicked.connect(self.toggle_maximized)
@@ -199,25 +297,25 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.title_bar)
 
         shell = QHBoxLayout()
-        shell.setContentsMargins(22, 4, 22, 22)
-        shell.setSpacing(18)
+        shell.setContentsMargins(18, 4, 18, 18)
+        shell.setSpacing(14)
         root_layout.addLayout(shell, 1)
 
         self.left_panel = QFrame()
         self.left_panel.setObjectName("leftRail")
-        self.left_panel.setMinimumWidth(470)
-        self.left_panel.setMaximumWidth(470)
+        self.left_panel.setMinimumWidth(390)
+        self.left_panel.setMaximumWidth(390)
         self.left_panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         left_layout = QVBoxLayout(self.left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(18)
+        left_layout.setSpacing(14)
         self._build_left_panel(left_layout)
 
         self.content_panel = QFrame()
         self.content_panel.setObjectName("contentPanel")
         content_layout = QVBoxLayout(self.content_panel)
-        content_layout.setContentsMargins(30, 22, 30, 22)
-        content_layout.setSpacing(18)
+        content_layout.setContentsMargins(24, 18, 24, 18)
+        content_layout.setSpacing(14)
         self._build_right_panel(content_layout)
 
         shell.addWidget(self.left_panel)
@@ -228,14 +326,14 @@ class MainWindow(QMainWindow):
 
     def _build_left_panel(self, left_layout: QVBoxLayout) -> None:
         self.task_control_card = self._make_card()
-        self.task_control_card.setMinimumHeight(310)
+        self.task_control_card.setMinimumHeight(214)
         task_layout = QVBoxLayout(self.task_control_card)
-        task_layout.setContentsMargins(26, 26, 26, 24)
-        task_layout.setSpacing(14)
+        task_layout.setContentsMargins(20, 18, 20, 18)
+        task_layout.setSpacing(9)
 
         title_row = QHBoxLayout()
         title_row.setSpacing(14)
-        title_row.addWidget(self._make_icon_label("▣"))
+        title_row.addWidget(self._make_icon_box("task"))
         task_title = QLabel("任务控制台")
         task_title.setObjectName("cardTitle")
         title_row.addWidget(task_title)
@@ -259,7 +357,7 @@ class MainWindow(QMainWindow):
 
         self.project_combo = QComboBox()
         self.project_combo.setObjectName("projectCombo")
-        self.project_combo.setMinimumHeight(54)
+        self.project_combo.setMinimumHeight(40)
         task_layout.addWidget(self.project_combo)
 
         self.progress_text = QLabel("项目就绪后会显示任务进度")
@@ -276,13 +374,13 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.task_control_card)
 
         self.hourly_card = self._make_card()
-        self.hourly_card.setMinimumHeight(250)
+        self.hourly_card.setMinimumHeight(198)
         hourly_layout = QVBoxLayout(self.hourly_card)
-        hourly_layout.setContentsMargins(26, 24, 26, 24)
-        hourly_layout.setSpacing(18)
+        hourly_layout.setContentsMargins(20, 18, 20, 18)
+        hourly_layout.setSpacing(12)
         header = QHBoxLayout()
         header.setSpacing(14)
-        header.addWidget(self._make_icon_label("◷"))
+        header.addWidget(self._make_icon_box("clock"))
         hourly_title = QLabel("小时报")
         hourly_title.setObjectName("cardTitle")
         header.addWidget(hourly_title)
@@ -290,11 +388,11 @@ class MainWindow(QMainWindow):
         hourly_layout.addLayout(header)
 
         body = QHBoxLayout()
-        body.setSpacing(22)
+        body.setSpacing(16)
         button_col = QVBoxLayout()
-        button_col.setSpacing(18)
+        button_col.setSpacing(12)
         self.hourly_button = self._make_primary_button("运行小时报")
-        self.environment_check_button = self._make_secondary_button("执行环境自检", "♢")
+        self.environment_check_button = self._make_secondary_button("执行环境自检", "shield")
         button_col.addWidget(self.hourly_button)
         button_col.addWidget(self.environment_check_button)
         button_col.addStretch(1)
@@ -319,7 +417,7 @@ class MainWindow(QMainWindow):
             button.setObjectName("periodButton")
             button.setCheckable(True)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            button.setMinimumSize(150, 44)
+            button.setMinimumSize(116, 32)
             button.toggled.connect(self.update_period_button_texts)
             self.period_group.addButton(button)
             self.period_buttons.append(button)
@@ -332,13 +430,13 @@ class MainWindow(QMainWindow):
 
         self.daily_card = self._make_card()
         self.date_card = self.daily_card
-        self.daily_card.setMinimumHeight(250)
+        self.daily_card.setMinimumHeight(202)
         daily_layout = QVBoxLayout(self.daily_card)
-        daily_layout.setContentsMargins(26, 24, 26, 24)
-        daily_layout.setSpacing(18)
+        daily_layout.setContentsMargins(20, 18, 20, 18)
+        daily_layout.setSpacing(11)
         daily_header = QHBoxLayout()
         daily_header.setSpacing(14)
-        daily_header.addWidget(self._make_icon_label("▦"))
+        daily_header.addWidget(self._make_icon_box("calendar"))
         daily_title = QLabel("日报")
         daily_title.setObjectName("cardTitle")
         daily_header.addWidget(daily_title)
@@ -346,7 +444,7 @@ class MainWindow(QMainWindow):
         daily_layout.addLayout(daily_header)
 
         daily_button_row = QHBoxLayout()
-        daily_button_row.setSpacing(26)
+        daily_button_row.setSpacing(14)
         self.daily_button = self._make_primary_button("运行日报")
         self.default_yesterday_button = self._make_secondary_button("默认昨天")
         self.default_yesterday_button.setObjectName("dateHintButton")
@@ -360,9 +458,11 @@ class MainWindow(QMainWindow):
         daily_layout.addWidget(date_title)
         yesterday = date.today() - timedelta(days=1)
         self.current_daily_date = yesterday
-        self.date_button = QPushButton(f"{yesterday.isoformat()}        ▦")
+        self.date_button = QPushButton(yesterday.isoformat())
         self.date_button.setObjectName("datePickerButton")
-        self.date_button.setMinimumHeight(56)
+        self.date_button.setIcon(make_line_icon("calendar", "#2f80ed", 20))
+        self.date_button.setIconSize(QSize(18, 18))
+        self.date_button.setMinimumHeight(40)
         self.date_button.clicked.connect(self.pick_daily_date)
         daily_layout.addWidget(self.date_button)
         left_layout.addWidget(self.daily_card)
@@ -384,9 +484,11 @@ class MainWindow(QMainWindow):
         self.stage_labels.clear()
         self.stage_buttons.clear()
         for index, (key, label, icon) in enumerate(STAGES):
-            button = QPushButton(f"{icon}  {label}")
+            button = QPushButton(label)
             button.setObjectName("stageActionButton")
-            button.setMinimumHeight(58)
+            button.setIcon(make_line_icon(icon, "#087a46", 22))
+            button.setIconSize(QSize(18, 18))
+            button.setMinimumHeight(42)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.stage_labels[key] = button
             self.stage_buttons.append(button)
@@ -398,10 +500,11 @@ class MainWindow(QMainWindow):
         flow_layout.setContentsMargins(22, 18, 22, 18)
         flow_layout.setSpacing(14)
         flow_header = QHBoxLayout()
-        flow_icon = QLabel("↻")
+        flow_icon = QLabel()
         flow_icon.setObjectName("flowHeaderIcon")
         flow_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        flow_icon.setFixedSize(28, 28)
+        flow_icon.setFixedSize(24, 24)
+        flow_icon.setPixmap(make_line_icon("stethoscope", "#1f2a44", 20).pixmap(20, 20))
         self.current_flow_title = QLabel("当前流程")
         self.current_flow_title.setObjectName("flowTitle")
         flow_header.addWidget(flow_icon)
@@ -418,7 +521,7 @@ class MainWindow(QMainWindow):
         accent.setObjectName("flowAccent")
         accent.setFixedWidth(5)
         flow_card_layout.addWidget(accent)
-        self.flow_spinner = PixelSnakeSpinner(flow_card, size=28)
+        self.flow_spinner = PixelSnakeSpinner(flow_card, size=24)
         flow_card_layout.addWidget(self.flow_spinner)
         flow_text = QVBoxLayout()
         flow_text.setSpacing(4)
@@ -445,10 +548,11 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self.current_flow_panel)
 
         log_title_row = QHBoxLayout()
-        log_icon = QLabel("▤")
+        log_icon = QLabel()
         log_icon.setObjectName("logHeaderIcon")
         log_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        log_icon.setFixedSize(28, 28)
+        log_icon.setFixedSize(24, 24)
+        log_icon.setPixmap(make_line_icon("report", "#1f2a44", 20).pixmap(20, 20))
         log_header = QLabel("实时日志")
         log_header.setObjectName("logTitle")
         log_title_row.addWidget(log_icon)
@@ -477,16 +581,16 @@ class MainWindow(QMainWindow):
             }
             QLabel#windowTitleLabel {
                 color: #0f172a;
-                font-size: 11pt;
+                font-size: 10pt;
                 font-weight: 600;
             }
             QPushButton#systemConfigButton {
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 10px;
-                padding: 6px 12px;
+                padding: 4px 10px;
                 color: #1f2a44;
-                font-size: 9pt;
+                font-size: 8pt;
                 text-align: left;
             }
             QPushButton#systemConfigButton:hover {
@@ -498,7 +602,7 @@ class MainWindow(QMainWindow):
                 border: 0;
                 border-radius: 8px;
                 color: #12213d;
-                font-size: 14pt;
+                font-size: 11pt;
                 padding: 0;
             }
             QPushButton#windowControlButton:hover {
@@ -515,45 +619,44 @@ class MainWindow(QMainWindow):
             QFrame#contentPanel, QFrame#dashboardCard, QFrame#currentFlowPanel {
                 background: #ffffff;
                 border: 1px solid #d8e3f0;
-                border-radius: 16px;
+                border-radius: 12px;
             }
             QLabel#cardIcon {
                 color: #2f80ed;
                 background: #eaf2ff;
                 border: 1px solid #cfe1fb;
-                border-radius: 10px;
-                font-size: 14pt;
+                border-radius: 9px;
             }
             QLabel#cardTitle {
                 color: #0f172a;
-                font-size: 16pt;
+                font-size: 12pt;
                 font-weight: 600;
             }
             QLabel#sectionTitle {
                 color: #111827;
-                font-size: 10pt;
+                font-size: 8pt;
                 font-weight: 600;
             }
             QLabel#mutedText, QLabel#taskProgressText {
                 color: #53647e;
-                font-size: 9pt;
+                font-size: 8pt;
             }
             QLabel#pillHint {
                 color: #2f80ed;
                 background: #eaf2ff;
                 border: 1px solid #c7ddf4;
-                border-radius: 16px;
-                padding: 6px 14px;
-                font-size: 9pt;
+                border-radius: 13px;
+                padding: 4px 10px;
+                font-size: 8pt;
             }
             QComboBox#projectCombo, QPushButton#datePickerButton {
-                min-height: 46px;
+                min-height: 34px;
                 border-radius: 10px;
                 border: 1px solid #cad8ea;
-                padding: 6px 18px;
+                padding: 4px 12px;
                 background: #ffffff;
                 color: #1f2a44;
-                font-size: 11pt;
+                font-size: 9pt;
                 text-align: left;
             }
             QComboBox#projectCombo:hover, QPushButton#datePickerButton:hover {
@@ -572,8 +675,8 @@ class MainWindow(QMainWindow):
                 border: 1px solid #2f80ed;
                 border-radius: 10px;
                 color: #ffffff;
-                padding: 10px 18px;
-                font-size: 12pt;
+                padding: 6px 14px;
+                font-size: 9pt;
                 text-align: center;
             }
             QPushButton#primaryActionButton:hover {
@@ -584,8 +687,8 @@ class MainWindow(QMainWindow):
                 border: 1px solid #cad8ea;
                 border-radius: 10px;
                 color: #1f2a44;
-                padding: 10px 18px;
-                font-size: 11pt;
+                padding: 6px 14px;
+                font-size: 9pt;
                 text-align: center;
             }
             QPushButton#secondaryActionButton:hover, QPushButton#dateHintButton:hover {
@@ -600,10 +703,10 @@ class MainWindow(QMainWindow):
                 background: #ffffff;
                 border: 1px solid #cad8ea;
                 border-radius: 10px;
-                padding: 4px 12px;
+                padding: 3px 10px;
                 color: #1f2a44;
                 text-align: center;
-                font-size: 11pt;
+                font-size: 9pt;
                 outline: 0;
             }
             QPushButton#periodButton:checked {
@@ -616,8 +719,8 @@ class MainWindow(QMainWindow):
                 border: 1px solid #98ddb8;
                 border-radius: 12px;
                 color: #087a46;
-                padding: 10px 18px;
-                font-size: 12pt;
+                padding: 6px 12px;
+                font-size: 9pt;
                 text-align: center;
             }
             QPushButton#stageActionButton:hover {
@@ -636,11 +739,11 @@ class MainWindow(QMainWindow):
             }
             QLabel#flowHeaderIcon, QLabel#logHeaderIcon {
                 color: #1f2a44;
-                font-size: 16pt;
+                font-size: 11pt;
             }
             QLabel#flowTitle, QLabel#logTitle {
                 color: #0f172a;
-                font-size: 12pt;
+                font-size: 10pt;
                 font-weight: 600;
             }
             QFrame#flowStatusCard {
@@ -655,21 +758,21 @@ class MainWindow(QMainWindow):
             }
             QLabel#currentTaskTitle {
                 color: #0f172a;
-                font-size: 16pt;
+                font-size: 12pt;
                 font-weight: 600;
             }
             QLabel#currentTaskSubtitle {
                 color: #1f2a44;
-                font-size: 11pt;
+                font-size: 9pt;
             }
             QLabel#statusBadge {
-                min-width: 112px;
-                min-height: 34px;
+                min-width: 88px;
+                min-height: 28px;
                 color: #2f80ed;
                 background: #eaf2ff;
                 border: 1px solid #d4e6ff;
-                border-radius: 17px;
-                font-size: 10pt;
+                border-radius: 14px;
+                font-size: 8pt;
             }
             QLabel#statusBadge[status="idle"] {
                 color: #64748b;
@@ -688,14 +791,14 @@ class MainWindow(QMainWindow):
             }
             QLabel#startTimeText {
                 color: #1f2a44;
-                font-size: 10pt;
+                font-size: 8pt;
             }
             QTextEdit#logConsole {
                 background: #08172b;
                 color: #e6edf7;
-                border-radius: 12px;
+                border-radius: 10px;
                 border: 1px solid #12213d;
-                padding: 24px;
+                padding: 16px;
             }
             QTextEdit#logConsole .log-path {
                 color: #38d7ff;
@@ -713,13 +816,13 @@ class MainWindow(QMainWindow):
                 color: #c4b5fd;
             }
             QProgressBar#taskProgress {
-                height: 16px;
+                height: 10px;
                 border: 0;
-                border-radius: 8px;
+                border-radius: 5px;
                 background: #e6edf6;
             }
             QProgressBar#taskProgress::chunk {
-                border-radius: 8px;
+                border-radius: 5px;
                 background: #5c9af4;
             }
         """)
@@ -872,7 +975,7 @@ class MainWindow(QMainWindow):
 
     def reset_daily_date_to_yesterday(self) -> None:
         self.current_daily_date = date.today() - timedelta(days=1)
-        self.date_button.setText(f"{self.current_daily_date.isoformat()}        ▦")
+        self.date_button.setText(self.current_daily_date.isoformat())
 
     def display_daily_date(self) -> str:
         return f"{self.current_daily_date.month}月{self.current_daily_date.day}日"
@@ -895,7 +998,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             selected = calendar.selectedDate().toPython()
             self.current_daily_date = selected
-            self.date_button.setText(f"{selected.isoformat()}        ▦")
+            self.date_button.setText(selected.isoformat())
 
     def run_startup_check(self) -> None:
         self.reset_stages()

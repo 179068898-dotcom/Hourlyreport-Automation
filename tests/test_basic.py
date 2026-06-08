@@ -5374,7 +5374,7 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
 
     assert window.progress.objectName() == "taskProgress"
     assert window.progress_text.objectName() == "taskProgressText"
-    assert window.progress.maximum() == 7
+    assert window.progress.maximum() == 8
     assert "项目" in window.progress_text.text()
     window.close()
 
@@ -5388,25 +5388,27 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert window.minimumWidth() >= 1100
-    assert window.minimumHeight() >= 720
+    assert window.width() <= 1180
+    assert window.height() <= 780
+    assert window.minimumWidth() <= 980
+    assert window.minimumHeight() <= 660
     assert window.maximumWidth() > window.minimumWidth()
     assert window.maximumHeight() > window.minimumHeight()
-    assert window.left_panel.minimumWidth() == 470
-    assert window.left_panel.maximumWidth() == 470
+    assert window.left_panel.minimumWidth() == 390
+    assert window.left_panel.maximumWidth() == 390
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
     assert window.title_bar.objectName() == "titleBar"
     assert window.spinner.objectName() == "pixelSnakeSpinner"
     assert window.title_label.text() == "百度数据自动化控制台"
-    assert window.title_label.font().pointSize() == 11
+    assert window.title_label.font().pointSize() == 10
     assert window.system_config_button.text().startswith("系统配置")
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
     assert window.maximize_button.text() == "□"
     assert window.windowIcon().isNull()
     assert window.font().family() == "Microsoft YaHei UI"
-    assert window.font().pointSize() == 9
+    assert window.font().pointSize() == 8
     window.close()
 
 
@@ -5426,16 +5428,19 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
     assert window.current_task_title.text() == "暂无运行任务"
     assert window.current_task_subtitle.text() == "请选择左侧任务开始执行"
     assert window.current_status_badge.text() == "空闲"
-    assert [button.objectName() for button in window.stage_buttons] == ["stageActionButton"] * 7
-    assert [button.text().split("  ", 1)[-1] for button in window.stage_buttons] == [
+    assert [button.objectName() for button in window.stage_buttons] == ["stageActionButton"] * 8
+    assert [button.text() for button in window.stage_buttons] == [
         "环境检测",
         "项目配置",
         "快速自检",
+        "登录账号",
         "百度数据",
         "快商通数据",
         "Excel写入",
         "报告输出",
     ]
+    assert all(not button.icon().isNull() for button in window.stage_buttons)
+    assert all(button.minimumHeight() <= 44 for button in window.stage_buttons)
     window.close()
 
 
@@ -5462,8 +5467,8 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert MAIN_FONT_PT == 9
-    assert SUB_FONT_PT == 8
+    assert MAIN_FONT_PT == 8
+    assert SUB_FONT_PT == 7
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
     assert "QLabel#cardTitle" in window.styleSheet()
@@ -5482,7 +5487,7 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "credentials_config_button")
     assert window.system_config_button.text().startswith("系统配置")
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
-    assert window.environment_check_button.text().endswith("执行环境自检")
+    assert window.environment_check_button.text() == "执行环境自检"
     assert not hasattr(window, "guide_button")
     assert not hasattr(window, "refresh_button")
     assert not hasattr(window, "preflight_hourly_button")
@@ -5623,6 +5628,7 @@ def test_desktop_gui_task_runner_infers_progress_stages():
     from gui.task_runner import infer_stage
 
     assert infer_stage("[OpenClaw] Running hourly quick preflight...") == "preflight"
+    assert infer_stage("[通知] 百度账号登录完成") == "login"
     assert infer_stage("fetch-baidu-auto started") == "baidu"
     assert infer_stage("parse-kst-export completed") == "kst"
     assert infer_stage("Excel 写入完成") == "excel"

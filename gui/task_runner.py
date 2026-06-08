@@ -11,6 +11,8 @@ def infer_stage(line: str) -> str | None:
         return "error"
     if "preflight" in text or "自检" in text:
         return "preflight"
+    if "login" in text or "账号" in text or "账户" in text or "登录" in text:
+        return "login"
     if "fetch-baidu" in text or "baidu" in text or "百度" in text:
         return "baidu"
     if "parse-kst" in text or "kst" in text or "快商通" in text:
