@@ -5125,6 +5125,7 @@ def test_internal_build_includes_desktop_exe_when_available():
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
     assert "dist/百度日报小时报控制台/百度日报小时报控制台.exe" in names
+    assert "dist/百度日报小时报控制台/_internal/base_library.zip" in names
     assert release.name == "hourly_report_bot_internal_v2.0.zip"
 
 

@@ -45,7 +45,9 @@ def should_include_file(path: Path, internal: bool = False) -> bool:
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
     if parts and parts[0] == "dist":
-        return internal and len(parts) >= 2 and parts[1] == DESKTOP_DIST_DIR and path.suffix.lower() != ".zip"
+        if len(parts) == 2 and path.suffix.lower() == ".zip":
+            return False
+        return internal and len(parts) >= 2 and parts[1] == DESKTOP_DIST_DIR
     if path.name in EXCLUDE_FILES:
         return False
     if path.suffix.lower() in EXCLUDE_SUFFIXES:
