@@ -5112,6 +5112,22 @@ def test_internal_build_includes_secrets_json():
     assert "secrets/secrets.json" in names
 
 
+def test_internal_build_includes_desktop_exe_when_available():
+    root = Path(__file__).resolve().parents[1]
+    exe = root / "dist" / "百度日报小时报控制台" / "百度日报小时报控制台.exe"
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    if not exe.exists():
+        exe.write_bytes(b"placeholder exe")
+
+    release = build_release(root, version="2.0", internal=True)
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "dist/百度日报小时报控制台/百度日报小时报控制台.exe" in names
+    assert release.name == "hourly_report_bot_internal_v2.0.zip"
+
+
 def test_internal_build_validates_missing_profile(tmp_path):
     """内部包缺少 profile 时校验失败。"""
     from tools.build_release import _validate_internal_secrets
@@ -5401,6 +5417,7 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
     assert window.title_bar.objectName() == "titleBar"
     assert window.title_bar.height() <= 44
+    assert window.spinner.width() <= 15
     assert window.spinner.objectName() == "pixelSnakeSpinner"
     assert window.title_label.text() == "百度数据自动化控制台"
     assert window.title_label.font().pointSize() == 10
@@ -5412,6 +5429,7 @@ def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
     assert window.close_button.width() <= 30
     assert window.minimize_button.width() == window.maximize_button.width() == window.close_button.width()
     assert window.minimize_button.height() == window.maximize_button.height() == window.close_button.height()
+    assert window.minimize_button.iconSize().width() == window.maximize_button.iconSize().width() == window.close_button.iconSize().width()
     assert not window.minimize_button.icon().isNull()
     assert not window.maximize_button.icon().isNull()
     assert not window.close_button.icon().isNull()
@@ -5439,6 +5457,7 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
     assert window.current_status_badge.text() == "空闲"
     assert window.flow_header_icon.objectName() == "flowHeaderIcon"
     assert window.flow_header_icon.pixmap().width() >= 22
+    assert window.flow_header_icon.property("iconKind") == "flow"
     assert window.flow_idle_icon.width() >= 30
     assert not window.flow_idle_icon.isHidden()
     assert window.flow_spinner.isHidden()
@@ -5454,6 +5473,7 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
         "报告输出",
     ]
     assert all(not button.icon().isNull() for button in window.stage_buttons)
+    assert all(button.font().family() == "Microsoft YaHei Light" for button in window.stage_buttons)
     assert all(button.minimumHeight() <= 44 for button in window.stage_buttons)
     window.close()
 
@@ -5488,8 +5508,11 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     assert window.title_label.font().family() == "Microsoft YaHei Light"
     assert window.system_config_button.font().family() == "Microsoft YaHei Light"
     assert window.log_view.font().family() in {"Consolas", "Cascadia Mono"}
+    assert window.log_view.font().pointSize() == MAIN_FONT_PT
     assert 'font-family: "Microsoft YaHei Light", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
+    assert "font-weight: 600" not in window.styleSheet()
+    assert "QScrollBar:vertical" in window.styleSheet()
     window.close()
 
 
@@ -5506,7 +5529,7 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.system_config_button.text() == "系统配置"
     assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize()
     assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
-    assert window.environment_check_button.text() == "执行环境自检"
+    assert window.environment_check_button.text() == "项目配置检查"
     assert not hasattr(window, "guide_button")
     assert not hasattr(window, "refresh_button")
     assert not hasattr(window, "preflight_hourly_button")
@@ -5514,6 +5537,18 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "command_line")
     assert window.selected_project_config_path().name.endswith(".json")
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
+    window.close()
+
+
+def test_desktop_gui_defaults_to_kunming_project(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert window.selected_project_id() == "kunming_niu"
     window.close()
 
 
@@ -5597,6 +5632,25 @@ def test_desktop_gui_current_flow_updates_for_hourly_and_daily(monkeypatch):
     window.close()
 
 
+def test_desktop_gui_opens_project_excel_after_success(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    opened = []
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.open_path = lambda path: opened.append(path)
+    window.runner.start = lambda command, root: None
+
+    window.run_hourly()
+    window.on_task_finished(0)
+
+    assert opened
+    assert opened[-1].suffix.lower() in {".xlsx", ".xlsm", ".xls"}
+    window.close()
+
+
 def test_desktop_gui_creates_local_secrets_template_when_missing(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
@@ -5644,6 +5698,27 @@ def test_desktop_gui_environment_check_reports_missing_python(tmp_path):
     assert report["passed"] is False
     assert python_check["passed"] is False
     assert python_check["severity"] == "error"
+
+
+def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_missing(tmp_path, monkeypatch):
+    import gui.environment_check as environment_check
+
+    install = tmp_path / "install_env.bat"
+    install.write_text("@echo off\n", encoding="utf-8")
+    calls = []
+
+    monkeypatch.setattr(
+        environment_check.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or type("R", (), {"returncode": 0, "stdout": "ok", "stderr": ""})(),
+    )
+
+    result = environment_check.repair_environment_if_needed(tmp_path, {"passed": False, "checks": []})
+
+    assert result["attempted"] is True
+    assert result["returncode"] == 0
+    assert calls
+    assert calls[0][1]["cwd"] == tmp_path
 
 
 def test_desktop_gui_task_runner_infers_progress_stages():
@@ -8308,6 +8383,60 @@ def test_wait_stable_daily_report_ignores_first_unstable_snapshot(monkeypatch):
 
     def fake_report(text, config, target_date, visible_text_path=None):
         cost = 1.0 if text == "low" else 10.0
+        return {
+            "date": target_date,
+            "target_date": target_date,
+            "accounts": {"A": {"展现": 1, "点击": 1, "消费": cost}},
+            "errors": [],
+        }
+
+    def fake_validate(report, rows, config):
+        return {
+            "passed": True,
+            "errors": [],
+            "signature": daily._daily_report_signature(report, ["A"]),
+            "total_diff": {},
+        }
+
+    monkeypatch.setattr(daily, "_read_page_text", fake_read)
+    monkeypatch.setattr(daily, "extract_baidu_rows_from_visible_text", lambda text: [])
+    monkeypatch.setattr(daily, "build_baidu_daily_report_from_visible_text", fake_report)
+    monkeypatch.setattr(daily, "validate_daily_baidu_snapshot", fake_validate)
+
+    snapshot = daily._wait_stable_daily_report_snapshot(
+        page,
+        {"accounts": {"A": {}}, "baidu": {"report_table_wait_seconds": 10, "daily_stability_interval_ms": 1}},
+        "2026-05-23",
+        logging.getLogger("test"),
+    )
+
+    assert snapshot["stable"] is True
+    assert snapshot["report"]["accounts"]["A"]["消费"] == 10.0
+    assert len(snapshot["attempts"]) == 3
+
+
+def test_wait_stable_daily_report_accepts_repeated_valid_snapshot_even_when_not_consecutive(monkeypatch):
+    import logging
+    import modules.baidu_daily as daily
+
+    class FakePage:
+        def __init__(self):
+            self.read_index = 0
+            self.waits = []
+
+        def wait_for_timeout(self, timeout):
+            self.waits.append(timeout)
+
+    page = FakePage()
+    texts = ["correct-a", "correct-b", "correct-a"]
+
+    def fake_read(_page):
+        value = texts[min(_page.read_index, len(texts) - 1)]
+        _page.read_index += 1
+        return value
+
+    def fake_report(text, config, target_date, visible_text_path=None):
+        cost = 10.0 if text == "correct-a" else 10.01
         return {
             "date": target_date,
             "target_date": target_date,

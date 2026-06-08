@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
-from gui.environment_check import run_environment_check
+from gui.environment_check import repair_environment_if_needed, run_environment_check
 from gui.log_formatter import format_log_html
 from gui.project_store import ProjectSummary, load_project_summaries
 from gui.task_runner import QtTaskRunner
@@ -99,6 +99,14 @@ def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
         painter.drawArc(QRectF(s * 0.18, s * 0.18, s * 0.64, s * 0.64), 35 * 16, 285 * 16)
         painter.drawLine(round(s * 0.30), round(s * 0.29), round(s * 0.18), round(s * 0.30))
         painter.drawLine(round(s * 0.30), round(s * 0.29), round(s * 0.27), round(s * 0.42))
+    elif kind == "flow":
+        painter.drawRoundedRect(QRectF(s * 0.20, s * 0.22, s * 0.60, s * 0.46), s * 0.08, s * 0.08)
+        painter.drawLine(round(s * 0.34), round(s * 0.38), round(s * 0.62), round(s * 0.38))
+        painter.drawLine(round(s * 0.34), round(s * 0.52), round(s * 0.54), round(s * 0.52))
+        painter.drawLine(round(s * 0.58), round(s * 0.74), round(s * 0.74), round(s * 0.74))
+        painter.drawLine(round(s * 0.74), round(s * 0.74), round(s * 0.74), round(s * 0.58))
+        painter.drawLine(round(s * 0.66), round(s * 0.58), round(s * 0.74), round(s * 0.58))
+        painter.drawLine(round(s * 0.74), round(s * 0.58), round(s * 0.82), round(s * 0.66))
     elif kind == "login":
         painter.drawEllipse(QRectF(s * 0.18, s * 0.15, s * 0.28, s * 0.28))
         painter.drawArc(QRectF(s * 0.10, s * 0.48, s * 0.44, s * 0.34), 25 * 16, 130 * 16)
@@ -175,27 +183,26 @@ class PixelSnakeSpinner(QWidget):
         self.setObjectName("pixelSnakeSpinner")
         self.setFixedSize(size, size)
         self._size = size
+        self._points = [(2, 2), (6, 2), (10, 2), (14, 2), (14, 6), (14, 10), (10, 10), (6, 10), (2, 10), (2, 6)]
         self._tick = 0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._advance)
-        self._timer.start(260)
+        self._timer.start(340)
 
     def _advance(self) -> None:
-        self._tick = (self._tick + 1) % 8
+        self._tick = (self._tick + 1) % len(self._points)
         self.update()
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
         scale = self._size / 18
-        points = [(7, 1), (11, 1), (15, 5), (15, 9), (11, 13), (7, 13), (3, 9), (3, 5)]
-        colors = ["#2f80ed", "#2f80ed", "#5fa2f4", "#8fc1fa", "#bfdcff", "#dcecff", "#edf6ff", "#f5faff"]
-        width = max(2, round(3 * scale))
-        height = max(5, round(7 * scale))
-        for offset in range(8):
-            index = (self._tick - offset) % 8
-            x, y = points[index]
-            painter.fillRect(round(x * scale), round(y * scale), width, height, QColor(colors[offset]))
+        colors = ["#2f80ed", "#4e94f2", "#7cb4f8", "#b8d8fb", "#e3f0ff"]
+        block = max(2, round(3 * scale))
+        for offset, color in enumerate(colors):
+            index = (self._tick - offset) % len(self._points)
+            x, y = self._points[index]
+            painter.fillRect(round(x * scale), round(y * scale), block, block, QColor(color))
 
 
 class HoverMenuButton(QPushButton):
@@ -315,12 +322,12 @@ class MainWindow(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(20, 0, 12, 0)
         title_layout.setSpacing(10)
-        self.spinner = PixelSnakeSpinner(self.title_bar, size=16)
+        self.spinner = PixelSnakeSpinner(self.title_bar, size=14)
         title_layout.addWidget(self.spinner)
         self.title_label = QLabel("百度数据自动化控制台")
         self.title_label.setObjectName("windowTitleLabel")
         title_font = QFont(FONT_FAMILY, TITLE_FONT_PT)
-        title_font.setWeight(QFont.Weight.DemiBold)
+        title_font.setWeight(QFont.Weight.Normal)
         self.title_label.setFont(title_font)
         title_layout.addWidget(self.title_label)
 
@@ -349,13 +356,17 @@ class MainWindow(QMainWindow):
         self.minimize_button.setObjectName("windowControlButton")
         self.maximize_button.setObjectName("windowControlButton")
         self.close_button.setObjectName("windowCloseButton")
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(2)
         self.minimize_button.setIcon(make_line_icon("minimize", "#1f2a44", 22))
         self.maximize_button.setIcon(make_line_icon("maximize", "#1f2a44", 22))
         self.close_button.setIcon(make_line_icon("close", "#8f1d2c", 22))
         for button in [self.minimize_button, self.maximize_button, self.close_button]:
-            button.setFixedSize(30, 28)
-            button.setIconSize(QSize(18, 18))
-            title_layout.addWidget(button)
+            button.setFixedSize(28, 28)
+            button.setIconSize(QSize(17, 17))
+            controls.addWidget(button, 0, Qt.AlignmentFlag.AlignCenter)
+        title_layout.addLayout(controls)
         self.minimize_button.clicked.connect(self.showMinimized)
         self.maximize_button.clicked.connect(self.toggle_maximized)
         self.close_button.clicked.connect(self.close)
@@ -457,7 +468,7 @@ class MainWindow(QMainWindow):
         button_col = QVBoxLayout()
         button_col.setSpacing(12)
         self.hourly_button = self._make_primary_button("运行小时报")
-        self.environment_check_button = self._make_secondary_button("执行环境自检", "shield")
+        self.environment_check_button = self._make_secondary_button("项目配置检查", "shield")
         button_col.addWidget(self.hourly_button)
         button_col.addWidget(self.environment_check_button)
         button_col.addStretch(1)
@@ -552,6 +563,7 @@ class MainWindow(QMainWindow):
             button.setIcon(make_line_icon(icon, "#087a46", 22))
             button.setIconSize(QSize(18, 18))
             button.setMinimumHeight(42)
+            button.setFont(QFont(FONT_FAMILY, MAIN_FONT_PT))
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             self.stage_labels[key] = button
             self.stage_buttons.append(button)
@@ -565,9 +577,10 @@ class MainWindow(QMainWindow):
         flow_header = QHBoxLayout()
         self.flow_header_icon = QLabel()
         self.flow_header_icon.setObjectName("flowHeaderIcon")
+        self.flow_header_icon.setProperty("iconKind", "flow")
         self.flow_header_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.flow_header_icon.setFixedSize(26, 26)
-        self.flow_header_icon.setPixmap(make_line_icon("loop", "#1f2a44", 24).pixmap(24, 24))
+        self.flow_header_icon.setPixmap(make_line_icon("flow", "#1f2a44", 24).pixmap(24, 24))
         self.current_flow_title = QLabel("当前流程")
         self.current_flow_title.setObjectName("flowTitle")
         flow_header.addWidget(self.flow_header_icon)
@@ -628,7 +641,7 @@ class MainWindow(QMainWindow):
         self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logConsole")
-        self.log_view.setFont(QFont("Consolas", MAIN_FONT_PT + 2))
+        self.log_view.setFont(QFont("Consolas", MAIN_FONT_PT))
         self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         content_layout.addWidget(self.log_view, 1)
 
@@ -647,7 +660,7 @@ class MainWindow(QMainWindow):
             QLabel#windowTitleLabel {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 600;
+                font-weight: 400;
             }
             QPushButton#systemConfigButton {
                 background: transparent;
@@ -697,12 +710,12 @@ class MainWindow(QMainWindow):
             QLabel#cardTitle {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 600;
+                font-weight: 400;
             }
             QLabel#sectionTitle {
                 color: #111827;
                 font-size: 9pt;
-                font-weight: 500;
+                font-weight: 400;
             }
             QLabel#mutedText, QLabel#taskProgressText {
                 color: #53647e;
@@ -811,7 +824,7 @@ class MainWindow(QMainWindow):
             QLabel#flowTitle, QLabel#logTitle {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 600;
+                font-weight: 400;
             }
             QFrame#flowStatusCard {
                 background: #fbfdff;
@@ -826,7 +839,7 @@ class MainWindow(QMainWindow):
             QLabel#currentTaskTitle {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 600;
+                font-weight: 400;
             }
             QLabel#currentTaskSubtitle {
                 color: #1f2a44;
@@ -866,6 +879,15 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 border: 1px solid #12213d;
                 padding: 16px;
+            }
+            QTextEdit#logConsole QScrollBar:vertical {
+                width: 0px;
+                background: transparent;
+                border: 0;
+            }
+            QTextEdit#logConsole QScrollBar::handle:vertical {
+                background: transparent;
+                border: 0;
             }
             QTextEdit#logConsole .log-path {
                 color: #38d7ff;
@@ -917,6 +939,9 @@ class MainWindow(QMainWindow):
         self.project_combo.clear()
         for project in self.projects:
             self.project_combo.addItem(project.label, project.project_id)
+        default_index = self.project_combo.findData("kunming_niu")
+        if default_index >= 0:
+            self.project_combo.setCurrentIndex(default_index)
         has_projects = bool(self.projects)
         self.set_task_buttons_enabled(has_projects)
 
@@ -1081,6 +1106,18 @@ class MainWindow(QMainWindow):
         for item in report["checks"]:
             status = "通过" if item["passed"] else "需要处理"
             self.append_log(f"[{status}] {item['name']}: {item['detail']}")
+        if not report["passed"]:
+            repair = repair_environment_if_needed(self.root, report)
+            if repair.get("attempted"):
+                self.append_log("检测到环境缺失，已尝试静默安装运行环境。")
+                if repair.get("returncode") == 0:
+                    self.append_log("[通过] 环境安装脚本执行完成，正在重新检测。")
+                    report = run_environment_check(self.root)
+                    for item in report["checks"]:
+                        status = "通过" if item["passed"] else "需要处理"
+                        self.append_log(f"[{status}] {item['name']}: {item['detail']}")
+                else:
+                    self.append_log(f"[失败] 环境安装脚本执行失败：{repair.get('stderr') or repair.get('stdout') or repair.get('returncode')}")
         if report["passed"]:
             self.progress_text.setText("环境已就绪，请选择项目和任务。")
         else:
@@ -1106,8 +1143,8 @@ class MainWindow(QMainWindow):
     def run_preflight(self, task: str) -> None:
         project_id = self.selected_project_id()
         command = build_preflight_command(self.root, task, project_id=project_id)
-        self.set_current_flow("preflight", "执行环境自检", self.selected_project_name(), "运行中")
-        self.start_command("快速自检中", command)
+        self.set_current_flow("preflight", "项目配置检查", self.selected_project_name(), "运行中")
+        self.start_command("项目配置检查中", command)
 
     def set_current_flow(self, task_type: str, title: str, subtitle: str, status: str) -> None:
         self.current_task_type = task_type
@@ -1158,6 +1195,8 @@ class MainWindow(QMainWindow):
             self.flow_spinner.hide()
             self.flow_idle_icon.show()
             self.append_log("任务完成，退出码 0")
+            if self.current_task_type in {"hourly", "daily"}:
+                self.open_current_project_excel()
         else:
             self.status_title.setText("任务失败")
             self.status_detail.setText("请查看错误日志和 reports 目录下的报告。")
@@ -1218,6 +1257,18 @@ class MainWindow(QMainWindow):
             os.startfile(str(path))
         except Exception as exc:
             QMessageBox.warning(self, "无法打开", str(exc))
+
+    def open_current_project_excel(self) -> None:
+        try:
+            excel_path = self.selected_project_excel_path()
+        except Exception as exc:
+            self.append_log(f"任务完成，但读取 Excel 路径失败：{exc}")
+            return
+        if not excel_path.exists():
+            self.append_log(f"任务完成，但 Excel 文件不存在：{excel_path}")
+            return
+        self.open_path(excel_path)
+        self.append_log(f"已打开当前项目 Excel：{excel_path}")
 
     def _refresh_widget_style(self, widget: QWidget) -> None:
         widget.style().unpolish(widget)

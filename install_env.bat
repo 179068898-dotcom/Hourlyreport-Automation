@@ -64,4 +64,4 @@ echo.
 echo Installation finished.
 echo Next step: run run_menu.bat
 echo.
-pause
+if not "%HURLY_REPORT_BOT_AUTO_INSTALL%"=="1" pause

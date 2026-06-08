@@ -7,10 +7,11 @@ import zipfile
 from pathlib import Path
 
 DEFAULT_VERSION = "0.4.4"
-EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "dist"}
+EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "build"}
+DESKTOP_DIST_DIR = "百度日报小时报控制台"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
-EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak"}
+EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec"}
 EXCLUDE_FILES = {"config.json", "credentials.local.json", ".ignore"}
 EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json", "unknown_baidu_accounts.json"}
 
@@ -43,6 +44,8 @@ def should_include_file(path: Path, internal: bool = False) -> bool:
     parts = path.parts
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
+    if parts and parts[0] == "dist":
+        return internal and len(parts) >= 2 and parts[1] == DESKTOP_DIST_DIR and path.suffix.lower() != ".zip"
     if path.name in EXCLUDE_FILES:
         return False
     if path.suffix.lower() in EXCLUDE_SUFFIXES:

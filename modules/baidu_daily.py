@@ -313,6 +313,7 @@ def _wait_stable_daily_report_snapshot(page, config: dict[str, Any], target_date
     deadline = datetime.now().timestamp() + wait_seconds
     last_signature = None
     last_snapshot: dict[str, Any] | None = None
+    valid_snapshots: dict[tuple, dict[str, Any]] = {}
     attempts: list[dict[str, Any]] = []
 
     while datetime.now().timestamp() < deadline:
@@ -331,10 +332,11 @@ def _wait_stable_daily_report_snapshot(page, config: dict[str, Any], target_date
         }
         attempts.append(attempt)
 
-        if validation["passed"] and signature == last_signature and last_snapshot:
+        repeated_snapshot = valid_snapshots.get(signature)
+        if validation["passed"] and repeated_snapshot:
             logger.info("百度日报 report 表格数据已稳定：attempts=%s", len(attempts))
             return {
-                **last_snapshot,
+                **repeated_snapshot,
                 "visible_text": visible_text,
                 "rows": rows,
                 "report": parsed_report,
@@ -351,6 +353,7 @@ def _wait_stable_daily_report_snapshot(page, config: dict[str, Any], target_date
                 "report": parsed_report,
                 "validation": validation,
             }
+            valid_snapshots.setdefault(signature, last_snapshot)
             logger.info("百度日报 report 首次读到有效快照，等待再次确认：accounts=%s", ",".join(required_accounts))
         else:
             last_signature = None

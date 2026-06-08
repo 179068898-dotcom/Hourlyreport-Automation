@@ -50,6 +50,42 @@ def _imports_available(python: Path) -> tuple[bool, str]:
     return False, (result.stderr or result.stdout or "Dependency import check failed.").strip()
 
 
+def repair_environment_if_needed(root: str | Path, report: dict[str, Any]) -> dict[str, Any]:
+    if report.get("passed"):
+        return {"attempted": False, "reason": "environment already passed"}
+
+    root_path = Path(root)
+    installer = root_path / "install_env.bat"
+    if not installer.exists():
+        return {"attempted": False, "reason": f"Missing {installer}"}
+
+    env = os.environ.copy()
+    env["HURLY_REPORT_BOT_AUTO_INSTALL"] = "1"
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        result = subprocess.run(
+            ["cmd.exe", "/d", "/c", str(installer)],
+            cwd=root_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=600,
+            env=env,
+            **hidden_subprocess_kwargs(),
+        )
+    except Exception as exc:
+        return {"attempted": True, "returncode": 1, "stdout": "", "stderr": str(exc)}
+
+    return {
+        "attempted": True,
+        "returncode": int(result.returncode),
+        "stdout": result.stdout or "",
+        "stderr": result.stderr or "",
+    }
+
+
 def run_environment_check(root: str | Path) -> dict[str, Any]:
     root_path = Path(root)
     checks: list[dict[str, Any]] = []
