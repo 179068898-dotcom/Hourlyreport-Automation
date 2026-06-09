@@ -786,9 +786,9 @@ def test_demo_project_is_template_and_not_in_project_list():
 
 def test_release_builder_accepts_version_and_includes_project_template_docs(tmp_path):
     root = Path(__file__).resolve().parents[1]
-    release = build_release(root, version="0.4.4")
+    release = build_release(root, version="2.0")
 
-    assert release.name == "hourly_report_bot_release_v0.4.4.zip"
+    assert release.name == "hourly_report_bot_release_v2.0.zip"
     import zipfile
 
     with zipfile.ZipFile(release) as archive:

@@ -6,7 +6,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-DEFAULT_VERSION = "0.4.4"
+DEFAULT_VERSION = "2.0"
 EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "build"}
 DESKTOP_DIST_DIR = "百度日报小时报控制台"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
@@ -117,7 +117,7 @@ def build_release(root: str | Path, version: str | None = None, internal: bool =
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="构建百度竞价日报/小时报自动化工具发布包")
-    parser.add_argument("--version", default=DEFAULT_VERSION, help="发布版本号，例如 0.4.4 或 v0.4.4")
+    parser.add_argument("--version", default=DEFAULT_VERSION, help="发布版本号，例如 2.0 或 v2.0")
     parser.add_argument("--internal", action="store_true", help="构建内部包（包含 secrets/secrets.json）")
     args = parser.parse_args()
 

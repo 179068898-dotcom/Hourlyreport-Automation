@@ -11,13 +11,13 @@
 固定目录：
 
 ```cmd
-D:\自动化脚本\hourly_report_bot_release_v0.4.4
+D:\自动化脚本\hourly_report_bot_release_v2.0
 ```
 
 OpenClaw 执行任何命令前必须先进入该目录：
 
 ```cmd
-cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
+cd /d D:\自动化脚本\hourly_report_bot_release_v2.0
 ```
 
 禁止从其他目录直接运行 `main.py`。中文 JSON、Markdown 和日志文件统一按 `UTF-8` 读取和写入；禁止使用系统默认 ANSI/GBK 编码读取 UTF-8 文件后再覆盖保存，否则会造成中文乱码。优先调用 `run_openclaw_hourly.bat`，该入口已固定 `chcp 65001`、`PYTHONUTF8=1` 与 `PYTHONIOENCODING=utf-8`。
@@ -58,7 +58,7 @@ run_openclaw_hourly.bat 18点
 诊断或人工确认时，只允许按需执行：
 
 ```cmd
-cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
+cd /d D:\自动化脚本\hourly_report_bot_release_v2.0
 .venv\Scripts\python.exe main.py --mode preflight --quick
 .venv\Scripts\python.exe main.py --mode test-baidu-credentials
 .venv\Scripts\python.exe main.py --mode show-project
@@ -73,7 +73,7 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
 1. 进入目录：
 
 ```cmd
-cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
+cd /d D:\自动化脚本\hourly_report_bot_release_v2.0
 ```
 
 2. 运行预检：

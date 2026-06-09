@@ -146,7 +146,7 @@ def _get_version(root: Path | None = None) -> str:
             return first_tag.lstrip("v")
     except Exception:
         pass
-    return "0.4.8"
+    return "2.0"
 
 
 def _truncate_excel_name(path: str) -> str:

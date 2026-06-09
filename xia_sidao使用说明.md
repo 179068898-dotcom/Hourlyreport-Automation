@@ -87,7 +87,7 @@ OpenClaw 专用 BAT 默认执行快速预检：小时报使用 `main.py --mode p
 进入项目目录：
 
 ```cmd
-cd /d D:\自动化脚本\hourly_report_bot_release_v0.4.4
+cd /d D:\自动化脚本\hourly_report_bot_release_v2.0
 ```
 
 ### 5.1 小时报
