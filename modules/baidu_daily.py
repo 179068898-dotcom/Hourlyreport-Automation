@@ -70,7 +70,7 @@ def _field_from_header(header: Any) -> str | None:
         return None
     if "展现" in normalized:
         return "展现"
-    if "点击" in normalized and "点击率" not in normalized:
+    if "点击" in normalized and "点击率" not in normalized and "价格" not in normalized:
         return "点击"
     if ("消费" in normalized or "花费" in normalized) and "消费占比" not in normalized:
         return "消费"
