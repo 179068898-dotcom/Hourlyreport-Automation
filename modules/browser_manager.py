@@ -312,6 +312,27 @@ def launch_managed_chrome_context(playwright, config: dict[str, Any], root: Path
 def launch_chrome_context(playwright, config: dict[str, Any], root: Path):
     settings = get_browser_settings(config)
     if settings["mode"] == "connect_existing":
+        from modules.chrome_debug import ensure_chrome_debug_ready
+
+        host = settings.get("remote_debugging_host", "127.0.0.1")
+        port = settings.get("remote_debugging_port", 9222)
+        auto_start = settings.get("auto_start_debug_chrome", True)
+        wait_seconds = int(config.get("browser", {}).get("debug_startup_wait_seconds", 15)
+                           if isinstance(config.get("browser"), dict) else 15)
+        ready = ensure_chrome_debug_ready(root, config, host=host, port=port,
+                                          wait_seconds=wait_seconds, auto_start=auto_start)
+        if not ready.get("ready"):
+            from modules.chrome_debug import DEFAULT_PORT as chrome_default_port
+
+            port_used = port if port != chrome_default_port else None
+            extra = []
+            if not ready.get("port_already_open"):
+                extra.append("检测到 Chrome 9222 调试端口未就绪，且自动启动也未成功。")
+            if ready.get("error"):
+                extra.append(ready["error"])
+            if port_used and port_used != chrome_default_port:
+                extra.append("当前项目使用了非默认端口，请检查 browser.remote_debugging_port 配置。")
+            raise BrowserLaunchError("\n".join(extra) if extra else f"Chrome 调试端口未就绪：{ready['debug_endpoint']}")
         return connect_existing_chrome(playwright, config)
     if settings["mode"] == "launch_managed":
         return launch_managed_chrome_context(playwright, config, root)

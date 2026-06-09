@@ -234,11 +234,18 @@ def ensure_chrome_debug_ready(
     if not allow_kill and not can_parallel_debug_chrome:
         chrome_running = _chrome_process_exists()
         if chrome_running:
-            result["ready"] = False
+            if not _chrome_is_debug_port_listening(host=host, port=port):
+                result["error"] = (
+                    "检测到已有 Chrome 进程在运行，但未监听 9222 调试端口。\n"
+                    "请先关闭所有 Chrome 进程，或运行 start_chrome_debug.bat 启动项目专用调试 Chrome。\n"
+                    "（普通 Chrome 不监听调试端口，项目需要 9222 端口才能连接。）"
+                )
+                return result
+            # Chrome 正在运行且端口被监听，但 HTTP 端点不可用（json/version 不通）。
+            # 可能是端口被非 Chrome 进程占用。尝试关闭旧 Chrome 重新启动。
             result["error"] = (
-                "Chrome 调试端口未就绪，且检测到已有 Chrome 进程在运行。\n"
-                f"请先手动启动 Chrome 调试端口：start_chrome_debug.bat\n"
-                f"或关闭所有 Chrome 后重新运行。"
+                "Chrome 9222 端口被占用但无法连接。\n"
+                "请关闭所有 Chrome 进程后重新运行，或运行 start_chrome_debug.bat。"
             )
             return result
 
@@ -278,5 +285,27 @@ def _chrome_process_exists() -> bool:
             check=False,
         )
         return "chrome.exe" in proc.stdout.lower()
+    except Exception:
+        return False
+
+
+def _chrome_is_debug_port_listening(host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> bool:
+    """检查是否已有 Chrome 进程监听目标调试端口。"""
+    try:
+        proc = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            capture_output=True,
+            text=True,
+            encoding="mbcs",
+            errors="ignore",
+            check=False,
+            timeout=10,
+        )
+        port_token = f":{port}"
+        listening_lines = [
+            line for line in proc.stdout.splitlines()
+            if port_token in line and "LISTENING" in line.upper()
+        ]
+        return len(listening_lines) > 0
     except Exception:
         return False
