@@ -57,6 +57,69 @@ def empty_daily_kst_accounts(accounts: list[str] | None = None) -> dict[str, dic
     return {account: empty_daily_kst_account_row() for account in (accounts or [])}
 
 
+def write_empty_kst_daily_result(
+    config: dict[str, Any],
+    root: Path,
+    target_date: str | None = None,
+    reason: str = "未找到 30 分钟内的商务通日报导出文件，按 0 对话处理",
+) -> dict[str, Any]:
+    reports_dir = root / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    daily_out = reports_dir / "kst_daily_data.json"
+    parse_out = reports_dir / "kst_daily_parse_report.json"
+    unmatched_out = reports_dir / "kst_daily_unmatched_rows.json"
+    details_out = reports_dir / "kst_daily_account_dialog_details.json"
+    target = target_date or default_daily_kst_date()
+    accounts = empty_daily_kst_accounts(get_required_accounts(config))
+    summary = {
+        "raw_rows": 0,
+        "matched_rows": 0,
+        "unmatched_rows": 0,
+        "date_filtered_rows": 0,
+        "skipped_no_visitor_messages": 0,
+        "no_export_file": True,
+    }
+    daily_data = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": target,
+        "source": "kst_daily_export",
+        "export_file": "",
+        "accounts": accounts,
+        "summary": summary,
+    }
+    parse_report = {
+        "project_id": config.get("project_id"),
+        "project_name": config.get("project_name"),
+        "date": target,
+        "source": "kst_daily_export",
+        "export_file": "",
+        "passed": True,
+        "field_info": {"headers": []},
+        "supported_suffixes": sorted(SUPPORTED_SUFFIXES),
+        "summary": summary,
+        "date_filtered_rows": [],
+        "warnings": [reason],
+        "errors": [],
+    }
+    daily_out.write_text(json.dumps(daily_data, ensure_ascii=False, indent=2), encoding="utf-8")
+    parse_out.write_text(json.dumps(parse_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    unmatched_out.write_text("[]", encoding="utf-8")
+    details_out.write_text("{}", encoding="utf-8")
+    return {
+        "daily_data": daily_data,
+        "parse_report": parse_report,
+        "unmatched_rows": [],
+        "account_dialog_details": {},
+        "outputs": {
+            "daily_data": str(daily_out),
+            "parse_report": str(parse_out),
+            "unmatched_rows": str(unmatched_out),
+            "account_dialog_details": str(details_out),
+        },
+    }
+
+
 def _inspect_daily_fields(rows: list[dict[str, Any]]) -> dict[str, Any]:
     headers = list(rows[0].keys()) if rows else []
     return {

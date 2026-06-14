@@ -150,8 +150,8 @@ def test_restore_sheet_filter_protection_metadata_restores_original_auto_filter(
     assert restored is True
     assert load_workbook(excel_path)["时段数据"].auto_filter.ref == "A3:XDP1464"
 
-from modules.kst_export_parser import parse_kst_export_file
-from modules.kst_daily_parser import classify_daily_dialog_by_tags, parse_kst_daily_file
+from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
+from modules.kst_daily_parser import classify_daily_dialog_by_tags, parse_kst_daily_file, write_empty_kst_daily_result
 from modules.kst_parser import aggregate_kst_export_rows, classify_dialog_by_tags, has_visitor_dialog
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
 from modules.excel_inspector import (
@@ -368,6 +368,7 @@ def test_runtime_config_uses_current_project_accounts_not_kunming_defaults(tmp_p
     assert runtime["sheet_name"] == "小时"
     assert runtime["daily_sheet_name"] == "日报"
     assert runtime["kst"]["export_dir"] == "exports"
+    assert runtime["kst"]["max_file_age_minutes"] == 30
     assert runtime["kst"]["promotion_id_accounts"] == {"9001": "项目账户1", "9002": "项目账户2", "9003": "项目账户3"}
     assert set(runtime["accounts"]) == {"项目账户1", "项目账户2", "项目账户3"}
     assert "银康01" not in runtime["accounts"]
@@ -762,7 +763,7 @@ def test_project_template_and_demo_project_are_complete():
         assert normalized_errors == []
         assert project["excel"]["engine"] == "openpyxl"
         assert "auto_pick_latest" in project["kst"]
-        assert "max_file_age_hours" in project["kst"]
+        assert "max_file_age_minutes" in project["kst"]
         assert project["daily"]["do_not_write_fields"] == ["总对话", "预约", "到诊", "就诊"]
         for account in project["accounts"]:
             assert set(["standard_name", "baidu_names", "excel_name", "kst_ids", "kst_names"]) <= set(account)
@@ -1114,6 +1115,38 @@ def test_parse_kst_export_filters_non_current_date_without_marking_unmatched(tmp
     assert result["unmatched_rows"] == []
 
 
+def test_find_latest_kst_export_ignores_files_older_than_30_minutes(tmp_path):
+    import os
+    import time
+
+    export_dir = tmp_path / "kst_exports"
+    export_dir.mkdir()
+    old_file = export_dir / "old.csv"
+    old_file.write_text("old", encoding="utf-8")
+    old_time = time.time() - 31 * 60
+    os.utime(old_file, (old_time, old_time))
+
+    assert find_latest_kst_export(tmp_path, {"kst": {"export_dir": "kst_exports"}}) is None
+
+    fresh_file = export_dir / "fresh.csv"
+    fresh_file.write_text("fresh", encoding="utf-8")
+
+    assert find_latest_kst_export(tmp_path, {"kst": {"export_dir": "kst_exports"}}) == fresh_file
+
+
+def test_empty_kst_export_result_writes_zero_dialog_report(tmp_path):
+    config = _kunming_niu_runtime_config()
+
+    result = write_empty_kst_export_result(config, tmp_path, "15点", "没有新导出")
+
+    assert result["parse_report"]["passed"] is True
+    assert result["parse_report"]["errors"] == []
+    assert result["parse_report"]["warnings"] == ["没有新导出"]
+    assert result["dialog_data"]["summary"]["no_export_file"] is True
+    assert all(row["总对话"] == 0 for row in result["dialog_data"]["accounts"].values())
+    assert (tmp_path / "reports" / "kst_dialog_data.json").exists()
+
+
 def test_parse_kst_daily_file_filters_date_and_outputs_daily_counts(tmp_path):
     export = tmp_path / "kst_daily.csv"
     export.write_text(
@@ -1198,6 +1231,19 @@ def test_parse_kst_daily_file_skips_rows_without_visitor_messages(tmp_path):
     assert result["daily_data"]["accounts"]["银康01"]["无效对话"] == 0
     assert result["daily_data"]["accounts"]["银康01"]["有效转潜"] == 0
     assert result["daily_data"]["summary"]["skipped_no_visitor_messages"] == 1
+
+
+def test_empty_kst_daily_result_writes_zero_dialog_report(tmp_path):
+    config = _kunming_niu_runtime_config()
+
+    result = write_empty_kst_daily_result(config, tmp_path, "2026-05-07", "没有新日报导出")
+
+    assert result["parse_report"]["passed"] is True
+    assert result["parse_report"]["errors"] == []
+    assert result["parse_report"]["warnings"] == ["没有新日报导出"]
+    assert result["daily_data"]["summary"]["no_export_file"] is True
+    assert all(row["总对话"] == 0 for row in result["daily_data"]["accounts"].values())
+    assert (tmp_path / "reports" / "kst_daily_data.json").exists()
 
 
 def test_parse_baidu_table_maps_accounts_and_numeric_fields():
@@ -2924,6 +2970,7 @@ def test_run_pipeline_reports_success_summary(tmp_path):
 def test_run_pipeline_uses_latest_kst_export_when_file_is_omitted(tmp_path):
     import logging
     import os
+    import time
 
     export_dir = tmp_path / "kst_exports"
     export_dir.mkdir()
@@ -2931,8 +2978,9 @@ def test_run_pipeline_uses_latest_kst_export_when_file_is_omitted(tmp_path):
     latest = export_dir / "latest.xlsx"
     older.write_text("old", encoding="utf-8")
     latest.write_text("new", encoding="utf-8")
-    os.utime(older, (100, 100))
-    os.utime(latest, (200, 200))
+    now = time.time()
+    os.utime(older, (now - 20 * 60, now - 20 * 60))
+    os.utime(latest, (now - 10 * 60, now - 10 * 60))
     excel_file = tmp_path / "target.xlsx"
     excel_file.write_text("placeholder", encoding="utf-8")
     seen = {}
@@ -3035,6 +3083,44 @@ def test_run_daily_pipeline_defaults_to_yesterday_and_reports_write_summary(tmp_
     assert (tmp_path / "reports" / "daily_final_run_report.json").exists()
 
 
+def test_run_daily_pipeline_treats_stale_auto_discovered_kst_file_as_zero_dialogs(tmp_path):
+    import logging
+    import os
+    import time
+
+    export_dir = tmp_path / "kst_exports"
+    export_dir.mkdir()
+    old_export = export_dir / "daily-old.xlsx"
+    old_export.write_text("old", encoding="utf-8")
+    old_time = time.time() - 31 * 60
+    os.utime(old_export, (old_time, old_time))
+    excel_file = tmp_path / "daily-target.xlsx"
+    excel_file.write_text("placeholder", encoding="utf-8")
+    config = _kunming_niu_runtime_config()
+    config.update({"excel_path": str(excel_file), "kst": {"export_dir": "kst_exports", "promotion_id_accounts": config["kst"]["promotion_id_accounts"]}})
+
+    def ok_merge(**kwargs):
+        data = json.loads((tmp_path / "reports" / "kst_daily_data.json").read_text(encoding="utf-8"))
+        assert all(row["总对话"] == 0 for row in data["accounts"].values())
+        return {"merged": {"date": "2026-05-07"}, "validate_report": {"passed": True, "errors": []}, "outputs": {}}
+
+    report = run_daily_pipeline(
+        config=config,
+        root=tmp_path,
+        logger=logging.getLogger("test"),
+        target_date="2026-05-07",
+        kst_file=None,
+        fetch_baidu_func=lambda **kwargs: {"date": "2026-05-07", "accounts": {}, "errors": []},
+        parse_kst_func=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("过期自动发现文件不应进入日报解析")),
+        merge_func=ok_merge,
+        write_func=lambda **kwargs: {"date": "2026-05-07", "excel_path": str(excel_file), "writes": [], "overwrite_summary": {}, "self_check": {"verification_passed": True}, "errors": []},
+    )
+
+    assert report["passed"] is True
+    assert report["kst_export_file"] == ""
+    assert report["steps"][1]["passed"] is True
+
+
 def test_run_daily_pipeline_stops_when_kst_parse_fails(tmp_path):
     import logging
 
@@ -3089,7 +3175,7 @@ def test_run_pipeline_confirmation_can_quit_before_steps(tmp_path):
     assert any("用户返回主菜单" in error for error in report["errors"])
 
 
-def test_run_pipeline_requires_confirmation_for_stale_auto_discovered_kst_file(tmp_path):
+def test_run_pipeline_treats_stale_auto_discovered_kst_file_as_zero_dialogs(tmp_path):
     import logging
     import os
     import time
@@ -3098,23 +3184,32 @@ def test_run_pipeline_requires_confirmation_for_stale_auto_discovered_kst_file(t
     export_dir.mkdir()
     old_export = export_dir / "old.xlsx"
     old_export.write_text("old", encoding="utf-8")
-    old_time = time.time() - 3 * 60 * 60
+    old_time = time.time() - 31 * 60
     os.utime(old_export, (old_time, old_time))
+    excel_file = tmp_path / "target.xlsx"
+    excel_file.write_text("placeholder", encoding="utf-8")
+
+    def ok_merge(**kwargs):
+        data = json.loads((tmp_path / "reports" / "kst_dialog_data.json").read_text(encoding="utf-8"))
+        assert all(row["总对话"] == 0 for row in data["accounts"].values())
+        return {"merged": {"date": "2026-05-07", "period": "15点"}, "validate_report": {"passed": True, "errors": []}, "outputs": {}}
 
     report = run_half_auto_pipeline(
-        config={"excel_path": "target.xlsx", "sheet_name": "时段数据", "kst": {"export_dir": "kst_exports"}},
+        config={**_kunming_niu_runtime_config(), "excel_path": str(excel_file), "sheet_name": "时段数据", "kst": {"export_dir": "kst_exports", "promotion_id_accounts": _kunming_niu_runtime_config()["kst"]["promotion_id_accounts"]}},
         root=tmp_path,
         logger=logging.getLogger("test"),
         period="15点",
         kst_file=None,
-        input_func=lambda prompt: "0",
-        fetch_baidu_func=lambda **kwargs: (_ for _ in ()).throw(AssertionError("旧文件未确认时不应抓百度")),
+        assume_yes=True,
+        fetch_baidu_func=lambda **kwargs: {"date": "2026-05-07", "period": "15点", "accounts": {}, "errors": []},
+        parse_kst_func=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("过期自动发现文件不应进入解析")),
+        merge_func=ok_merge,
+        write_func=lambda **kwargs: {"date": "2026-05-07", "period": "15点", "excel_path": str(excel_file), "writes": [], "self_check": {"verification_passed": True}, "errors": []},
     )
 
-    assert report["passed"] is False
-    assert report["failed_step"] == "preflight-confirm"
-    assert report["kst_export"]["is_stale"] is True
-    assert any("快商通导出文件超过 2 小时" in error for error in report["errors"])
+    assert report["passed"] is True
+    assert report["kst_export_file"] == ""
+    assert report["steps"][1]["passed"] is True
 
 
 # ── 凭据文件路径修复 ──

@@ -11,7 +11,7 @@
   "kst": {
     "export_dir": "D:/你的项目/商务通导出",
     "auto_pick_latest": true,
-    "max_file_age_hours": 2
+    "max_file_age_minutes": 30
   },
   "baidu": {
     "credential_profile": "",

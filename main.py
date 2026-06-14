@@ -27,8 +27,8 @@ from modules.daily_excel_inspector import inspect_daily_excel_structure
 from modules.doctor import print_doctor_report, run_doctor
 from modules.excel_inspector import inspect_excel_structure, dump_sheet_text
 from modules.excel_writer import mock_write_excel, write_merged_daily_data, write_merged_hourly_data
-from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file
-from modules.kst_daily_parser import parse_kst_daily_file
+from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
+from modules.kst_daily_parser import parse_kst_daily_file, write_empty_kst_daily_result
 from modules.logger import setup_logger
 from modules.project_config import build_runtime_config_from_project, get_current_project, list_projects, load_project_config, validate_project_config
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
@@ -285,13 +285,9 @@ def main() -> int | None:
     if args.mode == "parse-kst-export":
         export_file = Path(args.file) if args.file else find_latest_kst_export(ROOT, config)
         if export_file is None:
-            out = ROOT / "reports" / "kst_parse_report.json"
-            out.write_text(json.dumps({
-                "passed": False,
-                "errors": ["未指定 --file，且 kst_exports 目录下没有 Excel/CSV 导出文件"],
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.error("快商通导出解析失败：未找到导出文件。")
-            print_error("快商通导出解析失败：未找到导出文件。")
+            result = write_empty_kst_export_result(config, ROOT, args.period, "未找到 30 分钟内的快商通导出文件，按 0 对话处理")
+            logger.info("快商通导出解析未发现新文件，已按 0 对话输出：%s", result["outputs"]["parse_report"])
+            print_success("未找到 30 分钟内的快商通导出文件，已按 0 对话处理")
             return
         result = parse_kst_export_file(export_file, config, ROOT, args.period)
         logger.info(
@@ -310,12 +306,9 @@ def main() -> int | None:
         export_file = Path(args.file) if args.file else find_latest_kst_export(ROOT, config)
         out = ROOT / "reports" / "kst_daily_parse_report.json"
         if export_file is None:
-            out.write_text(json.dumps({
-                "passed": False,
-                "errors": ["未指定 --file，且 kst_exports 目录下没有 Excel/CSV 商务通日报导出文件"],
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
-            logger.error("商务通日报导出解析失败：未找到导出文件。")
-            print_error("商务通日报导出解析失败：未找到导出文件。")
+            result = write_empty_kst_daily_result(config, ROOT, args.date, "未找到 30 分钟内的商务通日报导出文件，按 0 对话处理")
+            logger.info("商务通日报导出解析未发现新文件，已按 0 对话输出：%s", result["outputs"]["parse_report"])
+            print_success("未找到 30 分钟内的商务通日报导出文件，已按 0 对话处理")
             return
         result = parse_kst_daily_file(export_file, config, ROOT, args.date)
         logger.info(

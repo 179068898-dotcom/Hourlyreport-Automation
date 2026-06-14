@@ -516,7 +516,7 @@ def print_confirm_panel(task_info: dict[str, Any]) -> None:
     if task_info.get("kst_file"):
         lines.append(f"  商务通：{_truncate_excel_name(task_info['kst_file'])}")
         if task_info.get("kst_is_stale"):
-            lines.append(f"    {_yellow('[注意] 导出文件已超过 2 小时，请确认是否继续')}")
+            lines.append(f"    {_yellow('[注意] 导出文件已超过 30 分钟，自动发现时会按 0 对话处理')}")
     if task_info.get("already_done"):
         lines.append(f"    {_yellow('[注意] 今天已成功写入过，仍可继续执行')}")
     _emit("\n".join(lines))

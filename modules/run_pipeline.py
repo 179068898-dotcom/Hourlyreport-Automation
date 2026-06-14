@@ -17,12 +17,12 @@ from modules.console_ui import (
 )
 from modules.data_merger import merge_daily_files, merge_data_files, normalize_period_for_report
 from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data
-from modules.kst_daily_parser import parse_kst_daily_file
-from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file
+from modules.kst_daily_parser import parse_kst_daily_file, write_empty_kst_daily_result
+from modules.kst_export_parser import auto_export_max_age_seconds, find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
 
 
 StepFunc = Callable[..., dict[str, Any]]
-STALE_EXPORT_SECONDS = 2 * 60 * 60
+STALE_EXPORT_SECONDS = 30 * 60
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -100,6 +100,10 @@ def _file_info(path: Path | None, auto_discovered: bool, max_age_hours: float = 
     return info
 
 
+def _max_age_hours_for_info(config: dict[str, Any]) -> float:
+    return auto_export_max_age_seconds(config) / 3600
+
+
 def _build_summary_text(report: dict[str, Any]) -> str:
     status = "成功" if report.get("passed") else "失败"
     if report.get("passed"):
@@ -165,7 +169,7 @@ def run_half_auto_pipeline(
     write_func: StepFunc = write_merged_hourly_data,
 ) -> dict[str, Any]:
     auto_discovered = kst_file is None
-    max_age_hours = float(config.get("kst", {}).get("max_file_age_hours", 2) or 2)
+    max_age_hours = _max_age_hours_for_info(config)
     export_file = _resolve_path(root, kst_file)
     if export_file is None:
         export_file = find_latest_kst_export(root, config)
@@ -207,14 +211,11 @@ def run_half_auto_pipeline(
 
     logger.info("一键流开始：period=%s，kst_file=%s", period, kst_file)
 
-    needs_stale_confirm = bool(kst_export_info.get("is_stale"))
-    if (confirm_before_run or needs_stale_confirm) and not assume_yes:
+    if confirm_before_run and not assume_yes:
         _print_preflight_checklist(report)
         answer = input_func("> ").strip()
         if answer == "0":
             errors = ["用户返回主菜单"]
-            if needs_stale_confirm:
-                errors.append("快商通导出文件超过 2 小时，未确认继续")
             return fail("preflight-confirm", errors)
     report["preflight_confirmed"] = True
 
@@ -248,38 +249,41 @@ def run_half_auto_pipeline(
 
     print_step(2, 4, "解析快商通导出文件")
     if export_file is None:
-        errors = ["未指定 --file，且 kst_exports 目录下没有 Excel/CSV 导出文件"]
-        report["steps"].append(_step_result("parse-kst-export", False, errors=errors))
-        print_step_failure("未找到快商通导出文件", suggestion="请将导出文件放入 kst_exports 目录，或通过 --file 指定文件")
-        return fail("parse-kst-export", errors)
-    if not export_file.exists():
-        errors = [f"找不到快商通导出文件：{export_file}"]
-        report["steps"].append(_step_result("parse-kst-export", False, errors=errors))
-        print_step_failure("快商通导出文件不存在", suggestion=f"文件路径：{export_file}")
-        return fail("parse-kst-export", errors)
-    report["kst_export_file"] = str(export_file)
-    report["kst_export"] = _file_info(export_file, auto_discovered, max_age_hours)
+        reason = "未找到 30 分钟内的快商通导出文件，按 0 对话处理"
+        kst_result = write_empty_kst_export_result(config, root, period, reason)
+        report["steps"].append(_step_result("parse-kst-export", True, outputs=kst_result.get("outputs", {})))
+        report["outputs"].update(kst_result.get("outputs", {}))
+        print_step_success("未找到 30 分钟内的快商通导出文件，已按 0 对话处理")
+        logger.info("一键流步骤完成：parse-kst-export；%s", reason)
+    else:
+        if not export_file.exists():
+            errors = [f"找不到快商通导出文件：{export_file}"]
+            report["steps"].append(_step_result("parse-kst-export", False, errors=errors))
+            print_step_failure("快商通导出文件不存在", suggestion=f"文件路径：{export_file}")
+            return fail("parse-kst-export", errors)
+        report["kst_export_file"] = str(export_file)
+        report["kst_export"] = _file_info(export_file, auto_discovered, max_age_hours)
 
-    try:
-        kst_result = parse_kst_func(export_file, config, root, period)
-    except Exception as exc:
-        report["steps"].append(_step_result("parse-kst-export", False, errors=[str(exc)]))
-        print_step_failure("快商通解析异常", suggestion=str(exc), log_path=str(root / "logs" / "run.log"))
-        return fail("parse-kst-export", [str(exc)])
-    kst_parse_report = kst_result.get("parse_report", {})
-    kst_errors = _errors_from_report(kst_parse_report)
-    kst_passed = bool(kst_parse_report.get("passed")) and not kst_errors
-    report["steps"].append(_step_result(
-        "parse-kst-export",
-        kst_passed,
-        outputs=kst_result.get("outputs", {}),
-        errors=kst_errors,
-    ))
-    if not kst_passed:
-        print_step_failure("快商通解析未通过", suggestion="；".join(kst_errors), log_path=str(root / "logs" / "run.log"))
-        return fail("parse-kst-export", kst_errors)
-    print_step_success("快商通导出文件已解析")
-    logger.info("一键流步骤完成：parse-kst-export")
+        try:
+            kst_result = parse_kst_func(export_file, config, root, period)
+        except Exception as exc:
+            report["steps"].append(_step_result("parse-kst-export", False, errors=[str(exc)]))
+            print_step_failure("快商通解析异常", suggestion=str(exc), log_path=str(root / "logs" / "run.log"))
+            return fail("parse-kst-export", [str(exc)])
+        kst_parse_report = kst_result.get("parse_report", {})
+        kst_errors = _errors_from_report(kst_parse_report)
+        kst_passed = bool(kst_parse_report.get("passed")) and not kst_errors
+        report["steps"].append(_step_result(
+            "parse-kst-export",
+            kst_passed,
+            outputs=kst_result.get("outputs", {}),
+            errors=kst_errors,
+        ))
+        if not kst_passed:
+            print_step_failure("快商通解析未通过", suggestion="；".join(kst_errors), log_path=str(root / "logs" / "run.log"))
+            return fail("parse-kst-export", kst_errors)
+        print_step_success("快商通导出文件已解析")
+        logger.info("一键流步骤完成：parse-kst-export")
 
     print_step(3, 4, "合并百度与快商通数据")
     try:
@@ -363,7 +367,7 @@ def run_daily_pipeline(
 ) -> dict[str, Any]:
     daily_date = target_date or _default_yesterday(today)
     auto_discovered = kst_file is None
-    max_age_hours = float(config.get("kst", {}).get("max_file_age_hours", 2) or 2)
+    max_age_hours = _max_age_hours_for_info(config)
     export_file = _resolve_path(root, kst_file)
     if export_file is None:
         export_file = find_latest_kst_export(root, config)
@@ -435,38 +439,41 @@ def run_daily_pipeline(
 
     print_step(2, 4, "解析商务通日报导出文件")
     if export_file is None:
-        errors = ["未指定 --file，且 kst_exports 目录下没有 Excel/CSV 商务通日报导出文件"]
-        report["steps"].append(_step_result("parse-kst-daily", False, errors=errors))
-        print_step_failure("未找到商务通日报导出文件", suggestion="请将导出文件放入 kst_exports 目录，或通过 --file 指定文件")
-        return fail("parse-kst-daily", errors)
-    if not export_file.exists():
-        errors = [f"找不到商务通日报导出文件：{export_file}"]
-        report["steps"].append(_step_result("parse-kst-daily", False, errors=errors))
-        print_step_failure("商务通日报导出文件不存在", suggestion=f"文件路径：{export_file}")
-        return fail("parse-kst-daily", errors)
-    report["kst_export_file"] = str(export_file)
-    report["kst_export"] = _file_info(export_file, auto_discovered, max_age_hours)
+        reason = "未找到 30 分钟内的商务通日报导出文件，按 0 对话处理"
+        kst_result = write_empty_kst_daily_result(config, root, daily_date, reason)
+        report["steps"].append(_step_result("parse-kst-daily", True, outputs=kst_result.get("outputs", {})))
+        report["outputs"].update(kst_result.get("outputs", {}))
+        print_step_success("未找到 30 分钟内的商务通日报导出文件，已按 0 对话处理")
+        logger.info("日报一键流步骤完成：parse-kst-daily；%s", reason)
+    else:
+        if not export_file.exists():
+            errors = [f"找不到商务通日报导出文件：{export_file}"]
+            report["steps"].append(_step_result("parse-kst-daily", False, errors=errors))
+            print_step_failure("商务通日报导出文件不存在", suggestion=f"文件路径：{export_file}")
+            return fail("parse-kst-daily", errors)
+        report["kst_export_file"] = str(export_file)
+        report["kst_export"] = _file_info(export_file, auto_discovered, max_age_hours)
 
-    try:
-        kst_result = parse_kst_func(export_file, config, root, daily_date)
-    except Exception as exc:
-        report["steps"].append(_step_result("parse-kst-daily", False, errors=[str(exc)]))
-        print_step_failure("商务通日报解析异常", suggestion=str(exc), log_path=str(root / "logs" / "run.log"))
-        return fail("parse-kst-daily", [str(exc)])
-    kst_parse_report = kst_result.get("parse_report", {})
-    kst_errors = _errors_from_report(kst_parse_report)
-    kst_passed = bool(kst_parse_report.get("passed")) and not kst_errors
-    report["steps"].append(_step_result(
-        "parse-kst-daily",
-        kst_passed,
-        outputs=kst_result.get("outputs", {}),
-        errors=kst_errors,
-    ))
-    if not kst_passed:
-        print_step_failure("商务通日报解析未通过", suggestion="；".join(kst_errors), log_path=str(root / "logs" / "run.log"))
-        return fail("parse-kst-daily", kst_errors)
-    print_step_success("商务通日报导出文件已解析")
-    logger.info("日报一键流步骤完成：parse-kst-daily")
+        try:
+            kst_result = parse_kst_func(export_file, config, root, daily_date)
+        except Exception as exc:
+            report["steps"].append(_step_result("parse-kst-daily", False, errors=[str(exc)]))
+            print_step_failure("商务通日报解析异常", suggestion=str(exc), log_path=str(root / "logs" / "run.log"))
+            return fail("parse-kst-daily", [str(exc)])
+        kst_parse_report = kst_result.get("parse_report", {})
+        kst_errors = _errors_from_report(kst_parse_report)
+        kst_passed = bool(kst_parse_report.get("passed")) and not kst_errors
+        report["steps"].append(_step_result(
+            "parse-kst-daily",
+            kst_passed,
+            outputs=kst_result.get("outputs", {}),
+            errors=kst_errors,
+        ))
+        if not kst_passed:
+            print_step_failure("商务通日报解析未通过", suggestion="；".join(kst_errors), log_path=str(root / "logs" / "run.log"))
+            return fail("parse-kst-daily", kst_errors)
+        print_step_success("商务通日报导出文件已解析")
+        logger.info("日报一键流步骤完成：parse-kst-daily")
 
     print_step(3, 4, "合并百度日报与商务通日报数据")
     try:

@@ -11,7 +11,7 @@
   "kst": {
     "export_dir": "D:/demo_project/kst_exports",
     "auto_pick_latest": true,
-    "max_file_age_hours": 2
+    "max_file_age_minutes": 30
   },
   "baidu": {
     "credential_profile": "demo_project_baidu",

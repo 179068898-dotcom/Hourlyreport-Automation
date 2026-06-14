@@ -136,6 +136,7 @@ def normalize_project_config(project: dict[str, Any]) -> dict[str, Any]:
 
     kst = dict(project.get("kst") or {})
     kst.setdefault("auto_pick_latest", True)
+    kst.setdefault("max_file_age_minutes", 30)
     kst.setdefault("max_file_age_hours", 2)
     project["kst"] = kst
 
@@ -309,6 +310,7 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     kst = dict(config.get("kst", {}))
     kst["export_dir"] = project["kst"]["export_dir"]
     kst["auto_pick_latest"] = project["kst"].get("auto_pick_latest", True)
+    kst["max_file_age_minutes"] = project["kst"].get("max_file_age_minutes", 30)
     kst["max_file_age_hours"] = project["kst"].get("max_file_age_hours", 2)
     kst["promotion_id_accounts"] = alias_maps["kst_id_to_account"]
     config["kst"] = kst
@@ -366,7 +368,7 @@ def validate_project_config(project: dict[str, Any]) -> list[str]:
     _require_nested(errors, project, "excel", "engine")
     _require_nested(errors, project, "kst", "export_dir")
     _require_nested(errors, project, "kst", "auto_pick_latest")
-    _require_nested(errors, project, "kst", "max_file_age_hours")
+    _require_nested(errors, project, "kst", "max_file_age_minutes")
     has_sources = isinstance(project.get("baidu_sources"), list) and bool(project.get("baidu_sources"))
     if not has_sources:
         _require_nested(errors, project, "baidu", "credential_profile")
