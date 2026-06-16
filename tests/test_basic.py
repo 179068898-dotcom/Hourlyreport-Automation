@@ -3570,6 +3570,44 @@ def test_quick_preflight_skips_excel_structure_scan(tmp_path, monkeypatch):
     assert any(item.get("skipped") for item in report["checks"])
 
 
+def test_preflight_auto_starts_chrome_debug_when_default_check_is_used(tmp_path, monkeypatch):
+    import modules.preflight as preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {"profile_a": {"username": "quick-user", "password": "quick-password"}},
+    )
+    config["browser"] = {
+        "auto_start_debug_chrome": True,
+        "debug_startup_wait_seconds": 2,
+    }
+    calls = []
+
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+    monkeypatch.setattr(
+        preflight,
+        "ensure_chrome_debug_ready",
+        lambda root, cfg, **kwargs: calls.append((root, cfg, kwargs)) or {
+            "ready": True,
+            "started_new_chrome": True,
+            "debug_endpoint": "http://127.0.0.1:9222",
+        },
+    )
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "demo"},
+        config,
+        quick=True,
+    )
+
+    assert report["passed"] is True
+    assert calls
+    assert calls[0][2]["auto_start"] is True
+    assert calls[0][2]["wait_seconds"] == 2
+    assert any("已自动启动并连接" in item["message"] for item in report["checks"])
+
+
 def test_cli_preflight_accepts_daily_task_and_passes_it_to_runner(tmp_path, monkeypatch):
     import main as cli_main
 

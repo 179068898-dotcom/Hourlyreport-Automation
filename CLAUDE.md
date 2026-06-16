@@ -106,6 +106,8 @@ python -m venv .venv && .venv\Scripts\activate && pip install -r requirements.tx
 
 ## 浏览器调试端口启动
 
+preflight / run 会先复用 Chrome `9222`；未就绪时自动尝试启动项目专用调试 Chrome。下面命令仅作为人工排障入口。
+
 ```cmd
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Default" https://cc.baidu.com/report
 ```

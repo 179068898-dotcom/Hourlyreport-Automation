@@ -47,14 +47,14 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v2.0
 
 ## 日报执行前检查清单
 
-- Chrome `9222` 调试端口已经启动并可连接。
+- Chrome `9222` 调试端口可连接；未启动时 preflight 会自动尝试启动项目专用调试 Chrome。
 - 当前项目 ID 与项目名符合本次日报任务。
 - `secrets/secrets.json` 是合法 JSON，当前项目所需的每个 credential profile 均存在，且 `username` / `password` 非空。
 - 商务通已人工导出日报所需文件，文件位于当前项目配置的导出目录或已明确指定。
 - 目标 Excel 已关闭，避免 WPS/Excel 锁定文件导致写入失败。
 - 日报日期正确，一般为昨天；补跑时必须明确指定日期。
 
-`preflight --task daily --quick` 是 OpenClaw 默认快速预检：检查运行条件、Excel 路径、商务通目录、Chrome 9222 与凭据状态，但跳过耗时的日报 sheet 结构扫描，不打开百度页面、不写 Excel、不修改 `app_config`，也不输出真实账号或密码。
+`preflight --task daily --quick` 是 OpenClaw 默认快速预检：检查运行条件、Excel 路径、商务通目录、Chrome 9222 与凭据状态；如果 9222 未启动，会自动尝试启动项目专用调试 Chrome；同时跳过耗时的日报 sheet 结构扫描，不写 Excel、不修改 `app_config`，也不输出真实账号或密码。
 
 完整预检命令仍保留为 `.venv\Scripts\python.exe main.py --mode preflight --task daily`，仅用于新项目上线、Excel 模板变更、结构识别异常或排障。
 
@@ -90,7 +90,7 @@ cd /d D:\自动化脚本\hourly_report_bot_release_v2.0
 ## Chrome 与登录态规则
 
 - 自动化只连接 Chrome 调试端口 `9222`，不使用 Edge。
-- `start_chrome_debug.bat` 用于准备项目专用调试 Chrome；如果 `9222` 已经可连接，会复用现有实例，不会关闭老 Chrome。
+- preflight / run 会先复用 `9222`；未就绪时自动启动项目专用调试 Chrome。`start_chrome_debug.bat` 仅作为人工排障入口，不会关闭老 Chrome。
 - 静默模式默认不把 Chrome 拉到前台；自动切换百度账号、自动清 cookie、自动 CAS 登录都应在后台完成。
 - 当旧项目账号残留导致需要切号时，程序会先尝试页面退出；如果页面 dropdown 没弹出导致退出失败，会自动清理当前上下文 cookie / storage / 本地登录状态，再跳 CAS 登录当前项目账号。
 - 只有验证码、安全校验、滑块、人工确认等确实需要人处理的场景，才允许把 Chrome 窗口显示到前台。

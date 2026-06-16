@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from modules.baidu_multi_source import resolve_baidu_sources
 from modules.browser_manager import get_browser_settings
-from modules.chrome_debug import is_chrome_debug_port_alive
+from modules.chrome_debug import ensure_chrome_debug_ready, is_chrome_debug_port_alive
 from modules.daily_excel_inspector import inspect_daily_excel_structure
 from modules.excel_inspector import inspect_excel_structure
 from modules.project_config import validate_project_config
@@ -116,6 +116,7 @@ def run_preflight(
     task: str = "hourly",
     quick: bool = False,
     chrome_check_func: Callable[..., bool] = is_chrome_debug_port_alive,
+    chrome_ready_func: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     root_path = Path(root)
     checks: list[dict[str, Any]] = []
@@ -127,12 +128,43 @@ def run_preflight(
         checks.append(item)
 
     add((root_path / "main.py").exists(), "项目根目录已识别" if (root_path / "main.py").exists() else "项目根目录无法识别")
-
     settings = get_browser_settings(config)
     host = settings.get("remote_debugging_host", "127.0.0.1")
     port = int(settings.get("remote_debugging_port", 9222))
-    chrome_ok = chrome_check_func(host=host, port=port)
-    add(chrome_ok, "Chrome 9222 已连接" if chrome_ok else f"Chrome 9222 无法连接：http://{host}:{port}")
+    if chrome_ready_func is None and chrome_check_func is is_chrome_debug_port_alive:
+        browser_config = config.get("browser") if isinstance(config.get("browser"), dict) else {}
+        chrome_ready = ensure_chrome_debug_ready(
+            root_path,
+            config,
+            host=host,
+            port=port,
+            auto_start=bool(settings.get("auto_start_debug_chrome", True)),
+            wait_seconds=int(browser_config.get("debug_startup_wait_seconds", 15) or 15),
+        )
+        chrome_ok = bool(chrome_ready.get("ready"))
+        if chrome_ok and chrome_ready.get("started_new_chrome"):
+            chrome_message = f"Chrome 9222 已自动启动并连接：http://{host}:{port}"
+        elif chrome_ok:
+            chrome_message = f"Chrome 9222 已连接：http://{host}:{port}"
+        else:
+            chrome_message = chrome_ready.get("error") or f"Chrome 9222 无法连接：http://{host}:{port}"
+    elif chrome_ready_func is not None:
+        chrome_ready = chrome_ready_func(
+            root_path,
+            config,
+            host=host,
+            port=port,
+            auto_start=bool(settings.get("auto_start_debug_chrome", True)),
+        )
+        chrome_ok = bool(chrome_ready.get("ready"))
+        chrome_message = (
+            f"Chrome 9222 已连接：http://{host}:{port}"
+            if chrome_ok else chrome_ready.get("error") or f"Chrome 9222 无法连接：http://{host}:{port}"
+        )
+    else:
+        chrome_ok = chrome_check_func(host=host, port=port)
+        chrome_message = "Chrome 9222 已连接" if chrome_ok else f"Chrome 9222 无法连接：http://{host}:{port}"
+    add(chrome_ok, chrome_message)
 
     project_errors = validate_project_config(project)
     add(

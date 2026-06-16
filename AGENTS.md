@@ -66,7 +66,7 @@ OpenClaw 默认使用快速预检以减少多项目排队耗时：
 快速预检会检查：
 
 - 项目根目录。
-- Chrome 9222 是否可连接。
+- Chrome 9222 是否可连接；未启动时会自动尝试启动项目专用调试 Chrome。
 - 当前项目配置是否合法。
 - Excel 路径是否存在。
 - 快商通导出目录是否存在。
@@ -102,7 +102,7 @@ chromium.connect_over_cdp("http://127.0.0.1:9222")
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Default" https://cc.baidu.com/report
 ```
 
-`start_chrome_debug.bat` 用于准备项目专用调试 Chrome。如果 9222 已经可连接，应复用现有实例，不要关闭老 Chrome。
+`start_chrome_debug.bat` 用于人工准备项目专用调试 Chrome。preflight / run 默认会先复用 9222；未就绪时自动启动项目专用调试 Chrome，不要关闭老 Chrome。
 
 静默规则：
 

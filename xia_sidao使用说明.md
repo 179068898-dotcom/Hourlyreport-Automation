@@ -36,7 +36,7 @@
 | 检查项 | 要求 | 不通过时处理 |
 |---|---|---|
 | 当前项目 | 与本次任务一致 | 人工通过菜单切换项目后再执行 |
-| Chrome | 调试端口 `9222` 可连接，使用项目专用调试 Chrome | 运行 `start_chrome_debug.bat` 后重新检查 |
+| Chrome | 调试端口 `9222` 可连接，未启动时自动准备项目专用调试 Chrome | 自动准备失败时再运行 `start_chrome_debug.bat` 排障 |
 | 百度状态 | 当前项目凭据完整，可进入后台 | 停止并报告本地条件项异常 |
 | 商务通文件 | 已人工导出正确项目、日期/时段的数据 | 等待导出文件 |
 | 目标 Excel | 文件存在且未被打开 | 关闭文件后重试 |
@@ -47,7 +47,7 @@
 ### 3.1 Chrome 静默自动化说明
 
 - 调试 Chrome 使用项目专用目录 `browser_profile/chrome_debug`，不使用同事日常 Chrome 的个人资料目录。
-- `start_chrome_debug.bat` 会以最小化方式启动调试 Chrome；如果 `9222` 已经可连接，会复用现有实例，不会关闭老 Chrome，通常不需要关闭日常 Chrome。
+- preflight / run 会先复用 `9222`；未就绪时自动以最小化方式启动项目专用调试 Chrome。`start_chrome_debug.bat` 仅作为人工排障入口，不会关闭老 Chrome，通常不需要关闭日常 Chrome。
 - 自动拉起调试 Chrome 时，不把百度 URL 直接作为 Chrome 启动参数传入，避免启动失败时 URL 被日常 Chrome 接管开新标签。
 - 自动读取百度数据时，程序默认不把 Chrome 抢到前台，也不会在连接后用 CDP 强制最小化窗口；窗口状态主要依赖启动时的 `--start-minimized`。
 - 自动切换百度账号时，程序会先尝试页面退出；如果百度页面 dropdown 没弹出导致退出失败，会自动清理当前浏览器上下文 cookie / storage / 本地登录状态，再跳 CAS 登录当前项目账号。
@@ -82,7 +82,7 @@ R. 刷新状态
 
 菜单布局调整不影响 OpenClaw 固定入口。自动执行只使用下列命令。OpenClaw 必须继续走 `run_openclaw_hourly.bat` / `run_openclaw_daily.bat` 专用窗口，不要绕过 BAT 自己拼 `main.py`，不要跳过 preflight，不要在失败后手工补 Excel 数字。
 
-OpenClaw 专用 BAT 默认执行快速预检：小时报使用 `main.py --mode preflight --quick`，日报使用 `main.py --mode preflight --task daily --quick`。快速预检跳过耗时的 Excel sheet 结构扫描，只保留路径、Chrome、项目配置、商务通目录和凭据等低成本检查；完整 preflight 仅用于新项目、Excel 模板变更、结构识别异常或排障。
+OpenClaw 专用 BAT 默认执行快速预检：小时报使用 `main.py --mode preflight --quick`，日报使用 `main.py --mode preflight --task daily --quick`。快速预检跳过耗时的 Excel sheet 结构扫描，只保留路径、Chrome、项目配置、商务通目录和凭据等低成本检查；如果 9222 未启动，会自动尝试启动项目专用调试 Chrome；完整 preflight 仅用于新项目、Excel 模板变更、结构识别异常或排障。
 
 进入项目目录：
 
@@ -255,7 +255,7 @@ logs/run.log
 | 现象 | 处理方式 |
 |---|---|
 | 当前项目不正确 | 使用 `3. 切换项目` 切换后重新检查条件项 |
-| Chrome `9222` 无法连接 | 运行 `start_chrome_debug.bat` 启动项目专用调试 Chrome，再重新预检 |
+| Chrome `9222` 无法连接 | preflight 会自动准备项目专用调试 Chrome；若仍失败，再运行 `start_chrome_debug.bat` 排障并重新预检 |
 | Chrome 自动化窗口打断当前操作 | 确认配置保持 `silent_automation=true`、`window_state=minimized`，并通过 `start_chrome_debug.bat` 启动 |
 | Chrome 提示是否保存账号密码 | 调试 profile 默认禁用密码管理器；如旧状态残留，关闭调试 Chrome 后清理 `browser_profile/chrome_debug` 再重启 |
 | 旧百度账号自动退出失败 | 程序会自动清 cookie 后重登；仍失败时查看 `reports/baidu_session_check_report.json` 和 `logs/run.log`，不要手工补 Excel |
