@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSizePolicy,
+    QSystemTrayIcon,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -1239,6 +1240,7 @@ class MainWindow(QMainWindow):
         self._drag_offset = None
         self._build_ui()
         self._apply_style()
+        self._build_tray()
         self.update_manager = GitHubUpdateManager(self)
         self.update_manager.download_progress.connect(self.on_update_download_progress)
         self.update_manager.ready.connect(self.on_update_ready)
@@ -1256,6 +1258,27 @@ class MainWindow(QMainWindow):
         self.set_current_flow_idle()
         QTimer.singleShot(0, self.run_startup_check)
         QTimer.singleShot(450, self.show_pet_greeting)
+
+    def _build_tray(self) -> None:
+        self.tray_menu = QMenu(self)
+        self.tray_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.tray_open_action = QAction("打开控制台", self.tray_menu)
+        self.tray_exit_action = QAction("退出程序", self.tray_menu)
+        self.tray_open_action.triggered.connect(self.show_console)
+        self.tray_exit_action.triggered.connect(self.exit_application)
+        self.tray_menu.addAction(self.tray_open_action)
+        self.tray_menu.addAction(self.tray_exit_action)
+        self._style_menu(self.tray_menu, 156)
+
+        self.tray_icon = QSystemTrayIcon(self.windowIcon(), self)
+        self.tray_icon.setToolTip("百度数据自动化控制台")
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.activated.connect(self.on_tray_activated)
+        self.tray_icon.show()
+
+    def on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.show_console()
 
     def _make_card(self, object_name: str = "dashboardCard") -> QFrame:
         card = QFrame()
@@ -2491,31 +2514,29 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def request_console_close(self) -> None:
+        self.hide()
         if self.pet_mode == PET_CLAWD and self.desktop_pet.is_enabled():
-            self.hide()
             self.desktop_pet.announce("我会留在这里。点我可以重新打开控制台。", "waving", 5200)
-            return
-        self.exit_application()
 
     def exit_application(self) -> None:
+        if self._quitting:
+            return
         if self._pet_scale_save_timer.isActive():
             self._pet_scale_save_timer.stop()
             self._persist_desktop_pet_scale()
         self._quitting = True
+        self.tray_icon.hide()
+        self.tray_icon.setContextMenu(None)
         self.desktop_pet.close_pet()
         QApplication.instance().quit()
 
     def closeEvent(self, event) -> None:
-        if self._quitting or not self.isVisible():
-            self.desktop_pet.close_pet()
+        if self._quitting:
             event.accept()
             return
-        if self.pet_mode == PET_CLAWD and self.desktop_pet.is_enabled():
-            event.ignore()
-            self.request_console_close()
-            return
         event.ignore()
-        self.exit_application()
+        if self.isVisible():
+            self.request_console_close()
 
     def selected_project_id(self) -> str:
         return str(self.project_combo.currentData() or "")

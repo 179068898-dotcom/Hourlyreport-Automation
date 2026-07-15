@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from datetime import date
 
+import pytest
+
 from modules.text_normalizer import normalize_text
 
 
@@ -7280,6 +7282,93 @@ def test_desktop_pet_keeps_running_when_console_is_hidden(monkeypatch):
     assert window.isVisible()
 
     window._quitting = True
+    window.tray_icon.hide()
+    window.desktop_pet.close_pet()
+    window.close()
+
+
+def test_desktop_gui_tray_icon_opens_console_and_exposes_exit(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+
+    assert not window.tray_icon.icon().isNull()
+    assert [action.text() for action in window.tray_menu.actions()] == ["打开控制台", "退出程序"]
+    assert window.tray_icon.contextMenu() is window.tray_menu
+
+    window.hide()
+    window.tray_icon.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
+    app.processEvents()
+    assert window.isVisible()
+
+    window._quitting = True
+    window.tray_icon.hide()
+    window.desktop_pet.close_pet()
+    window.close()
+
+
+@pytest.mark.parametrize("pet_mode", ["clawd", "hidden"])
+def test_desktop_gui_close_only_hides_for_every_pet_mode(monkeypatch, pet_mode):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    import gui.main_window as main_window
+
+    monkeypatch.setattr(main_window, "load_pet_mode", lambda root: pet_mode)
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+
+    window.close_button.click()
+    app.processEvents()
+
+    assert not window.isVisible()
+    assert window._quitting is False
+    assert window.tray_icon.isVisible()
+
+    window.show()
+    window.close()
+    app.processEvents()
+    assert not window.isVisible()
+    assert window._quitting is False
+    assert window.tray_icon.isVisible()
+
+    window._quitting = True
+    window.tray_icon.hide()
+    window.desktop_pet.close_pet()
+    window.close()
+
+
+@pytest.mark.parametrize("exit_source", ["tray", "system_menu"])
+def test_desktop_gui_exit_actions_clean_tray_and_pet(monkeypatch, exit_source):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    quit_calls = []
+    pet_close_calls = []
+    original_close_pet = window.desktop_pet.close_pet
+    monkeypatch.setattr(app, "quit", lambda: quit_calls.append(True))
+    monkeypatch.setattr(
+        window.desktop_pet,
+        "close_pet",
+        lambda: (pet_close_calls.append(True), original_close_pet()),
+    )
+
+    if exit_source == "tray":
+        window.tray_exit_action.trigger()
+    else:
+        window.inline_config_menu.exit_requested.emit()
+
+    assert window._quitting is True
+    assert not window.tray_icon.isVisible()
+    assert pet_close_calls == [True]
+    assert quit_calls == [True]
     window.close()
 
 
