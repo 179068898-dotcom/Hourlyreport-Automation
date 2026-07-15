@@ -300,6 +300,10 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     baidu = dict(config.get("baidu", {}))
     baidu["credential_project"] = get_credential_profile(project)
     baidu["credential_profile"] = get_credential_profile(project)
+    project_baidu = project.get("baidu", {})
+    for key in ("api_profile", "api_timeout_seconds"):
+        if project_baidu.get(key) not in (None, ""):
+            baidu[key] = project_baidu[key]
     config["baidu"] = baidu
 
     app_config = project.get("_app_config", {})

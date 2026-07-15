@@ -1,67 +1,98 @@
 @echo off
-setlocal
-title hourly_report_bot - install env
-cd /d "%~dp0"
+setlocal EnableExtensions DisableDelayedExpansion
+title hourly_report_bot - install environment
+set "PYTHONUTF8=1"
+set "PYTHONIOENCODING=utf-8"
+set "PIP_DISABLE_PIP_VERSION_CHECK=1"
+cd /d "%~dp0" || goto :root_failed
 
-echo ==========================================
-echo hourly_report_bot - install environment
-echo ==========================================
-echo Current folder:
-echo %CD%
-echo.
+echo [ENV][1/5] Checking Python...
+set "PYTHON_EXE="
+set "PYTHON_ARGS="
+set "USING_EXISTING_VENV="
 
-set "PY_CMD="
-py -3 --version >nul 2>nul
-if not errorlevel 1 set "PY_CMD=py -3"
-
-if "%PY_CMD%"=="" (
-  python --version >nul 2>nul
-  if not errorlevel 1 set "PY_CMD=python"
-)
-
-if "%PY_CMD%"=="" (
-  echo [ERROR] Python was not found.
-  echo Please install Python 3.10+ first, then run this file again.
-  echo Download: https://www.python.org/downloads/
-  echo.
-  pause
-  exit /b 1
-)
-
-echo Python command: %PY_CMD%
-%PY_CMD% --version
-echo.
-
-if not exist ".venv\Scripts\python.exe" (
-  echo Creating virtual environment...
-  %PY_CMD% -m venv .venv
-  if errorlevel 1 (
-    echo [ERROR] Failed to create .venv.
-    pause
-    exit /b 1
+if exist ".venv\Scripts\python.exe" (
+  ".venv\Scripts\python.exe" --version >nul 2>nul
+  if not errorlevel 1 (
+    set "PYTHON_EXE=%CD%\.venv\Scripts\python.exe"
+    set "USING_EXISTING_VENV=1"
   )
+)
+if not defined PYTHON_EXE if exist "runtime\python\python.exe" set "PYTHON_EXE=%CD%\runtime\python\python.exe"
+if not defined PYTHON_EXE if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PYTHON_EXE=%LocalAppData%\Programs\Python\Python314\python.exe"
+if not defined PYTHON_EXE if exist "%ProgramFiles%\Python314\python.exe" set "PYTHON_EXE=%ProgramFiles%\Python314\python.exe"
+
+if not defined PYTHON_EXE (
+  py -3 --version >nul 2>nul
+  if not errorlevel 1 (
+    set "PYTHON_EXE=py"
+    set "PYTHON_ARGS=-3"
+  )
+)
+if not defined PYTHON_EXE (
+  python --version >nul 2>nul
+  if not errorlevel 1 set "PYTHON_EXE=python"
+)
+if not defined PYTHON_EXE (
+  python3 --version >nul 2>nul
+  if not errorlevel 1 set "PYTHON_EXE=python3"
+)
+
+if /i "%~1"=="--check" goto :check_only
+
+if not defined PYTHON_EXE (
+  echo [ENV][2/5] Python was not found. Downloading the private runtime...
+  powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0tools\bootstrap_python.ps1"
+  if errorlevel 1 goto :python_failed
+  set "PYTHON_EXE=%CD%\runtime\python\python.exe"
+)
+
+echo [ENV][2/5] Python: %PYTHON_EXE% %PYTHON_ARGS%
+"%PYTHON_EXE%" %PYTHON_ARGS% --version
+if errorlevel 1 goto :python_failed
+
+if defined USING_EXISTING_VENV (
+  echo [ENV][3/5] Existing project environment found.
 ) else (
-  echo Virtual environment already exists.
+  echo [ENV][3/5] Creating the project environment...
+  "%PYTHON_EXE%" %PYTHON_ARGS% -m venv .venv
+  if errorlevel 1 goto :venv_failed
 )
 
-echo.
-echo Installing dependencies...
-".venv\Scripts\python.exe" -m pip install --upgrade pip
-if errorlevel 1 (
-  echo [ERROR] Failed to upgrade pip.
-  pause
-  exit /b 1
-)
+echo [ENV][4/5] Installing runtime dependencies. The first setup may take a few minutes...
+".venv\Scripts\python.exe" -m pip install --upgrade pip --disable-pip-version-check
+if errorlevel 1 goto :dependency_failed
+".venv\Scripts\python.exe" -m pip install -r "%~dp0requirements-runtime.txt" --disable-pip-version-check
+if errorlevel 1 goto :dependency_failed
 
-".venv\Scripts\python.exe" -m pip install -r requirements.txt
-if errorlevel 1 (
-  echo [ERROR] Failed to install requirements.
-  pause
-  exit /b 1
-)
+echo [ENV][5/5] Environment setup completed.
+exit /b 0
 
-echo.
-echo Installation finished.
-echo Next step: run run_menu.bat
-echo.
+:check_only
+if not defined PYTHON_EXE (
+  echo [ENV][CHECK] PYTHON_NOT_FOUND
+  exit /b 3
+)
+echo [ENV][CHECK] PYTHON_READY=%PYTHON_EXE% %PYTHON_ARGS%
+"%PYTHON_EXE%" %PYTHON_ARGS% --version
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:root_failed
+echo [ERROR] Cannot open the application folder.
+goto :failed
+
+:python_failed
+echo [ERROR] Python setup failed. Check the network or Python installation and retry.
+goto :failed
+
+:venv_failed
+echo [ERROR] Failed to create .venv.
+goto :failed
+
+:dependency_failed
+echo [ERROR] Failed to install runtime dependencies. Check the network and retry.
+
+:failed
 if not "%HURLY_REPORT_BOT_AUTO_INSTALL%"=="1" pause
+exit /b 1

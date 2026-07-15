@@ -25,6 +25,7 @@
       "source_id": "shenyang_bai_source_a",
       "source_name": "沈阳大中亚",
       "credential_profile": "shenyang_bai_source_a_baidu",
+      "api_profile": "shenyang_bai_source_a_baidu",
       "accounts": [
         {
           "standard_name": "沈阳中亚白癜风1",
@@ -71,6 +72,7 @@
       "source_id": "shenyang_bai_source_b",
       "source_name": "沈阳大银康",
       "credential_profile": "shenyang_bai_source_b_baidu",
+      "api_profile": "shenyang_bai_source_b_baidu",
       "accounts": [
         {
           "standard_name": "沈阳银康银屑病6",

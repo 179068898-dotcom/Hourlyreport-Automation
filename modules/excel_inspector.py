@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.text_normalizer import normalize_for_display, normalize_text
@@ -85,24 +86,39 @@ def _scan_non_empty_cells(ws: Worksheet, merged_values: dict[tuple[int, int], An
     if merged_values is None:
         merged_values = _build_merged_value_map(ws)
     rows: list[dict[str, Any]] = []
-    for row in range(1, (ws.max_row or 1) + 1):
-        for col in range(1, (ws.max_column or 1) + 1):
-            value = _get_merged_value(ws, row, col, merged_values)
+    materialized_cells = getattr(ws, "_cells", None)
+    if not isinstance(materialized_cells, dict):
+        coordinates = (
+            (row, col)
+            for row in range(1, (ws.max_row or 1) + 1)
+            for col in range(1, (ws.max_column or 1) + 1)
+        )
+    else:
+        coordinates = iter(sorted(set(materialized_cells) | set(merged_values)))
+
+    for row, col in coordinates:
+        if isinstance(materialized_cells, dict):
+            cell = materialized_cells.get((row, col))
+            value = cell.value if cell is not None else None
             if value is None:
-                continue
-            raw_text = normalize_for_display(value)
-            normalized_text = normalize_text(value)
-            if not normalized_text:
-                continue
-            rows.append(
-                {
-                    "row": row,
-                    "col": col,
-                    "address": ws.cell(row=row, column=col).coordinate,
-                    "raw_text": raw_text,
-                    "normalized_text": normalized_text,
-                }
-            )
+                value = merged_values.get((row, col))
+        else:
+            value = _get_merged_value(ws, row, col, merged_values)
+        if value is None:
+            continue
+        raw_text = normalize_for_display(value)
+        normalized_text = normalize_text(value)
+        if not normalized_text:
+            continue
+        rows.append(
+            {
+                "row": row,
+                "col": col,
+                "address": f"{get_column_letter(col)}{row}",
+                "raw_text": raw_text,
+                "normalized_text": normalized_text,
+            }
+        )
     return rows
 
 
@@ -114,16 +130,16 @@ def _write_sheet_dump(rows: list[dict[str, Any]], out_path: Path) -> None:
         writer.writerows(rows)
 
 
-def _match_any(text: str, aliases: list[str]) -> bool:
-    normalized_aliases = [normalize_text(alias) for alias in aliases]
-    return any(alias and alias in text for alias in normalized_aliases)
-
-
 def _find_account_titles(rows: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for account, info in config["accounts"].items():
         aliases = info.get("aliases", []) + [account, info.get("excel_name", ""), info.get("baidu_name", "")]
-        matches = [row for row in rows if _match_any(row["normalized_text"], aliases)]
+        normalized_aliases = [normalize_text(alias) for alias in aliases if normalize_text(alias)]
+        matches = [
+            row
+            for row in rows
+            if any(alias in row["normalized_text"] for alias in normalized_aliases)
+        ]
         if matches:
             matches.sort(key=lambda item: (item["row"], item["col"]))
             first = matches[0]
@@ -181,6 +197,10 @@ def _build_account_ranges(account_titles: dict[str, dict[str, Any]], ws: Workshe
 
 def _match_field_header(text: str, aliases: list[str]) -> tuple[bool, bool]:
     normalized_aliases = [normalize_text(alias) for alias in aliases]
+    return _match_normalized_field_header(text, normalized_aliases)
+
+
+def _match_normalized_field_header(text: str, normalized_aliases: list[str]) -> tuple[bool, bool]:
     if any(alias and text == alias for alias in normalized_aliases):
         return True, True
     if any(alias and len(alias) >= 2 and alias in text for alias in normalized_aliases):
@@ -200,6 +220,7 @@ def _find_fields_in_range(
 ) -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     for field_name, aliases in aliases_config.items():
+        normalized_aliases = [normalize_text(alias) for alias in aliases]
         exact_cells = []
         partial_cells = []
         for row in range(min_row, max_row + 1):
@@ -208,7 +229,7 @@ def _find_fields_in_range(
                 normalized = normalize_text(value)
                 if not normalized:
                     continue
-                matched, exact = _match_field_header(normalized, aliases)
+                matched, exact = _match_normalized_field_header(normalized, normalized_aliases)
                 if matched:
                     target = exact_cells if exact else partial_cells
                     target.append(
@@ -236,11 +257,55 @@ def _find_fields_in_range(
     return fields
 
 
-def _find_global_fields(ws: Worksheet, config: dict[str, Any], merged_values: dict[tuple[int, int], Any]) -> dict[str, dict[str, Any]]:
+def _find_fields_in_rows(
+    rows: list[dict[str, Any]],
+    aliases_config: dict[str, list[str]],
+) -> dict[str, dict[str, Any]]:
+    fields: dict[str, dict[str, Any]] = {}
+    for field_name, aliases in aliases_config.items():
+        normalized_aliases = [normalize_text(alias) for alias in aliases]
+        exact_cells = []
+        partial_cells = []
+        for row in rows:
+            matched, exact = _match_normalized_field_header(row["normalized_text"], normalized_aliases)
+            if matched:
+                (exact_cells if exact else partial_cells).append(
+                    {
+                        "row": row["row"],
+                        "col": row["col"],
+                        "address": row["address"],
+                        "raw_text": row["raw_text"],
+                    }
+                )
+        matches = exact_cells or partial_cells
+        if matches:
+            matches.sort(key=lambda item: (item["row"], item["col"]))
+            first = matches[0]
+            fields[field_name] = {
+                "found": True,
+                "header_cell": first["address"],
+                "header_row": first["row"],
+                "header_col": first["col"],
+                "raw_text": first["raw_text"],
+                "all_matches": matches[:20],
+            }
+        else:
+            fields[field_name] = {"found": False, "all_matches": []}
+    return fields
+
+
+def _find_global_fields(
+    ws: Worksheet,
+    config: dict[str, Any],
+    merged_values: dict[tuple[int, int], Any],
+    rows: list[dict[str, Any]] | None = None,
+) -> dict[str, dict[str, Any]]:
     aliases_config = config.get("field_aliases", {})
     global_aliases = {name: aliases for name, aliases in aliases_config.items() if name in {"日期", "时段"}}
     if not global_aliases:
         return {}
+    if rows is not None:
+        return _find_fields_in_rows(rows, global_aliases)
     return _find_fields_in_range(
         ws,
         global_aliases,
@@ -260,6 +325,7 @@ def _find_fields_for_account(ws: Worksheet, meta: dict[str, Any], config: dict[s
     block = meta["range"]
     aliases_config = config.get("field_aliases", {})
     for field_name, aliases in aliases_config.items():
+        normalized_aliases = [normalize_text(alias) for alias in aliases]
         exact_cells = []
         partial_cells = []
         if field_name in {"日期", "时段"}:
@@ -277,7 +343,7 @@ def _find_fields_for_account(ws: Worksheet, meta: dict[str, Any], config: dict[s
                 normalized = normalize_text(value)
                 if not normalized:
                     continue
-                matched, exact = _match_field_header(normalized, aliases)
+                matched, exact = _match_normalized_field_header(normalized, normalized_aliases)
                 if matched:
                     target = exact_cells if exact else partial_cells
                     target.append(
@@ -363,14 +429,45 @@ def dump_sheet_text(config: dict[str, Any], root: Path, logger) -> Path:
         raise FileNotFoundError(f"找不到 Excel 文件：{excel_path}")
     wb = load_workbook(excel_path, data_only=False, read_only=False)
     if sheet_name not in wb.sheetnames:
-        raise ValueError(f"找不到 sheet：{sheet_name}，当前 sheet：{wb.sheetnames}")
+        available_sheets = wb.sheetnames
+        wb.close()
+        raise ValueError(f"找不到 sheet：{sheet_name}，当前 sheet：{available_sheets}")
     ws = wb[sheet_name]
     merged_values = _build_merged_value_map(ws)
     rows = _scan_non_empty_cells(ws, merged_values)
     out_path = root / "reports" / "sheet_text_dump.csv"
     _write_sheet_dump(rows, out_path)
+    wb.close()
     logger.info("sheet 文本扫描完成，共 %s 个非空文本单元格：%s", len(rows), out_path)
     return out_path
+
+
+def inspect_excel_worksheet(ws: Worksheet, config: dict[str, Any], excel_path: str | Path) -> dict[str, Any]:
+    report: dict[str, Any] = {
+        "excel_path": str(excel_path),
+        "sheet_name": ws.title,
+        "sheet_found": True,
+        "accounts": {},
+        "suspicious_titles": [],
+        "errors": [],
+        "max_row": ws.max_row,
+        "max_col": ws.max_column,
+    }
+    merged_values = _build_merged_value_map(ws)
+    merged_bounds = _build_merged_bounds_map(ws)
+    report["merged_range_count"] = len(ws.merged_cells.ranges)
+    rows = _scan_non_empty_cells(ws, merged_values)
+
+    report["summary_regions"] = _find_summary_regions(rows, merged_bounds)
+    accounts = _find_account_titles(rows, config)
+    accounts = _build_account_ranges(accounts, ws, merged_bounds)
+    for account, meta in accounts.items():
+        meta["fields"] = _find_fields_for_account_v2(ws, meta, config, merged_values)
+    report["accounts"] = accounts
+    report["global_fields"] = _find_global_fields(ws, config, merged_values, rows=rows)
+    report["suspicious_titles"] = _find_suspicious_titles(rows, config)
+    report["errors"].extend(validate_excel_report_v2(report, required_accounts=list(accounts.keys())))
+    return report
 
 
 def inspect_excel_structure(config: dict[str, Any], root: Path, logger) -> dict[str, Any]:
@@ -390,36 +487,21 @@ def inspect_excel_structure(config: dict[str, Any], root: Path, logger) -> dict[
         return report
 
     wb = load_workbook(excel_path, data_only=False, read_only=False)
-    report["available_sheets"] = wb.sheetnames
-    if sheet_name not in wb.sheetnames:
+    available_sheets = wb.sheetnames
+    if sheet_name not in available_sheets:
+        report["available_sheets"] = available_sheets
         report["errors"].append(f"找不到 sheet：{sheet_name}")
         _write_excel_account_regions_report(config, root, report)
+        wb.close()
         return report
 
-    ws = wb[sheet_name]
-    report["sheet_found"] = True
-    report["max_row"] = ws.max_row
-    report["max_col"] = ws.max_column
-
-    merged_values = _build_merged_value_map(ws)
-    merged_bounds = _build_merged_bounds_map(ws)
-    report["merged_range_count"] = len(ws.merged_cells.ranges)
-    rows = _scan_non_empty_cells(ws, merged_values)
-    _write_sheet_dump(rows, root / "reports" / "sheet_text_dump.csv")
-
-    report["summary_regions"] = _find_summary_regions(rows, merged_bounds)
-    accounts = _find_account_titles(rows, config)
-    accounts = _build_account_ranges(accounts, ws, merged_bounds)
-    for account, meta in accounts.items():
-        meta["fields"] = _find_fields_for_account_v2(ws, meta, config, merged_values)
-    report["accounts"] = accounts
-    report["global_fields"] = _find_global_fields(ws, config, merged_values)
-    report["suspicious_titles"] = _find_suspicious_titles(rows, config)
-    report["errors"].extend(validate_excel_report_v2(report, required_accounts=list(accounts.keys())))
+    report = inspect_excel_worksheet(wb[sheet_name], config, excel_path)
+    report["available_sheets"] = available_sheets
     _write_excel_account_regions_report(config, root, report)
 
     if report["errors"]:
         logger.warning("Excel 结构识别存在问题：%s", report["errors"])
     else:
         logger.info("Excel 结构识别通过")
+    wb.close()
     return report

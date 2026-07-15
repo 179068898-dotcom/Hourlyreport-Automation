@@ -15,7 +15,7 @@ if not exist ".venv\Scripts\python.exe" (
 ".venv\Scripts\python.exe" -c "import PySide6, PyInstaller" >nul 2>nul
 if errorlevel 1 (
   echo Installing GUI build dependencies...
-  ".venv\Scripts\python.exe" -m pip install PySide6 pyinstaller
+  ".venv\Scripts\python.exe" -m pip install -r requirements-dev.txt
   if errorlevel 1 (
     echo [ERROR] Failed to install GUI build dependencies.
     pause

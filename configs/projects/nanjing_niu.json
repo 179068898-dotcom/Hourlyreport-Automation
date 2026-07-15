@@ -42,6 +42,13 @@
       "excel_name": "华厦npx5",
       "kst_ids": ["54657224"],
       "kst_names": ["华厦npx5"]
+    },
+    {
+      "standard_name": "华厦npx6",
+      "baidu_names": ["baidu-华厦npx6", "华厦npx6"],
+      "excel_name": "baidu-华厦npx6",
+      "kst_ids": ["85492975"],
+      "kst_names": ["baidu-华厦npx6", "华厦npx6"]
     }
   ],
   "hourly": {

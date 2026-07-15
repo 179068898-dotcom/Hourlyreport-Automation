@@ -3,12 +3,102 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 
 REQUIRED_IMPORTS = ["openpyxl", "pandas", "xlrd", "dateutil", "playwright", "rich"]
 RUNTIME_DIRS = ["logs", "reports", "backups", "kst_exports"]
+KST_DATA_ROOT = Path("D:/商务通数据")
+KST_PROJECT_DIR_NAMES = (
+    "长沙牛",
+    "昆明牛",
+    "南京白",
+    "南京牛",
+    "宁波牛",
+    "青岛白",
+    "沈阳白",
+    "沈阳牛",
+    "深圳白",
+)
+
+
+def _kst_initialization_marker_path() -> Path:
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base = Path(local_app_data)
+    elif os.name == "nt":
+        base = Path.home() / "AppData" / "Local"
+    else:
+        base = Path.home() / ".local" / "share"
+    return base / "BaiduDataAutomation" / "kst_directories_v1.json"
+
+
+def initialize_kst_directories_once(
+    data_root: str | Path = KST_DATA_ROOT,
+    marker_path: str | Path | None = None,
+) -> dict[str, Any]:
+    root_path = Path(data_root)
+    marker = Path(marker_path) if marker_path is not None else _kst_initialization_marker_path()
+    if marker.is_file():
+        return {
+            "passed": True,
+            "status": "skipped",
+            "root": str(root_path),
+            "marker": str(marker),
+            "detail": "首次商务通目录准备已完成，本次不再检查。",
+        }
+
+    created: list[str] = []
+    temporary_marker = marker.with_name(marker.name + ".tmp")
+    try:
+        root_path.mkdir(parents=True, exist_ok=True)
+        for project_name in KST_PROJECT_DIR_NAMES:
+            project_path = root_path / project_name
+            if project_path.exists():
+                if not project_path.is_dir():
+                    raise NotADirectoryError(f"{project_path} 已存在，但不是文件夹")
+                continue
+            project_path.mkdir(parents=False)
+            created.append(project_name)
+
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker_payload = {
+            "version": 1,
+            "initialized_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "data_root": str(root_path),
+            "projects": list(KST_PROJECT_DIR_NAMES),
+        }
+        temporary_marker.write_text(
+            json.dumps(marker_payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        temporary_marker.replace(marker)
+    except Exception as exc:
+        try:
+            temporary_marker.unlink(missing_ok=True)
+        except Exception:
+            pass
+        return {
+            "passed": False,
+            "status": "failed",
+            "root": str(root_path),
+            "marker": str(marker),
+            "detail": f"首次准备商务通目录失败：{exc}",
+        }
+
+    detail = "9 个项目目录已准备完成。"
+    if created:
+        detail = f"已新建 {len(created)} 个项目目录：{', '.join(created)}。"
+    return {
+        "passed": True,
+        "status": "initialized",
+        "root": str(root_path),
+        "marker": str(marker),
+        "created": created,
+        "detail": detail,
+    }
 
 
 def _check(name: str, passed: bool, severity: str, detail: str) -> dict[str, Any]:
@@ -17,6 +107,11 @@ def _check(name: str, passed: bool, severity: str, detail: str) -> dict[str, Any
 
 def _python_path(root: Path) -> Path:
     return root / ".venv" / "Scripts" / "python.exe"
+
+
+def environment_repair_command(root: str | Path) -> list[str]:
+    installer = Path(root) / "install_env.bat"
+    return ["cmd.exe", "/d", "/c", str(installer)]
 
 
 def hidden_subprocess_kwargs() -> dict[str, Any]:
@@ -65,13 +160,13 @@ def repair_environment_if_needed(root: str | Path, report: dict[str, Any]) -> di
     env["PYTHONIOENCODING"] = "utf-8"
     try:
         result = subprocess.run(
-            ["cmd.exe", "/d", "/c", str(installer)],
+            environment_repair_command(root_path),
             cwd=root_path,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=600,
+            timeout=1200,
             env=env,
             **hidden_subprocess_kwargs(),
         )

@@ -11,6 +11,7 @@ import re
 import xml.etree.ElementTree as ET
 
 from openpyxl import load_workbook
+from openpyxl.utils.cell import coordinate_to_tuple
 from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.console_ui import print_check_result, verbose_print
@@ -18,10 +19,12 @@ from modules.excel_engine import format_openpyxl_save_error
 from modules.excel_inspector import (
     _build_merged_value_map,
     _get_merged_value,
+    _write_excel_account_regions_report,
     inspect_excel_structure,
+    inspect_excel_worksheet,
 )
 from modules.daily_excel_inspector import ALLOWED_FIELDS as DAILY_WRITE_FIELDS
-from modules.daily_excel_inspector import DAILY_SHEET_NAME, inspect_daily_excel_structure
+from modules.daily_excel_inspector import DAILY_SHEET_NAME, _write_daily_structure_outputs, inspect_daily_worksheet
 from modules.text_normalizer import normalize_text
 from modules.validators import get_required_accounts, validate_merged_daily_data, validate_merged_hourly_data
 
@@ -270,6 +273,37 @@ def _values_match(actual: Any, expected: Any) -> bool:
     return actual == expected
 
 
+def _read_back_values(excel_path: Path, sheet_name: str, coordinates: list[str]) -> dict[str, Any]:
+    requested = list(dict.fromkeys(coordinates))
+    if not requested:
+        return {}
+    positions = {coordinate_to_tuple(coordinate): coordinate for coordinate in requested}
+    row_numbers = [row for row, _col in positions]
+    column_numbers = [col for _row, col in positions]
+    workbook = load_workbook(excel_path, data_only=False, read_only=True)
+    try:
+        if sheet_name not in workbook.sheetnames:
+            raise ValueError(f"找不到 sheet：{sheet_name}")
+        worksheet = workbook[sheet_name]
+        values: dict[str, Any] = {coordinate: None for coordinate in requested}
+        min_row = min(row_numbers)
+        min_col = min(column_numbers)
+        rows = worksheet.iter_rows(
+            min_row=min_row,
+            max_row=max(row_numbers),
+            min_col=min_col,
+            max_col=max(column_numbers),
+        )
+        for row_index, row_cells in enumerate(rows, start=min_row):
+            for column_index, cell in enumerate(row_cells, start=min_col):
+                coordinate = positions.get((row_index, column_index))
+                if coordinate:
+                    values[coordinate] = cell.value
+        return values
+    finally:
+        workbook.close()
+
+
 def build_mock_account_data(config: dict[str, Any] | None = None) -> dict[str, dict[str, Any]]:
     accounts = get_required_accounts(config)
     return {
@@ -341,6 +375,7 @@ def mock_write_excel(
     if sheet_name not in wb.sheetnames:
         report["errors"].append(f"找不到 sheet：{sheet_name}")
         out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        wb.close()
         return report
     ws = wb[sheet_name]
     merged_values = _build_merged_value_map(ws)
@@ -395,6 +430,7 @@ def mock_write_excel(
         report["errors"].extend(account_report["errors"])
 
     if report["errors"]:
+        wb.close()
         out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.error("模拟写入中断：%s", report["errors"])
         return report
@@ -402,10 +438,12 @@ def mock_write_excel(
     try:
         wb.save(excel_path)
     except OSError as exc:
+        wb.close()
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("模拟保存 Excel 失败：%s", exc)
         out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         return report
+    wb.close()
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
@@ -414,10 +452,9 @@ def mock_write_excel(
     )
     logger.info("模拟数据已写入并保存：%s", excel_path)
 
-    verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
-    verify_ws = verify_wb[sheet_name]
+    read_back_values = _read_back_values(excel_path, sheet_name, [op["cell"] for op in write_ops])
     for op in write_ops:
-        value = verify_ws[op["cell"]].value
+        value = read_back_values.get(op["cell"])
         op["verified"] = value == op["new_value"]
         account_writes = report["accounts"][op["account"]]["writes"]
         for item in account_writes:
@@ -518,27 +555,28 @@ def write_merged_hourly_data(
         report["errors"].append(f"找不到 Excel 文件：{excel_path}")
         return finish()
 
-    structure_config = dict(config)
-    structure_config["excel_path"] = str(excel_path)
-    structure = inspect_excel_structure(config=structure_config, root=root, logger=logger)
+    sheet_name = config.get("sheet_name", "时段数据")
+    wb = load_workbook(excel_path, data_only=False, read_only=False)
+    if sheet_name not in wb.sheetnames:
+        report["errors"].append(f"找不到 sheet：{sheet_name}")
+        wb.close()
+        return finish()
+    ws = wb[sheet_name]
+    structure = inspect_excel_worksheet(ws, config, excel_path)
+    _write_excel_account_regions_report(config, root, structure)
     structure_errors = structure.get("errors", [])
     if structure_errors:
         report["errors"].extend(structure_errors)
+        wb.close()
         return finish()
     report["self_check"]["structure_passed"] = True
+    logger.info("Excel 结构识别通过")
 
     backup_path = _make_backup(excel_path, root)
     report["backup_path"] = str(backup_path)
     report["self_check"]["backup_created"] = backup_path.exists()
     logger.info("正式写入前备份已创建：%s", backup_path)
 
-    sheet_name = config.get("sheet_name", "时段数据")
-    wb = load_workbook(excel_path, data_only=False, read_only=False)
-    if sheet_name not in wb.sheetnames:
-        report["errors"].append(f"找不到 sheet：{sheet_name}")
-        return finish()
-
-    ws = wb[sheet_name]
     merged_values = _build_merged_value_map(ws)
     protected_regions = structure.get("summary_regions", [])
     account_values = merged_data.get("accounts", {})
@@ -615,6 +653,7 @@ def write_merged_hourly_data(
         report["errors"].extend(account_report["errors"])
 
     if report["errors"]:
+        wb.close()
         logger.error("正式写入中断：%s", report["errors"])
         return finish()
 
@@ -628,9 +667,11 @@ def write_merged_hourly_data(
     try:
         wb.save(excel_path)
     except OSError as exc:
+        wb.close()
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("保存小时报 Excel 失败：%s", exc)
         return finish()
+    wb.close()
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
@@ -639,10 +680,9 @@ def write_merged_hourly_data(
     )
     logger.info("合并数据已写入并保存：%s", excel_path)
 
-    verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
-    verify_ws = verify_wb[sheet_name]
+    read_back_values = _read_back_values(excel_path, sheet_name, [op["cell"] for op in planned_writes])
     for op in planned_writes:
-        read_back = verify_ws[op["cell"]].value
+        read_back = read_back_values.get(op["cell"])
         op["read_back_value"] = _json_safe(read_back)
         op["verified"] = _values_match(read_back, op["new_value"])
         if not op["verified"]:
@@ -725,31 +765,34 @@ def write_merged_daily_data(
         report["errors"].append(f"找不到 Excel 文件：{excel_path}")
         return finish()
 
-    structure_config = dict(config)
-    structure_config["excel_path"] = str(excel_path)
-    structure = inspect_daily_excel_structure(config=structure_config, root=root, logger=logger)
+    daily_sheet_name = config.get("daily_sheet_name", DAILY_SHEET_NAME)
+    wb = load_workbook(excel_path, data_only=False, read_only=False)
+    if daily_sheet_name not in wb.sheetnames:
+        report["errors"].append(f"找不到 sheet：{daily_sheet_name}")
+        wb.close()
+        return finish()
+    ws = wb[daily_sheet_name]
+    structure = inspect_daily_worksheet(ws, config, str(excel_path))
+    _write_daily_structure_outputs(structure, root, ws)
     structure_errors = structure.get("errors", [])
     if structure_errors:
         report["errors"].extend(structure_errors)
+        wb.close()
         return finish()
     report["self_check"]["structure_passed"] = True
+    logger.info("日报 Excel 结构识别通过。")
 
     backup_path = _make_backup(excel_path, root)
     report["backup_path"] = str(backup_path)
     report["self_check"]["backup_created"] = backup_path.exists()
     logger.info("日报正式写入前备份已创建：%s", backup_path)
 
-    wb = load_workbook(excel_path, data_only=False, read_only=False)
-    daily_sheet_name = config.get("daily_sheet_name", DAILY_SHEET_NAME)
-    if daily_sheet_name not in wb.sheetnames:
-        report["errors"].append(f"找不到 sheet：{daily_sheet_name}")
-        return finish()
-    ws = wb[daily_sheet_name]
     merged_values = _build_merged_value_map(ws)
     date_col = int(structure.get("date_column", {}).get("col", 0))
     row = _find_daily_target_row(ws, date_col, merged_date, merged_values)
     if row is None:
         report["errors"].append(f"百度 sheet 找不到日期行：{merged_date.isoformat()}")
+        wb.close()
         return finish()
 
     account_values = merged_data.get("accounts", {})
@@ -805,6 +848,7 @@ def write_merged_daily_data(
         report["self_check"]["wrote_forbidden_field"] = True
         report["errors"].append(f"检测到禁止写入字段：{', '.join(sorted(forbidden_written))}")
     if report["errors"]:
+        wb.close()
         logger.error("日报正式写入中断：%s", report["errors"])
         return finish()
 
@@ -818,9 +862,11 @@ def write_merged_daily_data(
     try:
         wb.save(excel_path)
     except OSError as exc:
+        wb.close()
         report["errors"].append(format_openpyxl_save_error(excel_path, exc))
         logger.error("保存日报 Excel 失败：%s", exc)
         return finish()
+    wb.close()
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
@@ -829,10 +875,9 @@ def write_merged_daily_data(
     )
     logger.info("日报合并数据已写入并保存：%s", excel_path)
 
-    verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
-    verify_ws = verify_wb[daily_sheet_name]
+    read_back_values = _read_back_values(excel_path, daily_sheet_name, [op["cell"] for op in planned_writes])
     for op in planned_writes:
-        read_back = verify_ws[op["cell"]].value
+        read_back = read_back_values.get(op["cell"])
         op["read_back_value"] = _json_safe(read_back)
         op["verified"] = _values_match(read_back, op["new_value"])
         if not op["verified"]:

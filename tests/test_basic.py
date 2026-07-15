@@ -150,6 +150,34 @@ def test_restore_sheet_filter_protection_metadata_restores_original_auto_filter(
     assert restored is True
     assert load_workbook(excel_path)["时段数据"].auto_filter.ref == "A3:XDP1464"
 
+
+def test_read_back_values_uses_read_only_workbook(tmp_path, monkeypatch):
+    from openpyxl import Workbook
+
+    import modules.excel_writer as writer
+
+    excel_path = tmp_path / "verify.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "时段数据"
+    ws["B8"] = 12
+    ws["D8"] = "完成"
+    wb.save(excel_path)
+
+    real_load_workbook = writer.load_workbook
+    calls = []
+
+    def recording_load_workbook(*args, **kwargs):
+        calls.append(dict(kwargs))
+        return real_load_workbook(*args, **kwargs)
+
+    monkeypatch.setattr(writer, "load_workbook", recording_load_workbook)
+
+    values = writer._read_back_values(excel_path, "时段数据", ["B8", "D8"])
+
+    assert values == {"B8": 12, "D8": "完成"}
+    assert calls == [{"data_only": False, "read_only": True}]
+
 from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
 from modules.kst_daily_parser import classify_daily_dialog_by_tags, parse_kst_daily_file, write_empty_kst_daily_result
 from modules.kst_parser import aggregate_kst_export_rows, classify_dialog_by_tags, has_visitor_dialog
@@ -178,6 +206,9 @@ from modules.baidu_overview import is_search_promotion_overview, overview_text_h
 from modules.baidu_validator import validate_baidu_account_data
 from modules.baidu_auto import build_baidu_auto_report_from_visible_text
 from modules.baidu_auto import fetch_baidu_auto
+from modules.baidu_report_api import fetch_baidu_api_probe
+from modules.baidu_api_simulation import simulate_baidu_api_hourly
+from modules.baidu_oauth_bundle import import_baidu_oauth_bundle
 from modules.baidu_daily import build_baidu_daily_report_from_visible_text, default_daily_date
 from modules.credential_manager import build_login_failure_message, load_project_credentials
 from modules.browser_manager import BrowserLaunchError, CONNECT_EXISTING_HELP, cleanup_extra_tabs, connect_existing_chrome, get_browser_settings
@@ -481,7 +512,7 @@ def test_menu_text_is_simplified_for_new_users():
     assert "4. 检查条件项" in MENU_TEXT
     assert "5. 更多功能" in MENU_TEXT
     assert "0. 退出" in MENU_TEXT
-    for advanced_text in ["预检与环境", "报告与日志", "配置与诊断", "OpenClaw 帮助", "多百度来源摘要"]:
+    for advanced_text in ["预检与环境", "报告与日志", "配置与诊断", "HERMES / 夏思道帮助", "多百度来源摘要"]:
         assert advanced_text not in MENU_TEXT
 
 
@@ -743,7 +774,9 @@ def test_run_menu_installs_or_repairs_missing_dependencies_before_importing_menu
 def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("main.py")) is True
     assert should_include_file(Path("modules") / "doctor.py") is True
-    assert should_include_file(Path("reports") / ".gitkeep") is False
+    assert should_include_file(Path("reports") / ".gitkeep") is True
+    assert should_include_file(Path("logs") / ".gitkeep") is True
+    assert should_include_file(Path("backups") / ".gitkeep") is True
     assert should_include_file(Path("reports") / "final_run_report.json") is False
     assert should_include_file(Path("logs") / "run.log") is False
     assert should_include_file(Path("backups") / "target.xlsx") is False
@@ -751,6 +784,8 @@ def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("secrets") / "secrets.json") is False
     assert should_include_file(Path("samples") / "真实业务.xlsx") is False
     assert should_include_file(Path(".venv") / "pyvenv.cfg") is False
+    assert should_include_file(Path("tests") / "test_basic.py") is False
+    assert should_include_file(Path("run_11.bat")) is False
 
 
 def test_project_template_and_demo_project_are_complete():
@@ -853,6 +888,24 @@ def test_account_ranges_follow_horizontal_merged_title_blocks():
     assert ranges["银康银屑02"]["range"]["max_col"] == 15
     assert ranges["银康03"]["range"]["min_col"] == 16
     assert ranges["银康03"]["range"]["max_col"] == 20
+
+
+def test_scan_non_empty_cells_does_not_materialize_blank_rectangle():
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "账户"
+    ws["Z100"] = "末端标题"
+    materialized_before = set(ws._cells)
+
+    rows = _scan_non_empty_cells(ws, _build_merged_value_map(ws))
+
+    assert set(ws._cells) == materialized_before
+    assert [(item["address"], item["raw_text"]) for item in rows] == [
+        ("A1", "账户"),
+        ("Z100", "末端标题"),
+    ]
 
 
 def test_mock_write_helpers_find_row_and_reject_summary_columns():
@@ -3955,33 +4008,35 @@ def test_run_bat_files_support_dragged_kst_file_argument():
         assert '--file "%KST_FILE%"' in text
 
 
-def test_openclaw_hourly_bat_fixes_utf8_and_runs_preflight_before_hourly_pipeline():
+def test_hermes_hourly_bat_fixes_utf8_and_runs_preflight_before_hourly_pipeline():
     root = Path(__file__).resolve().parents[1]
-    script = (root / "run_openclaw_hourly.bat").read_text(encoding="utf-8")
+    script = (root / "run_hermes_hourly.bat").read_text(encoding="utf-8")
 
     assert 'cd /d "%~dp0"' in script
     assert "chcp 65001" in script
     assert "PYTHONUTF8=1" in script
     assert "PYTHONIOENCODING=utf-8" in script
+    assert "20260710" in script
+    assert "install_env.bat" in script
     assert ".venv\\Scripts\\python.exe main.py --mode preflight --quick" in script
     assert "main.py --mode run --period" in script
 
 
-def test_openclaw_hourly_sop_documents_preflight_credentials_and_password_rule():
+def test_hermes_hourly_sop_documents_preflight_credentials_and_password_rule():
     root = Path(__file__).resolve().parents[1]
-    content = (root / "docs" / "openclaw_hourly_sop.md").read_text(encoding="utf-8")
+    content = (root / "docs" / "hermes_hourly_sop.md").read_text(encoding="utf-8")
 
-    assert "preflight" in content
-    assert "test-baidu-credentials" in content
-    assert "禁止向用户索要百度密码" in content
+    assert "HERMES-20260710" in content
+    assert "preflight --quick" in content
+    assert "不索要或输出密码" in content
     for period in ["11点", "15点", "18点"]:
-        assert f"run --period {period}" in content
+        assert f"run_hermes_hourly.bat {period}" in content
     assert "UTF-8" in content
 
 
-def test_openclaw_daily_bat_runs_daily_preflight_before_daily_pipeline():
+def test_hermes_daily_bat_runs_daily_preflight_before_daily_pipeline():
     root = Path(__file__).resolve().parents[1]
-    script = (root / "run_openclaw_daily.bat").read_text(encoding="utf-8")
+    script = (root / "run_hermes_daily.bat").read_text(encoding="utf-8")
 
     assert 'cd /d "%~dp0"' in script
     assert "chcp 65001" in script
@@ -3992,16 +4047,16 @@ def test_openclaw_daily_bat_runs_daily_preflight_before_daily_pipeline():
     assert 'main.py --mode run-daily --date "%~1" --yes' in script
 
 
-def test_openclaw_daily_sop_documents_preflight_password_and_write_boundaries():
+def test_hermes_daily_sop_documents_preflight_password_and_write_boundaries():
     root = Path(__file__).resolve().parents[1]
-    content = (root / "docs" / "openclaw_daily_sop.md").read_text(encoding="utf-8")
+    content = (root / "docs" / "hermes_daily_sop.md").read_text(encoding="utf-8")
 
-    assert "OpenClaw 日报自动化执行手册" in content
-    assert "run_openclaw_daily.bat" in content
-    assert "preflight --task daily" in content
-    assert "禁止向用户索要百度密码" in content
-    assert "预约、到诊、就诊等禁止字段不由本工具填写" in content
-    assert "不得在日报完成后自行追加任何外部填表或补数步骤" in content
+    assert "HERMES 日报自动化执行手册" in content
+    assert "run_hermes_daily.bat" in content
+    assert "preflight --task daily --quick" in content
+    assert "不索要或输出密码" in content
+    assert "不改无关 sheet、公式区、汇总区或截图区" in content
+    assert "networkidle" in content
 
 
 # ── console_ui 新增测试 ──────────────────────────────────
@@ -4197,7 +4252,7 @@ def test_menu_new_text_entries_exist():
 def test_more_features_menu_contains_console_sections():
     from menu import MORE_FEATURES_MENU_TEXT
 
-    for text in ["报告与日志", "配置诊断", "OpenClaw 帮助", "多百度来源摘要", "项目信息详情", "高级分步调试"]:
+    for text in ["报告与日志", "配置诊断", "HERMES / 夏思道帮助", "多百度来源摘要", "项目信息详情", "高级分步调试"]:
         assert text in MORE_FEATURES_MENU_TEXT
 
 
@@ -4217,13 +4272,14 @@ def test_diagnostic_menu_exposes_sheet_text_dump_without_write_action():
     assert "写入" not in DIAGNOSTIC_MENU_TEXT
 
 
-def test_openclaw_menu_help_includes_bat_commands_and_password_rule():
-    from menu import build_openclaw_help_lines
+def test_hermes_menu_help_includes_bat_commands_and_password_rule():
+    from menu import build_hermes_help_lines
 
-    text = "\n".join(build_openclaw_help_lines())
+    text = "\n".join(build_hermes_help_lines())
 
-    assert "run_openclaw_hourly.bat 11点" in text
-    assert "run_openclaw_daily.bat" in text
+    assert "run_hermes_hourly.bat 11点" in text
+    assert "run_hermes_daily.bat" in text
+    assert "2026-07-10" in text
     assert "不得询问或输出真实百度密码" in text
     assert "预约、到诊、就诊等禁止字段不由本工具填写" in text
 
@@ -4401,9 +4457,9 @@ def test_home_output_is_colleague_facing_and_keeps_advanced_sections_hidden(tmp_
 
     output = []
     project = {
-        "project_id": "hefei_bai",
-        "project_name": "合肥白",
-        "excel": {"path": r"D:\data\【合肥】2026竞价数据.xlsx"},
+        "project_id": "demo_bai",
+        "project_name": "演示白",
+        "excel": {"path": r"D:\data\【演示】2026竞价数据.xlsx"},
         "baidu_sources": [{}, {}],
         "excel_accounts": [{"standard_name": "A"}, {"standard_name": "B"}],
     }
@@ -4415,9 +4471,9 @@ def test_home_output_is_colleague_facing_and_keeps_advanced_sections_hidden(tmp_
 
     home = "\n".join(output)
     assert home.count("百度竞价自动化控制台") == 1
-    for text in ["百度竞价自动化控制台", "当前项目", "合肥白", "hefei_bai", "条件项", "日报", "11点", "15点", "18点"]:
+    for text in ["百度竞价自动化控制台", "当前项目", "演示白", "demo_bai", "条件项", "日报", "11点", "15点", "18点"]:
         assert text in home
-    for text in ["OpenClaw 帮助", "配置诊断", "报告与日志", "多百度来源摘要", "高级分步调试"]:
+    for text in ["HERMES / 夏思道帮助", "配置诊断", "报告与日志", "多百度来源摘要", "高级分步调试"]:
         assert text not in home
     for text in ["doctor", "preflight", "credential_profile", "baidu_sources", "debug"]:
         assert text not in home.lower()
@@ -4428,8 +4484,8 @@ def test_submenu_labels_use_consistent_return_choice():
         ADVANCED_DEBUG_MENU_TEXT,
         CONDITION_MENU_TEXT,
         DIAGNOSTIC_MENU_TEXT,
+        HERMES_MENU_TEXT,
         MORE_FEATURES_MENU_TEXT,
-        OPENCLAW_MENU_TEXT,
         REPORT_MENU_TEXT,
     )
 
@@ -4437,8 +4493,8 @@ def test_submenu_labels_use_consistent_return_choice():
         ADVANCED_DEBUG_MENU_TEXT,
         CONDITION_MENU_TEXT,
         DIAGNOSTIC_MENU_TEXT,
+        HERMES_MENU_TEXT,
         MORE_FEATURES_MENU_TEXT,
-        OPENCLAW_MENU_TEXT,
         REPORT_MENU_TEXT,
     ]:
         assert "0. 返回" in content
@@ -4456,9 +4512,10 @@ def test_menu_preflight_execution_writes_report_and_logs_result(tmp_path, monkey
     monkeypatch.setattr(
         menu,
         "run_preflight",
-        lambda root, project, config, task: {
+        lambda root, project, config, task, quick: {
             "passed": True,
             "task": task,
+            "quick": quick,
             "checks": [],
             "credentials": {},
         },
@@ -4467,6 +4524,7 @@ def test_menu_preflight_execution_writes_report_and_logs_result(tmp_path, monkey
     report = menu._execute_preflight(tmp_path, {}, {}, "daily", Logger())
 
     assert report["passed"] is True
+    assert report["quick"] is True
     assert json.loads((tmp_path / "reports" / "preflight_report.json").read_text(encoding="utf-8"))["task"] == "daily"
     assert entries
 
@@ -4507,7 +4565,7 @@ def test_menu_no_longer_routes_hidden_developer_shortcuts(tmp_path, monkeypatch)
     monkeypatch.setattr(menu, "_check_chrome_debug", lambda *args, **kwargs: True)
     monkeypatch.setattr(menu, "_run_condition_menu", lambda *args: calls.append("condition"))
     monkeypatch.setattr(menu, "_run_report_menu", lambda *args: calls.append("reports"))
-    monkeypatch.setattr(menu, "_run_openclaw_menu", lambda *args: calls.append("openclaw"))
+    monkeypatch.setattr(menu, "_run_hermes_menu", lambda *args: calls.append("hermes"))
     monkeypatch.setattr(menu, "dispatch_menu_task", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("快捷键不得执行任务")))
 
     menu.run_menu(root=tmp_path, input_func=lambda prompt: next(answers), output_func=lambda text: None)
@@ -5185,8 +5243,9 @@ def test_current_project_is_listed_and_valid():
 def test_kunming_niu_accounts():
     """昆明牛账户映射为银康01、银康银屑02、银康03。"""
     root = Path(__file__).resolve().parents[1]
-    from modules.project_config import load_project_config
+    from modules.project_config import build_runtime_config_from_project, load_project_config
     proj = load_project_config(root, "kunming_niu")
+    runtime = build_runtime_config_from_project(proj, {})
     accounts = proj["accounts"]
     assert accounts[0]["standard_name"] == "银康01"
     assert accounts[0]["kst_ids"] == ["72828178"]
@@ -5195,6 +5254,7 @@ def test_kunming_niu_accounts():
     assert accounts[2]["standard_name"] == "银康03"
     assert accounts[2]["kst_ids"] == ["81509165"]
     assert "baidu-银康03" in accounts[2]["baidu_names"]
+    assert runtime["baidu"]["api_profile"] == "kunming_niu_baidu"
 
 
 def test_secrets_example_has_six_profiles():
@@ -5213,6 +5273,222 @@ def test_secrets_example_has_six_profiles():
         assert profile in baidu
         assert baidu[profile]["username"] == ""
         assert baidu[profile]["password"] == ""
+    assert data["baidu_api"]["daily_automation"]["access_token"] == ""
+
+
+def test_baidu_api_probe_maps_ids_and_validates_summary(tmp_path):
+    config = _kunming_niu_runtime_config()
+    config.update({
+        "project_id": "kunming_niu",
+        "project_name": "昆明牛",
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {
+            "credential_profile": "kunming_niu_baidu",
+            "api_profile": "daily_automation",
+        },
+    })
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu": {"kunming_niu_baidu": {"username": "manager", "password": "unused"}},
+        "baidu_api": {"daily_automation": {"access_token": "header.payload.signature"}},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    def fake_transport(url, payload, timeout):
+        assert url.endswith("OpenApiReportService/getReportData")
+        assert payload["header"]["userName"] == "manager"
+        assert payload["header"]["accessToken"] == "header.payload.signature"
+        assert payload["body"]["userIds"] == [72828178, 72828179, 81509165]
+        assert timeout == 30
+        return {
+            "header": {"status": 0, "desc": "success", "failures": []},
+            "body": {"data": [{
+                "rowCount": 3,
+                "totalRowCount": 3,
+                "rows": [
+                    {"userId": 81509165, "userName": "baidu-银康03", "impression": 12, "click": 2, "cost": 3.5},
+                    {"userId": 72828179, "userName": "银康银屑02", "impression": 20, "click": 4, "cost": 8.25},
+                    {"userId": 72828178, "userName": "银康01", "impression": 100, "click": 10, "cost": 50},
+                ],
+                "summary": {"impression": 132, "click": 16, "cost": 61.75},
+            }]},
+        }
+
+    import logging
+    report = fetch_baidu_api_probe(
+        config,
+        tmp_path,
+        logging.getLogger("test"),
+        target_date="2026-07-14",
+        period="15点",
+        transport=fake_transport,
+    )
+
+    assert report["errors"] == []
+    assert report["accounts"]["银康01"]["消费"] == 50.0
+    assert report["accounts"]["银康03"]["source_user_id"] == 81509165
+    assert report["diagnostics"]["account_totals"] == {"impression": 132, "click": 16, "cost": 61.75}
+    assert report["self_check"]["wrote_excel"] is False
+    serialized = (tmp_path / "reports" / "baidu_api_probe_report.json").read_text(encoding="utf-8")
+    assert "header.payload.signature" not in serialized
+
+
+def test_baidu_api_probe_rejects_summary_mismatch(tmp_path):
+    config = _kunming_niu_runtime_config()
+    config.update({
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {"credential_profile": "kunming_niu_baidu", "api_profile": "daily_automation"},
+    })
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu": {"kunming_niu_baidu": {"username": "manager"}},
+        "baidu_api": {"daily_automation": {"access_token": "header.payload.signature"}},
+    }), encoding="utf-8")
+
+    def fake_transport(_url, _payload, _timeout):
+        rows = [
+            {"userId": 72828178, "userName": "银康01", "impression": 1, "click": 1, "cost": 1},
+            {"userId": 72828179, "userName": "银康银屑02", "impression": 1, "click": 1, "cost": 1},
+            {"userId": 81509165, "userName": "银康03", "impression": 1, "click": 1, "cost": 1},
+        ]
+        return {
+            "header": {"status": 0, "desc": "success", "failures": []},
+            "body": {"data": [{"rows": rows, "summary": {"impression": 99, "click": 3, "cost": 3}}]},
+        }
+
+    import logging
+    report = fetch_baidu_api_probe(config, tmp_path, logging.getLogger("test"), transport=fake_transport)
+
+    assert any("汇总校验失败" in error for error in report["errors"])
+    assert report["self_check"]["passed"] is False
+
+
+def test_baidu_api_hourly_simulation_keeps_outputs_isolated(tmp_path, monkeypatch):
+    import logging
+    from datetime import date
+
+    import modules.baidu_api_simulation as simulation
+
+    config = _kunming_niu_runtime_config()
+    config.update({"project_id": "kunming_niu", "project_name": "昆明牛"})
+    selected_date = date.today().isoformat()
+    api_report = {
+        "date": selected_date,
+        "period": "18点",
+        "source": "baidu_open_api_probe",
+        "accounts": {
+            "银康01": {"展现": 10, "点击": 1, "消费": 2.0},
+            "银康银屑02": {"展现": 20, "点击": 2, "消费": 3.0},
+            "银康03": {"展现": 30, "点击": 3, "消费": 4.0},
+        },
+        "diagnostics": {},
+        "errors": [],
+    }
+    monkeypatch.setattr(simulation, "fetch_baidu_api_probe", lambda **_kwargs: api_report)
+    monkeypatch.setattr(simulation, "find_latest_kst_export", lambda *_args: None)
+    monkeypatch.setattr(
+        simulation,
+        "_preview_excel_targets",
+        lambda *_args: ([{"account": "银康01", "field": "消费", "cell": "A1", "old_value": None, "new_value": 2.0}], [], {"excel_path": "target.xlsx", "sheet_name": "时段数据"}),
+    )
+
+    report = simulate_baidu_api_hourly(config, tmp_path, logging.getLogger("test"), "18点", selected_date)
+
+    assert report["errors"] == []
+    assert report["self_check"]["passed"] is True
+    assert report["self_check"]["wrote_excel"] is False
+    assert report["self_check"]["created_backup"] is False
+    assert report["kst"]["no_export_file"] is True
+    assert report["merged"]["accounts"]["银康01"]["总对话"] == 0
+    assert (tmp_path / "reports" / "baidu_api_hourly_simulated_merged.json").exists()
+    assert not (tmp_path / "reports" / "merged_hourly_data.json").exists()
+    assert not (tmp_path / "backups").exists()
+
+
+def test_baidu_oauth_bundle_import_is_atomic_and_does_not_expose_tokens(tmp_path):
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu_api": {"daily_automation": {"app_id": "app-1", "access_token": "old.token.value"}},
+    }), encoding="utf-8")
+    bundle_path = tmp_path / "download.baidu-auth"
+    bundle_path.write_text(json.dumps({
+        "format": "baidu-oauth-export-v1",
+        "app_id": "app-1",
+        "authorization": {
+            "access_token": "new.access.token",
+            "refresh_token": "new.refresh.token",
+            "open_id": "open-1",
+            "user_id": 123,
+            "master_uid": 123,
+            "master_name": "manager",
+            "user_account_type": 2,
+            "sub_accounts": [{"user_id": 456, "user_name": "child"}],
+        },
+    }), encoding="utf-8")
+
+    report = import_baidu_oauth_bundle(tmp_path, bundle_path, "changsha_niu_baidu")
+
+    saved = json.loads(secrets_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["sub_account_count"] == 1
+    assert "access_token" not in report
+    assert saved["baidu_api"]["changsha_niu_baidu"]["access_token"] == "new.access.token"
+    assert saved["baidu_api"]["changsha_niu_baidu"]["refresh_token"] == "new.refresh.token"
+    assert len(list((tmp_path / "backups").glob("secrets_before_oauth_*.json"))) == 1
+
+
+def test_baidu_oauth_callback_exchanges_code_and_exports_subaccounts(tmp_path, monkeypatch):
+    import importlib.util
+
+    callback_path = Path(__file__).resolve().parents[1] / "cloud" / "baidu_oauth_callback" / "index.py"
+    spec = importlib.util.spec_from_file_location("baidu_oauth_callback_test", callback_path)
+    callback = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(callback)
+    monkeypatch.setattr(callback, "_verify_signature", lambda query, secret: True)
+    now_ms = str(int(__import__("time").time() * 1000))
+    query = {
+        "appId": "app-1",
+        "authCode": "temporary-code",
+        "state": "expected-state",
+        "userId": "123",
+        "timestamp": now_ms,
+        "signature": "signed",
+    }
+    calls = []
+
+    def fake_transport(url, payload, timeout):
+        calls.append((url, payload, timeout))
+        if url.endswith("/accessToken"):
+            return {"code": "0", "data": {
+                "accessToken": "new.access.token",
+                "refreshToken": "new.refresh.token",
+                "openId": "open-1",
+                "userId": 123,
+                "expiresIn": 86400,
+                "refreshExpiresIn": 2592000,
+            }}
+        return {"code": "0", "data": {
+            "masterUid": 123,
+            "masterName": "manager",
+            "userAcctType": 2,
+            "hasNext": False,
+            "subUserList": [{"ucId": 456, "ucName": "child"}],
+        }}
+
+    bundle = callback.process_oauth_callback(
+        query,
+        {"app_id": "app-1", "secret_key": "1234567890abcdef-extra", "allowed_states": {"expected-state"}, "max_timestamp_skew_seconds": 600},
+        fake_transport,
+    )
+
+    assert bundle["format"] == "baidu-oauth-export-v1"
+    assert bundle["authorization"]["sub_accounts"] == [{"user_id": 456, "user_name": "child"}]
+    assert calls[0][1]["grantType"] == "auth_code"
+    assert calls[1][1]["needSubList"] is True
+    assert calls[1][1]["lastPageMaxUcId"] == 1
 
 
 def test_regular_build_excludes_secrets_json():
@@ -5233,6 +5509,38 @@ def test_regular_build_excludes_secrets_json():
     assert "configs/projects/project_template.json" in names
 
 
+def test_online_update_build_contains_program_but_excludes_user_data():
+    from tools.build_release import release_name
+
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="2026.7.15.101", online_update=True)
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+
+    assert release.name == "baidu_data_automation_update_2026.7.15.101.zip"
+    assert release_name("2026.7.15.101", online_update=True) == release.name
+    assert "百度数据自动化控制台.exe" in names
+    assert "main.py" in names
+    assert "gui/version.py" in names
+    assert not any(name.startswith("configs/") for name in names)
+    assert not any(name.startswith("secrets/") for name in names)
+    assert not any(name.startswith("logs/") for name in names)
+    assert not any(name.startswith("reports/") for name in names)
+    assert not any(name.startswith("backups/") for name in names)
+    assert not any(name.startswith("browser_profile/") for name in names)
+
+
+def test_online_update_file_filter_never_includes_user_configuration():
+    assert should_include_file(Path("main.py"), online_update=True) is True
+    assert should_include_file(Path("gui") / "main_window.py", online_update=True) is True
+    assert should_include_file(Path("dist") / "百度数据自动化控制台.exe", online_update=True) is True
+    assert should_include_file(Path("configs") / "app_config.json", online_update=True) is False
+    assert should_include_file(Path("configs") / "projects" / "kunming_niu.json", online_update=True) is False
+    assert should_include_file(Path("secrets") / "secrets.json", online_update=True) is False
+
+
 def test_internal_build_includes_secrets_json():
     """内部 build_release 包含 secrets/secrets.json。"""
     root = Path(__file__).resolve().parents[1]
@@ -5247,7 +5555,7 @@ def test_internal_build_includes_secrets_json():
 
 def test_internal_build_includes_desktop_exe_when_available():
     root = Path(__file__).resolve().parents[1]
-    exe = root / "dist" / "百度日报小时报控制台" / "百度日报小时报控制台.exe"
+    exe = root / "dist" / "百度数据自动化控制台.exe"
     exe.parent.mkdir(parents=True, exist_ok=True)
     if not exe.exists():
         exe.write_bytes(b"placeholder exe")
@@ -5257,9 +5565,29 @@ def test_internal_build_includes_desktop_exe_when_available():
     import zipfile
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
-    assert "dist/百度日报小时报控制台/百度日报小时报控制台.exe" in names
-    assert "dist/百度日报小时报控制台/_internal/base_library.zip" in names
+    assert "百度数据自动化控制台.exe" in names
+    assert not any(name.startswith("dist/") for name in names)
+    assert not any("_internal" in name for name in names)
     assert release.name == "hourly_report_bot_internal_v2.0.zip"
+
+
+def test_release_resets_machine_specific_desktop_pet_position():
+    root = Path(__file__).resolve().parents[1]
+    release = build_release(root, version="pet-portable", internal=True)
+
+    import zipfile
+    with zipfile.ZipFile(release) as archive:
+        config = json.loads(archive.read("configs/app_config.json").decode("utf-8"))
+
+    assert config["desktop_pet"] == "clawd"
+    assert config["desktop_pet_scale"] == 1.0
+    assert "desktop_pet_position" not in config
+
+
+def test_default_internal_release_name_uses_hermes_date_marker():
+    from tools.build_release import release_name
+
+    assert release_name(internal=True) == "hourly_report_bot_internal_hermes_20260710.zip"
 
 
 def test_internal_build_validates_missing_profile(tmp_path):
@@ -5350,43 +5678,40 @@ def test_xia_sidao_readme_exists():
     path = root / "xia_sidao使用说明.md"
     assert path.exists(), "xia_sidao使用说明.md 不存在"
     content = path.read_text(encoding="utf-8")
-    assert "执行命令" in content
-    assert "run_menu.bat" in content
-    assert "参数表" in content
-    assert "验证标准" in content
+    assert "唯一自动入口" in content
+    assert "HERMES-20260710" in content
+    assert "run_hermes_hourly.bat" in content
+    assert "run_hermes_daily.bat" in content
     for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "青岛白", "深圳白", "南京白", "沈阳白"]:
         assert name in content, f"缺少项目：{name}"
     assert "双百度来源" in content
 
 
-def test_xia_sidao_readme_tracks_rich_menu_and_openclaw_fixed_entries():
-    """夏思道说明同步当前 Rich 菜单与仍保持稳定的 OpenClaw 入口。"""
+def test_xia_sidao_readme_tracks_hermes_only_fixed_entries():
+    """夏思道说明只保留 HERMES 固定入口。"""
     root = Path(__file__).resolve().parents[1]
     content = (root / "xia_sidao使用说明.md").read_text(encoding="utf-8")
 
-    assert "v1.0 内部发布版" in content
-    assert "Rich 控制台" in content
-    for label in ["3. 切换项目", "4. 检查条件项", "5. 更多功能"]:
-        assert label in content
-    assert "3. 项目列表" not in content
-    assert "run_openclaw_hourly.bat 11点" in content
-    assert "run_openclaw_daily.bat" in content
-    assert "菜单布局调整不影响 OpenClaw 固定入口" in content
+    assert "HERMES-20260710" in content
+    assert "run_hermes_hourly.bat 11点" in content
+    assert "run_hermes_daily.bat" in content
+    retired_names = ("".join(("Open", "Claw")), "".join(("run_", "open", "claw")))
+    assert all(name not in content for name in retired_names)
 
 
-def test_xia_sidao_readme_tracks_v1_current_scope_without_retired_workflows():
-    """夏思道说明只保留 V1.0 当前能力与安全规则。"""
+def test_xia_sidao_readme_tracks_current_scope_without_retired_workflows():
+    """夏思道说明只保留当前能力与安全规则。"""
     root = Path(__file__).resolve().parents[1]
     content = (root / "xia_sidao使用说明.md").read_text(encoding="utf-8")
 
-    assert "十个正式项目" in content
-    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "合肥白", "青岛白", "深圳白", "南京白", "沈阳白"]:
+    assert "正式项目" in content
+    for name in ["昆明牛", "南京牛", "宁波牛", "长沙牛", "沈阳牛", "青岛白", "深圳白", "南京白", "沈阳白"]:
         assert name in content, f"缺少项目：{name}"
-    for text in ["小时报和日报均在写入前先备份目标 Excel", "筛选按钮", "从本次写入前备份恢复"]:
+    for text in ["Excel 写入前必须备份原文件", "不重建工作簿", "失败后禁止手工补数字"]:
         assert text in content
-    for text in ["browser_profile/chrome_debug", "silent_automation=true", "window_state=minimized", "保存密码提示"]:
+    for text in ["Chrome 调试端口 `9222`", "不自动改用 Edge", "cookie/storage"]:
         assert text in content
-    for retired in ["腾讯文档", "fill_daily_visit.py", "cron", "v0.4.19", "v0.4.21"]:
+    for retired in ["腾讯文档", "fill_daily_visit.py", "cron", "v0.4.19", "v0.4.21", "v1.0 内部发布版"]:
         assert retired not in content
 
 
@@ -5499,18 +5824,24 @@ def test_desktop_gui_task_runner_forces_utf8_environment():
 
 
 def test_desktop_gui_requirements_include_gui_packaging_deps():
-    requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+    root = Path(__file__).resolve().parents[1]
+    requirements = (root / "requirements-dev.txt").read_text(encoding="utf-8")
+    runtime = (root / "requirements-runtime.txt").read_text(encoding="utf-8")
 
     assert "PySide6" in requirements
     assert "pyinstaller" in requirements
+    assert "PySide6" not in runtime
+    assert "pyinstaller" not in runtime
+    assert "playwright" in runtime
 
 
 def test_desktop_gui_resolves_project_root_from_workspace():
-    from gui.app import resolve_app_root
+    from gui.app import GUI_SCALE_FACTOR, resolve_app_root
 
     root = Path(__file__).resolve().parents[1]
 
     assert resolve_app_root() == root
+    assert GUI_SCALE_FACTOR == "1.0"
 
 
 def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
@@ -5525,51 +5856,111 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
     assert window.progress.objectName() == "taskProgress"
     assert window.progress_text.objectName() == "taskProgressText"
     assert window.progress.maximum() == 8
-    assert "项目" in window.progress_text.text()
+    assert window.progress.isHidden()
+    assert "任务" in window.progress_text.text()
     window.close()
 
 
-def test_desktop_gui_window_is_resizable_and_header_hidden(monkeypatch):
+def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QFrame
     from gui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert window.width() <= 1180
-    assert window.height() <= 780
-    assert window.minimumWidth() <= 980
-    assert window.minimumHeight() <= 660
-    assert window.maximumWidth() > window.minimumWidth()
-    assert window.maximumHeight() > window.minimumHeight()
-    assert window.left_panel.minimumWidth() == 390
-    assert window.left_panel.maximumWidth() == 390
+    assert (window.width(), window.height()) == (960, 694)
+    assert (window.minimumWidth(), window.minimumHeight()) == (960, 694)
+    assert (window.maximumWidth(), window.maximumHeight()) == (960, 694)
+    window.resize(1200, 900)
+    assert (window.width(), window.height()) == (960, 694)
+    assert window.left_panel.minimumWidth() == 372
+    assert window.left_panel.maximumWidth() == 372
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
     assert window.title_bar.objectName() == "titleBar"
-    assert window.title_bar.height() <= 44
-    assert window.spinner.width() <= 15
-    assert window.spinner.objectName() == "pixelSnakeSpinner"
+    assert window.title_bar.height() == 39
+    assert 40 <= window.spinner.width() <= 52
+    assert window.spinner.height() <= 26
+    assert window.spinner.objectName() == "clawdAnimator"
     assert window.title_label.text() == "百度数据自动化控制台"
     assert window.title_label.font().pointSize() == 10
     assert window.system_config_button.text().startswith("系统配置")
-    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
-    assert window.maximize_button.text() == ""
-    assert window.minimize_button.width() <= 30
-    assert window.maximize_button.width() <= 30
-    assert window.close_button.width() <= 30
-    assert window.minimize_button.width() == window.maximize_button.width() == window.close_button.width()
-    assert window.minimize_button.height() == window.maximize_button.height() == window.close_button.height()
-    assert window.minimize_button.iconSize().width() == window.maximize_button.iconSize().width() == window.close_button.iconSize().width()
-    assert not window.minimize_button.icon().isNull()
-    assert not window.maximize_button.icon().isNull()
+    assert window.system_config_button.height() == window.title_label.height()
+    assert window.hourly_title.text() == "小时报选择"
+    assert window.daily_title.text() == "日报执行"
+    assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
+        "项目配置检查", "恢复备份", "桌面宠物", "退出程序"
+    ]
+    assert window.minimize_button.toolTip() == "最小化"
+    assert window.maximize_button.toolTip() == "最大化"
+    assert not hasattr(window, "size_grip")
+    assert all(button.width() == 34 and button.height() == 32 for button in (
+        window.minimize_button, window.maximize_button, window.close_button
+    ))
+    assert window.close_button.toolTip() == "关闭界面"
     assert not window.close_button.icon().isNull()
     assert not window.windowIcon().isNull()
-    assert window.font().family() == "Microsoft YaHei Light"
+    assert window.font().family() == "Microsoft YaHei UI"
     assert window.font().pointSize() == 9
+    assert window.left_layout.spacing() == 14
+    assert window.task_control_card.minimumHeight() == window.task_control_card.maximumHeight() == 208
+    assert window.hourly_card.minimumHeight() == window.hourly_card.maximumHeight() == 202
+    assert window.daily_card.minimumHeight() == window.daily_card.maximumHeight() == 204
+    assert window.stage_panel.isHidden()
+    assert window.current_flow_panel.height() == 224
+    assert window.log_view.height() >= 300
+    assert window.shell_surface.objectName() == "shellSurface"
+    assert window.shell_surface.frameShape() == QFrame.Shape.NoFrame
+    assert window.shell_layout.contentsMargins().left() == 11
+    assert window.shell_layout.contentsMargins().top() == 6
+    assert window.shell_layout.contentsMargins().right() == 11
+    assert window.shell_layout.contentsMargins().bottom() == 7
+    assert "QFrame#shellSurface" in window.styleSheet()
+    assert "border-radius: 0" in window.styleSheet()
+    window.close()
+
+
+def test_desktop_gui_log_bottom_aligns_with_daily_card(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+
+    daily_bottom = window.daily_card.mapTo(window, window.daily_card.rect().bottomLeft()).y()
+    content_bottom = window.content_panel.mapTo(window, window.content_panel.rect().bottomLeft()).y()
+    assert content_bottom == daily_bottom
+
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_maximize_button_toggles_standard_and_maximized_states(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+
+    window.toggle_maximize()
+    app.processEvents()
+    assert window.isMaximized()
+    assert window.maximize_button.toolTip() == "还原"
+    window.toggle_maximize()
+    app.processEvents()
+    assert not window.isMaximized()
+    assert (window.width(), window.height()) == (960, 694)
+    assert window.maximize_button.toolTip() == "最大化"
+    window._quitting = True
     window.close()
 
 
@@ -5592,23 +5983,15 @@ def test_desktop_gui_matches_reference_dashboard_structure(monkeypatch):
     assert window.flow_header_icon.objectName() == "flowHeaderIcon"
     assert window.flow_header_icon.pixmap().width() >= 22
     assert window.flow_header_icon.property("iconKind") == "flow"
-    assert window.flow_idle_icon.width() >= 30
-    assert not window.flow_idle_icon.isHidden()
-    assert window.flow_spinner.isHidden()
-    assert [button.objectName() for button in window.stage_buttons] == ["stageActionButton"] * 8
-    assert [button.text() for button in window.stage_buttons] == [
-        "环境检测",
-        "项目配置",
-        "快速自检",
-        "登录账号",
-        "百度数据",
-        "快商通数据",
-        "Excel写入",
-        "报告输出",
-    ]
-    assert all(not button.icon().isNull() for button in window.stage_buttons)
-    assert all(button.font().family() == "Microsoft YaHei Light" for button in window.stage_buttons)
-    assert all(button.minimumHeight() <= 44 for button in window.stage_buttons)
+    assert window.flow_crab.width() == 138
+    assert not window.flow_crab.isHidden()
+    assert window.flow_crab._mode == "idle"
+    assert window.flow_idle_icon.isHidden()
+    assert window.flow_spinner.objectName() == "clawdAnimator"
+    assert window.stage_buttons == []
+    assert window.stage_labels == {}
+    assert window.log_ready_badge.text() == "已就绪"
+    assert window.log_ready_badge.parent() is window.log_view.ready_overlay
     window.close()
 
 
@@ -5624,6 +6007,84 @@ def test_desktop_gui_daily_date_uses_project_card_style(monkeypatch):
     assert window.date_button.objectName() == "datePickerButton"
     assert window.date_button.minimumHeight() >= window.date_button.fontMetrics().height() + 2
     assert window.selected_daily_date() in window.date_button.text()
+    assert "QPushButton#datePickerButton" in window.styleSheet()
+    assert "text-align: center" in window.styleSheet()
+    window.close()
+
+
+def test_desktop_gui_calendar_uses_codex_style_popup_and_double_click_accepts(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from datetime import date
+    from PySide6.QtCore import QDate, QEvent, QCoreApplication, Qt
+    from PySide6.QtWidgets import QApplication, QDialog
+    from gui.main_window import ModernCalendarDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = ModernCalendarDialog(date(2026, 7, 11))
+
+    assert dialog.objectName() == "calendarPopup"
+    assert dialog.calendar.objectName() == "modernCalendar"
+    assert not dialog.calendar.isNavigationBarVisible()
+    assert dialog.month_label.text() == "2026年 7月"
+    assert "#ffffff" in dialog.styleSheet()
+    assert dialog.surface.graphicsEffect() is None
+    assert bool(dialog.windowFlags() & Qt.WindowType.NoDropShadowWindowHint)
+    dialog.show()
+    app.processEvents()
+    assert dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    QCoreApplication.sendEvent(dialog, QEvent(QEvent.Type.Leave))
+    assert dialog.result() == QDialog.DialogCode.Rejected
+    assert not dialog.isVisible()
+
+    dialog = ModernCalendarDialog(date(2026, 7, 11))
+    dialog.calendar.activated.emit(QDate(2026, 7, 11))
+    assert dialog.result() == QDialog.DialogCode.Accepted
+    dialog.close()
+
+
+def test_desktop_gui_date_button_toggles_single_calendar_popup(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+
+    window.pick_daily_date()
+    app.processEvents()
+    assert window.calendar_dialog is not None
+    assert window.calendar_dialog.isVisible()
+
+    dialog = window.calendar_dialog
+    button_global = window.date_button.mapToGlobal(window.date_button.rect().topLeft())
+    anchor_offset = dialog.pos() - button_global
+    window.move(window.pos().x() + 40, window.pos().y() + 30)
+    app.processEvents()
+    moved_button_global = window.date_button.mapToGlobal(window.date_button.rect().topLeft())
+    assert dialog.pos() - moved_button_global == anchor_offset
+
+    window.pick_daily_date()
+    app.processEvents()
+    assert window.calendar_dialog is None
+
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_flow_uses_clawd_idle_and_dance_modes(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    assert window.flow_crab._mode == "idle"
+    window.set_current_flow("hourly", "运行小时报", "昆明牛 15点", "运行中")
+    assert window.flow_crab._mode == "dance"
+    window.set_current_flow_idle()
+    assert window.flow_crab._mode == "idle"
     window.close()
 
 
@@ -5636,16 +6097,16 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     window = MainWindow(Path(__file__).resolve().parents[1])
 
     assert MAIN_FONT_PT == 9
-    assert SUB_FONT_PT == 9
+    assert SUB_FONT_PT == 8
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
-    assert window.title_label.font().family() == "Microsoft YaHei Light"
-    assert window.system_config_button.font().family() == "Microsoft YaHei Light"
+    assert window.title_label.font().family() == "Microsoft YaHei UI"
+    assert window.system_config_button.font().family() == "Microsoft YaHei UI"
     assert window.log_view.font().family() in {"Consolas", "Cascadia Mono"}
     assert window.log_view.font().pointSize() == MAIN_FONT_PT
-    assert 'font-family: "Microsoft YaHei Light", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
+    assert 'font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
-    assert "font-weight: 600" not in window.styleSheet()
+    assert "font-weight: 600" in window.styleSheet()
     assert "QScrollBar:vertical" in window.styleSheet()
     window.close()
 
@@ -5662,8 +6123,32 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "credentials_config_button")
     assert window.system_config_button.text() == "系统配置"
     assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize()
-    assert [action.text() for action in window.system_config_menu.actions()] == ["更新路径", "更新账号密码", "恢复备份"]
-    assert window.environment_check_button.text() == "项目配置检查"
+    assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统配置") + 20
+    assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
+    assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
+        "项目配置检查", "恢复备份", "桌面宠物", "退出程序"
+    ]
+    from gui.main_window import InlineMenuRow
+    inline_labels = [row.text() for row in window.inline_config_menu.findChildren(InlineMenuRow)]
+    assert "更新 Excel 路径" not in inline_labels
+    assert "更新账号密码" not in inline_labels
+    assert [action.text() for action in window.pet_menu.actions() if not action.isSeparator()] == [
+        "Clawd 小螃蟹", "隐藏宠物"
+    ]
+    from gui.pet_settings import PET_CLAWD, PET_HIDDEN, load_pet_mode, load_pet_scale
+    configured_pet_mode = load_pet_mode(Path(__file__).resolve().parents[1])
+    assert window.clawd_pet_action.isChecked() == (configured_pet_mode == PET_CLAWD)
+    assert window.hidden_pet_action.isChecked() == (configured_pet_mode == PET_HIDDEN)
+    assert window.inline_config_menu.size_slider.minimum() == 50
+    assert window.inline_config_menu.size_slider.maximum() == 120
+    assert window.inline_config_menu.size_slider.value() == round(
+        load_pet_scale(Path(__file__).resolve().parents[1]) * 100
+    )
+    assert window.project_check_action.text() == "项目配置检查"
+    assert window.system_config_button.icon().isNull()
+    assert all(action.icon().isNull() for action in window.system_config_menu.actions())
+    assert all(action.icon().isNull() for action in window.pet_menu.actions())
+    assert not hasattr(window, "environment_check_button")
     assert not hasattr(window, "guide_button")
     assert not hasattr(window, "refresh_button")
     assert not hasattr(window, "preflight_hourly_button")
@@ -5671,6 +6156,14 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "command_line")
     assert window.selected_project_config_path().name.endswith(".json")
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
+    assert window.update_button.isHidden()
+    assert window.update_button.text() == "更新"
+    window.on_update_download_progress(41)
+    assert not window.update_button.isHidden()
+    assert window.update_button.text() == "下载 41%"
+    window.on_update_ready("2026.7.15.102", Path("update.zip"))
+    assert window.update_button.text() == "更新"
+    assert "2026.7.15.102" in window.update_button.toolTip()
     window.close()
 
 
@@ -5683,6 +6176,116 @@ def test_desktop_gui_defaults_to_kunming_project(monkeypatch):
     window = MainWindow(Path(__file__).resolve().parents[1])
 
     assert window.selected_project_id() == "kunming_niu"
+    assert window.project_combo.currentText() == "昆明牛"
+    assert "(" not in window.project_combo.currentText()
+    assert len(window.projects) == 9
+    assert all(project.project_id != "hefei_bai" for project in window.projects)
+    window.close()
+
+
+def test_desktop_gui_project_selector_supports_multi_project_ui_without_running(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+
+    assert window.single_project_button.isChecked()
+    assert not window.project_combo.is_multi_mode()
+    assert not hasattr(window.project_combo, "count_label")
+    assert window.project_combo.summary_label.text() == "昆明牛"
+    assert window.project_combo.border_overlay.geometry() == window.project_combo.rect()
+    assert window.project_combo.border_overlay.isVisible()
+    assert window.project_mode_segment.animation.duration() == 150
+
+    window.multi_project_button.click()
+    app.processEvents()
+    assert window.project_combo.is_multi_mode()
+    assert window.multi_preview_hint.isVisible()
+    assert window.project_mode_segment.indicator.property("preview") is True
+    assert "#fff1f2" in window.styleSheet()
+    assert window.project_combo.selected_project_ids() == ["kunming_niu"]
+    assert "至少选择 2 个" in window.progress_text.text()
+    assert window.project_combo.summary_label.isHidden()
+
+    second_project = next(project.project_id for project in window.projects if project.project_id != "kunming_niu")
+    popup = window.project_combo.popup
+    popup.set_data(
+        [(project.project_name, project.project_id) for project in window.projects],
+        window.project_combo.selected_project_ids(),
+        True,
+        "kunming_niu",
+    )
+    assert popup.rows_layout.itemAtPosition(0, 0) is not None
+    assert popup.rows_layout.itemAtPosition(0, 2) is not None
+    assert popup.rows_layout.itemAtPosition(2, 2) is not None
+    assert popup.rows_layout.itemAtPosition(3, 0) is None
+    assert popup.scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert popup.height() == 196
+    assert all(not button.text()[:1].isdigit() for button in popup._project_buttons.values())
+
+    popup.search.setText("sy")
+    assert popup._project_buttons
+    assert all("沈阳" in button.text() for button in popup._project_buttons.values())
+    popup.search.setText("b")
+    assert popup._project_buttons
+    assert all(button.text().endswith("白") for button in popup._project_buttons.values())
+    popup.search.setText("n")
+    assert popup._project_buttons
+    assert all(button.text().endswith("牛") for button in popup._project_buttons.values())
+    popup.search.clear()
+
+    popup._toggle_project(second_project, True)
+    assert popup.confirm_button.isEnabled()
+    popup._confirm()
+    assert window.project_combo.selected_project_ids() == ["kunming_niu", second_project]
+    assert window.project_combo.border_overlay.geometry() == window.project_combo.rect()
+    assert window.project_combo.border_overlay.isVisible()
+    chip_names = [
+        window.project_combo.chips_layout.itemAt(index).widget().text()
+        for index in range(window.project_combo.chips_layout.count())
+        if window.project_combo.chips_layout.itemAt(index).widget()
+    ]
+    assert chip_names == ["昆明牛", next(project.project_name for project in window.projects if project.project_id == second_project)]
+    chip_widgets = [
+        window.project_combo.chips_layout.itemAt(index).widget()
+        for index in range(window.project_combo.chips_layout.count())
+        if window.project_combo.chips_layout.itemAt(index).widget()
+    ]
+    assert all(chip.height() == 22 and chip.height() > chip.fontMetrics().height() for chip in chip_widgets)
+    assert "已按顺序选择 2 个项目" in window.progress_text.text()
+
+    popup.set_data(
+        [(project.project_name, project.project_id) for project in window.projects],
+        window.project_combo.selected_project_ids(),
+        True,
+        "kunming_niu",
+    )
+    popup._clear_selection()
+    assert popup._selected_ids == ["kunming_niu"]
+    assert not popup.confirm_button.isEnabled()
+    extra_projects = [project.project_id for project in window.projects if project.project_id != "kunming_niu"][:3]
+    for project_id in extra_projects:
+        popup._toggle_project(project_id, True)
+    assert len(popup._selected_ids) == 3
+    assert popup.summary.text() == "最多选择 3 个项目"
+
+    messages = []
+    starts = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
+    monkeypatch.setattr(window, "start_command", lambda *args: starts.append(args))
+    window.run_hourly()
+    assert messages and "不会只执行" in messages[0]
+    assert starts == []
+
+    selector_bottom = window.project_combo.mapTo(window.task_control_card, window.project_combo.rect().bottomLeft()).y()
+    assert selector_bottom < window.task_control_card.height()
+    popup.hide()
+    window._quitting = True
     window.close()
 
 
@@ -5733,10 +6336,16 @@ def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
     window = MainWindow(Path(__file__).resolve().parents[1])
 
     assert 'QPushButton#periodButton:checked' in window.styleSheet()
-    assert '#dff7ea' in window.styleSheet()
+    assert 'background: #ffffff' in window.styleSheet()
     assert all(not button.autoDefault() for button in window.period_buttons)
-    assert window.period_buttons[1].text() == "15点"
+    assert window.period_buttons[1].text() == "15:00"
     assert window.period_buttons[1].icon().isNull() is False
+    window.show()
+    app.processEvents()
+    assert len({button.width() for button in [window.hourly_button, *window.period_buttons]}) == 1
+    image = window.period_buttons[1].grab().toImage()
+    check_color = image.pixelColor(window.period_buttons[1].width() - 17, 13)
+    assert check_color.green() > check_color.red()
     window.close()
 
 
@@ -5758,6 +6367,7 @@ def test_desktop_gui_current_flow_updates_for_hourly_and_daily(monkeypatch):
     assert window.current_start_time_label.text().startswith("开始时间：")
     assert window.flow_idle_icon.isHidden()
     assert not window.flow_spinner.isHidden()
+    assert window.flow_crab._mode == "dance"
 
     window.run_daily()
     assert window.current_task_title.text() == "运行日报"
@@ -5834,6 +6444,148 @@ def test_desktop_gui_environment_check_reports_missing_python(tmp_path):
     assert python_check["severity"] == "error"
 
 
+def test_first_startup_creates_all_project_kst_directories_and_marker(tmp_path):
+    from gui.environment_check import KST_PROJECT_DIR_NAMES, initialize_kst_directories_once
+
+    data_root = tmp_path / "商务通数据"
+    marker = tmp_path / "local-app-data" / "kst_directories_v1.json"
+
+    result = initialize_kst_directories_once(data_root=data_root, marker_path=marker)
+
+    assert result["passed"] is True
+    assert result["status"] == "initialized"
+    assert marker.is_file()
+    assert sorted(path.name for path in data_root.iterdir() if path.is_dir()) == sorted(KST_PROJECT_DIR_NAMES)
+    assert "合肥白" not in KST_PROJECT_DIR_NAMES
+
+
+def test_first_startup_marker_skips_future_directory_checks(tmp_path):
+    from gui.environment_check import initialize_kst_directories_once
+
+    data_root = tmp_path / "商务通数据"
+    marker = tmp_path / "local-app-data" / "kst_directories_v1.json"
+    first = initialize_kst_directories_once(data_root=data_root, marker_path=marker)
+    removed = data_root / "昆明牛"
+    removed.rmdir()
+
+    second = initialize_kst_directories_once(data_root=data_root, marker_path=marker)
+
+    assert first["status"] == "initialized"
+    assert second["passed"] is True
+    assert second["status"] == "skipped"
+    assert not removed.exists()
+
+
+def test_failed_first_startup_does_not_write_completion_marker(tmp_path):
+    from gui.environment_check import initialize_kst_directories_once
+
+    data_root = tmp_path / "商务通数据"
+    data_root.write_text("not a directory", encoding="utf-8")
+    marker = tmp_path / "local-app-data" / "kst_directories_v1.json"
+
+    result = initialize_kst_directories_once(data_root=data_root, marker_path=marker)
+
+    assert result["passed"] is False
+    assert result["status"] == "failed"
+    assert not marker.exists()
+
+
+def test_first_startup_rejects_project_name_occupied_by_file(tmp_path):
+    from gui.environment_check import initialize_kst_directories_once
+
+    data_root = tmp_path / "商务通数据"
+    data_root.mkdir()
+    (data_root / "南京牛").write_text("not a directory", encoding="utf-8")
+    marker = tmp_path / "local-app-data" / "kst_directories_v1.json"
+
+    result = initialize_kst_directories_once(data_root=data_root, marker_path=marker)
+
+    assert result["passed"] is False
+    assert result["status"] == "failed"
+    assert "南京牛" in result["detail"]
+    assert not marker.exists()
+
+
+def test_desktop_window_entry_runs_first_startup_directory_initialization(tmp_path, monkeypatch):
+    import gui.main_window as main_window
+
+    calls = []
+    report = {"passed": True, "status": "initialized", "detail": "ready"}
+
+    class FakeWindow:
+        def __init__(self, root):
+            self.root = Path(root)
+            self.startup_kst_initialization = None
+            self.shown = False
+            self.update_check_started = False
+
+        def show(self):
+            self.shown = True
+
+        def start_update_check(self):
+            self.update_check_started = True
+
+    monkeypatch.setattr(main_window, "initialize_kst_directories_once", lambda: calls.append(True) or report)
+    monkeypatch.setattr(main_window, "MainWindow", FakeWindow)
+
+    window = main_window.create_window(tmp_path)
+
+    assert calls == [True]
+    assert window.startup_kst_initialization == report
+    assert window.shown is True
+    assert window.update_check_started is True
+
+
+def test_online_update_selects_newer_github_release_asset():
+    from gui.update_manager import CURRENT_VERSION, parse_version, select_release_update
+
+    assert CURRENT_VERSION == "2026.7.15.101"
+    assert parse_version("v2026.7.15.101") == (2026, 7, 15, 101)
+    payload = {
+        "tag_name": "v2026.7.15.102",
+        "assets": [
+            {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
+            {
+                "name": "baidu_data_automation_update_2026.7.15.102.zip",
+                "browser_download_url": "https://example/update.zip",
+                "digest": "sha256:" + "a" * 64,
+                "size": 123,
+            },
+        ],
+    }
+
+    update = select_release_update(payload, CURRENT_VERSION)
+
+    assert update is not None
+    assert update.version == "2026.7.15.102"
+    assert update.download_url == "https://example/update.zip"
+    assert update.sha256 == "a" * 64
+    assert select_release_update(payload, "2026.7.15.102") is None
+
+
+def test_online_update_archive_rejects_path_traversal(tmp_path):
+    import pytest
+    import zipfile
+
+    from gui.update_manager import validate_update_archive
+
+    valid = tmp_path / "valid.zip"
+    with zipfile.ZipFile(valid, "w") as archive:
+        archive.writestr("gui/main_window.py", "ok")
+        archive.writestr("gui/version.py", "CURRENT_VERSION = 'test'")
+        archive.writestr("main.py", "ok")
+        archive.writestr("百度数据自动化控制台.exe", "exe")
+    assert validate_update_archive(valid) == [
+        "gui/main_window.py", "gui/version.py", "main.py", "百度数据自动化控制台.exe"
+    ]
+
+    malicious = tmp_path / "malicious.zip"
+    with zipfile.ZipFile(malicious, "w") as archive:
+        archive.writestr("../secrets/secrets.json", "bad")
+    with pytest.raises(ValueError, match="不安全"):
+        validate_update_archive(malicious)
+
+
 def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_missing(tmp_path, monkeypatch):
     import gui.environment_check as environment_check
 
@@ -5853,17 +6605,364 @@ def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_miss
     assert result["returncode"] == 0
     assert calls
     assert calls[0][1]["cwd"] == tmp_path
+    assert calls[0][0][0] == ["cmd.exe", "/d", "/c", str(install)]
+
+
+def test_desktop_gui_python_bootstrap_is_pinned_and_hash_verified():
+    root = Path(__file__).resolve().parents[1]
+    bootstrap = (root / "tools" / "bootstrap_python.ps1").read_text(encoding="utf-8")
+    installer = (root / "install_env.bat").read_text(encoding="utf-8")
+
+    assert 'Version = "3.14.6"' in bootstrap
+    assert "python.org/ftp/python/$Version" in bootstrap
+    assert "14b3e9a710a3fcf0bd9b55ab6b60412bd91227563f813fc49040cabc0209e0bd" in bootstrap
+    assert "Get-FileHash" in bootstrap
+    assert "runtime\\python" in installer
+    assert "bootstrap_python.ps1" in installer
+    assert "requirements-runtime.txt" in installer
+
+
+def test_windows_user_entry_bats_are_ascii_and_use_crlf():
+    root = Path(__file__).resolve().parents[1]
+    entry_names = [
+        "install_env.bat",
+        "run_menu.bat",
+        "run_desktop_gui.bat",
+        "run_hermes_hourly.bat",
+        "run_hermes_daily.bat",
+    ]
+
+    for name in entry_names:
+        raw = (root / name).read_bytes()
+        raw.decode("ascii")
+        assert b"\n" in raw, name
+        assert raw.count(b"\n") == raw.count(b"\r\n"), name
+
+
+def test_install_env_check_mode_is_parseable_and_has_no_side_effects():
+    if os.name != "nt":
+        return
+
+    import subprocess
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ["cmd.exe", "/d", "/c", "install_env.bat", "--check"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "[ENV][CHECK] PYTHON_READY=" in result.stdout
+    assert "Environment setup completed" not in result.stdout
 
 
 def test_desktop_gui_task_runner_infers_progress_stages():
-    from gui.task_runner import infer_stage
+    from gui.task_runner import infer_pet_event, infer_stage
 
-    assert infer_stage("[OpenClaw] Running hourly quick preflight...") == "preflight"
+    assert infer_stage("[HERMES] Running hourly quick preflight...") == "preflight"
     assert infer_stage("[通知] 百度账号登录完成") == "login"
     assert infer_stage("fetch-baidu-auto started") == "baidu"
     assert infer_stage("parse-kst-export completed") == "kst"
     assert infer_stage("Excel 写入完成") == "excel"
     assert infer_stage("[ERROR] Preflight failed") == "error"
+    assert infer_pet_event("已填写百度登录字段：username") == "login"
+    assert infer_pet_event("顶部用户名已匹配项目账号") == "login_ready"
+    assert infer_pet_event("[1/4] 读取百度搜索推广数据") == "baidu"
+    assert infer_pet_event("百度日报表格数据已稳定") == "baidu_ready"
+    assert infer_pet_event("[2/4] 解析快商通导出文件") == "kst"
+    assert infer_pet_event("[3/4] 合并百度与快商通数据") == "merge"
+    assert infer_pet_event("[4/4] 写入 Excel 并复核") == "excel"
+    assert infer_pet_event("[失败] 百度数据读取异常") == "failed"
+    assert infer_pet_event("百度数据读取未通过") == "failed"
+
+
+def test_desktop_pet_settings_default_to_clawd_and_persist_hidden(tmp_path):
+    from gui.pet_settings import (
+        PET_CLAWD,
+        PET_HIDDEN,
+        load_pet_mode,
+        load_pet_position,
+        load_pet_scale,
+        save_pet_mode,
+        save_pet_position,
+        save_pet_scale,
+    )
+
+    config = tmp_path / "configs" / "app_config.json"
+    config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({"default_project_id": "demo"}, ensure_ascii=False), encoding="utf-8")
+
+    assert load_pet_mode(tmp_path) == PET_CLAWD
+    save_pet_mode(tmp_path, PET_HIDDEN)
+
+    saved = json.loads(config.read_text(encoding="utf-8"))
+    assert saved["default_project_id"] == "demo"
+    assert saved["desktop_pet"] == PET_HIDDEN
+    assert load_pet_mode(tmp_path) == PET_HIDDEN
+    assert load_pet_scale(tmp_path) == 1.0
+    assert load_pet_position(tmp_path) is None
+
+    save_pet_scale(tmp_path, 0.73)
+    save_pet_position(tmp_path, 321, 654)
+    assert load_pet_scale(tmp_path) == 0.73
+    assert load_pet_position(tmp_path) == (321, 654)
+    save_pet_scale(tmp_path, 1.4)
+    assert load_pet_scale(tmp_path) == 1.2
+    save_pet_scale(tmp_path, 0.2)
+    assert load_pet_scale(tmp_path) == 0.5
+
+
+def test_desktop_pet_uses_the_approved_clawd_v2_asset(monkeypatch):
+    import hashlib
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.desktop_pet import (
+        ANIMATIONS,
+        CLASSIC_PASSAGES,
+        CLASSIC_RECITATION_MS,
+        IDLE_ROUTINES,
+        ClawdDesktopPet,
+    )
+
+    root = Path(__file__).resolve().parents[1]
+    manifest = json.loads((root / "assets" / "clawd" / "pet.json").read_text(encoding="utf-8"))
+    sprite = root / "assets" / "clawd" / "spritesheet.webp"
+    assert manifest["id"] == "clawd"
+    assert manifest["spriteVersionNumber"] == 2
+    assert hashlib.sha256(sprite.read_bytes()).hexdigest() == "08f1c320c535dfb63667af7b844b6af75af2a4a71f768d93c7be86d9679534a1"
+
+    app = QApplication.instance() or QApplication([])
+    pet = ClawdDesktopPet(root, lambda: None)
+    assert pet.available
+    assert set(ANIMATIONS) == {
+        "idle", "walk_right", "walk_left", "waving", "jumping", "failed", "waiting", "running", "review",
+        "look_a", "look_b",
+    }
+    assert len(IDLE_ROUTINES) == 8
+    assert len({routine.name for routine in IDLE_ROUTINES}) == 8
+    expected_titles = {
+        "洛神赋", "滕王阁序", "前出师表", "陈情表", "岳阳楼记",
+        "醉翁亭记", "兰亭集序", "桃花源记", "前赤壁赋", "逍遥游",
+    }
+    assert len(CLASSIC_PASSAGES) >= 30
+    assert {passage.title for passage in CLASSIC_PASSAGES} == expected_titles
+    assert all(len(passage.lines) == 2 for passage in CLASSIC_PASSAGES)
+    assert all(all(line.strip() for line in passage.lines) for passage in CLASSIC_PASSAGES)
+    recitation = next(routine for routine in IDLE_ROUTINES if routine.recites_classic)
+    assert sum(step.duration_ms for step in recitation.steps) == CLASSIC_RECITATION_MS == 10_000
+    pet.set_enabled(True)
+    pet.announce("正在读取百度数据", "running")
+    assert pet._state == "running"
+    assert pet._bubble.label.text() == "正在读取百度数据"
+    base_size = pet.size()
+    pet.move(240, 180)
+    original_position = pet.pos()
+    pet.set_pet_scale(1.4)
+    assert pet.pet_scale() == 1.2
+    assert pet.width() > base_size.width()
+    assert pet.height() > base_size.height()
+    assert pet.pos() == original_position
+    pet.close_pet()
+
+
+def test_desktop_pet_idle_routines_are_randomized_and_preempted_by_tasks(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.desktop_pet import CLASSIC_PASSAGES, ClawdDesktopPet
+
+    app = QApplication.instance() or QApplication([])
+    pet = ClawdDesktopPet(Path(__file__).resolve().parents[1], lambda: None)
+    pet.set_enabled(True)
+
+    assert pet.trigger_idle_routine("诵读名篇") is True
+    assert pet._routine is not None
+    assert pet._routine.name == "诵读名篇"
+    bubble_text = pet._bubble.label.text()
+    assert "\n" not in bubble_text
+    assert not bubble_text.startswith("《")
+    assert bubble_text in {"".join(passage.lines) for passage in CLASSIC_PASSAGES}
+    assert all(passage.title not in bubble_text for passage in CLASSIC_PASSAGES)
+    assert pet._bubble.label.wordWrap() is False
+    assert pet._bubble.height() == 86
+
+    pet._passage_queue.clear()
+    pet._rng.seed(20260714)
+    shuffled_cycle = [pet._next_classic_passage() for _ in range(len(CLASSIC_PASSAGES))]
+    assert len({(passage.title, passage.lines) for passage in shuffled_cycle}) == len(CLASSIC_PASSAGES)
+    assert shuffled_cycle != list(CLASSIC_PASSAGES)
+    assert pet._bubble.isVisible()
+
+    pet.set_busy(True)
+    assert pet._routine is None
+    assert not pet._idle_timer.isActive()
+    assert not pet._bubble.isVisible()
+    assert pet.trigger_idle_routine("桌面巡逻") is False
+
+    pet.set_busy(False)
+    assert pet._idle_timer.isActive()
+    pet.close_pet()
+
+
+def test_desktop_pet_left_click_toggles_right_click_does_nothing_and_drag_saves(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from gui.desktop_pet import ClawdDesktopPet
+
+    app = QApplication.instance() or QApplication([])
+    toggles = []
+    positions = []
+    pet = ClawdDesktopPet(
+        Path(__file__).resolve().parents[1],
+        lambda: toggles.append(True),
+        lambda x, y: positions.append((x, y)),
+    )
+    pet.set_enabled(True)
+    app.processEvents()
+
+    QTest.mouseClick(pet, Qt.MouseButton.RightButton, pos=QPoint(30, 30))
+    assert toggles == []
+    QTest.mouseClick(pet, Qt.MouseButton.LeftButton, pos=QPoint(30, 30))
+    assert toggles == [True]
+
+    start = pet.pos()
+    QTest.mousePress(pet, Qt.MouseButton.LeftButton, pos=QPoint(30, 30))
+    QTest.mouseMove(pet, QPoint(75, 70), delay=30)
+    QTest.mouseRelease(pet, Qt.MouseButton.LeftButton, pos=QPoint(75, 70))
+    app.processEvents()
+    assert pet.pos() != start
+    assert positions and positions[-1] == (pet.x(), pet.y())
+    assert toggles == [True]
+    pet.close_pet()
+
+
+def test_system_menu_only_opens_after_click_not_hover(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+    QTest.mouseMove(window.system_config_button)
+    QTest.qWait(100)
+    assert not window.inline_config_menu.isVisible()
+    QTest.mouseClick(window.system_config_button, Qt.MouseButton.LeftButton)
+    QTest.qWait(100)
+    assert window.inline_config_menu.isVisible()
+    assert not window.system_config_menu.isVisible()
+    window.inline_config_menu.hide()
+    window._quitting = True
+    window.close()
+
+
+def test_system_submenus_expand_inline_without_flyout_or_shadow(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    menu = window.inline_config_menu
+    collapsed_height = menu.height()
+
+    assert menu.width() == 224
+    assert bool(menu.windowFlags() & Qt.WindowType.NoDropShadowWindowHint)
+    assert menu.pet_section.isHidden()
+    assert menu.size_section.isHidden()
+    assert menu.pet_toggle.property("expandable") is True
+    assert menu.size_toggle.property("expandable") is True
+    assert menu.pet_layout.spacing() == 3
+    assert window.task_title.text() == "项目控制台"
+    assert not menu.pet_toggle.is_expanded()
+    assert not menu.size_toggle.is_expanded()
+
+    menu.pet_toggle.click()
+    assert not menu.pet_section.isHidden()
+    assert menu.pet_toggle.is_expanded()
+    pet_height = menu.height()
+    assert pet_height > collapsed_height
+    menu.size_toggle.click()
+    assert not menu.size_section.isHidden()
+    assert menu.size_toggle.is_expanded()
+    assert menu.height() > pet_height
+    assert not window.pet_menu.isVisible()
+    assert menu.size_slider.minimum() == 50
+    assert menu.size_slider.maximum() == 120
+    menu.size_slider.setValue(73)
+    assert menu.size_value_label.text() == "73%"
+    assert window.desktop_pet.pet_scale() == 0.73
+    window._pet_scale_save_timer.stop()
+
+    menu.hide()
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_single_instance_guard_rejects_second_owner(tmp_path):
+    import uuid
+
+    from PySide6.QtCore import QCoreApplication
+    from PySide6.QtTest import QTest
+    from gui.single_instance import SingleInstanceGuard
+
+    app = QCoreApplication.instance() or QCoreApplication([])
+    instance_id = "hourly_report_test_" + uuid.uuid4().hex
+    first = SingleInstanceGuard(instance_id, tmp_path)
+    second = SingleInstanceGuard(instance_id, tmp_path)
+    activations = []
+    first.activate_requested.connect(lambda: activations.append(True))
+    try:
+        assert first.acquire() is True
+        assert second.acquire() is False
+        assert second.notify_existing() is True
+        QTest.qWait(100)
+        assert activations == [True]
+    finally:
+        second.close()
+        first.close()
+
+
+def test_desktop_pet_keeps_running_when_console_is_hidden(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    import gui.main_window as main_window
+
+    monkeypatch.setattr(main_window, "load_pet_mode", lambda root: main_window.PET_CLAWD)
+    MainWindow = main_window.MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(Path(__file__).resolve().parents[1])
+    window.show()
+    app.processEvents()
+
+    window.request_console_close()
+    app.processEvents()
+    assert not window.isVisible()
+    assert window.desktop_pet.isVisible()
+
+    window.toggle_console_visibility()
+    app.processEvents()
+    assert window.isVisible()
+
+    window.toggle_console_visibility()
+    app.processEvents()
+    assert window.isVisible()
+
+    window._quitting = True
+    window.close()
 
 
 def test_desktop_gui_app_icon_assets_and_build_icon_are_configured():
@@ -5876,6 +6975,24 @@ def test_desktop_gui_app_icon_assets_and_build_icon_are_configured():
     assert source.exists()
     assert "--icon" in build_script
     assert "app_icon.ico" in build_script
+    assert "--onefile" in build_script
+    assert "--windowed" in build_script
+
+
+def test_clawd_animator_uses_reference_geometry_and_six_phase_loop():
+    from gui.clawd import CLAWD_BODY, CLAWD_EYE, PHASE_DURATIONS, _dance_pose, _idle_phase_at, _phase_at, _pose_for
+
+    assert CLAWD_BODY.name().upper() == "#D4634A"
+    assert CLAWD_EYE.name().upper() == "#2A1810"
+    assert PHASE_DURATIONS == (5.0, 3.0, 3.0, 3.0, 6.0, 3.0)
+    assert _phase_at(0.0)[0] == 0
+    assert _phase_at(5.2)[0] == 1
+    assert _phase_at(14.2)[0] == 4
+    assert _pose_for(4, 0.25).x > 0
+    assert _pose_for(5, 0.5).sparkle is True
+    assert _idle_phase_at(0.0)[0] == 1
+    assert _dance_pose(0.15).x < 0
+    assert _dance_pose(0.50).x > 0
 
 
 # ── 百度登录状态守卫测试 (CAS 兜底版) ─────────────────────
@@ -7096,6 +8213,45 @@ def test_daily_search_promotion_check_does_not_navigate_report_again(monkeypatch
     assert "搜索推广" in visible_text
 
 
+def test_refresh_report_skips_networkidle_when_table_is_already_parseable(monkeypatch):
+    import logging
+
+    from modules.baidu_overview import _refresh_report_and_wait_for_data
+
+    class FakePage:
+        def __init__(self):
+            self.load_state_calls = []
+            self.reload_calls = []
+            self.wait_calls = []
+
+        def reload(self, **kwargs):
+            self.reload_calls.append(kwargs)
+
+        def wait_for_load_state(self, state, **kwargs):
+            self.load_state_calls.append((state, kwargs))
+
+        def wait_for_timeout(self, timeout):
+            self.wait_calls.append(timeout)
+
+    page = FakePage()
+    monkeypatch.setattr("modules.baidu_overview._read_page_text", lambda _page: "账户 展现 点击 消费")
+    monkeypatch.setattr(
+        "modules.baidu_overview.extract_baidu_rows_from_page",
+        lambda _page, _config: {"debug": {"parse_ready": True}},
+    )
+
+    text = _refresh_report_and_wait_for_data(
+        page,
+        {"baidu": {"report_table_wait_seconds": 30}},
+        logging.getLogger("test"),
+    )
+
+    assert text == "账户 展现 点击 消费"
+    assert len(page.reload_calls) == 1
+    assert page.load_state_calls == []
+    assert page.wait_calls == [300, 300]
+
+
 def test_extract_baidu_rows_from_page_prefers_dom_table_and_parses_currency_formats():
     from modules.baidu_parser import extract_baidu_rows_from_page
 
@@ -7960,6 +9116,48 @@ def test_resolve_baidu_sources_wraps_legacy_project_as_single_source():
     ]
 
 
+def test_nanjing_niu_config_maps_new_npx6_account_across_sources():
+    from modules.project_config import build_runtime_config_from_project, load_project_config, validate_project_config
+
+    project = load_project_config(Path.cwd(), "nanjing_niu")
+    runtime = build_runtime_config_from_project(project, {})
+
+    assert validate_project_config(project) == []
+    assert list(runtime["accounts"])[-1] == "华厦npx6"
+    assert runtime["accounts"]["华厦npx6"]["baidu_names"] == ["baidu-华厦npx6", "华厦npx6"]
+    assert runtime["accounts"]["华厦npx6"]["excel_name"] == "baidu-华厦npx6"
+    assert runtime["kst"]["promotion_id_accounts"]["85492975"] == "华厦npx6"
+
+    daily_titles = _find_account_titles(
+        [
+            {
+                "row": 1,
+                "col": 1,
+                "address": "A1",
+                "raw_text": "baidu-华厦npx6（85492975）",
+                "normalized_text": normalize_text("baidu-华厦npx6（85492975）"),
+            }
+        ],
+        runtime,
+    )
+    assert daily_titles["华厦npx6"]["found"] is True
+
+    baidu_rows = [
+        {"账户": account["baidu_name"], "展现": "1", "点击": "1", "消费": "1"}
+        for account in runtime["accounts"].values()
+    ]
+    baidu_report = parse_baidu_table(baidu_rows, runtime)
+    assert baidu_report["errors"] == []
+    assert baidu_report["accounts"]["华厦npx6"]["消费"] == 1
+
+    kst_report = aggregate_kst_export_rows(
+        [{"备注说明": "推广ID：85492975", "名片标签": "转潜-有效", "访客消息数": "1"}],
+        runtime,
+    )
+    assert kst_report["errors"] == []
+    assert kst_report["accounts"]["华厦npx6"]["总对话"] == 1
+
+
 def test_shenyang_niu_config_resolves_two_baidu_sources():
     from modules.project_config import build_runtime_config_from_project, load_project_config
     from modules.baidu_multi_source import resolve_baidu_sources
@@ -7994,41 +9192,13 @@ def test_shenyang_niu_config_resolves_two_baidu_sources():
     assert sources[1]["accounts"][2]["baidu_names"] == ["沈阳银康银屑病3"]
 
 
-def test_hefei_bai_config_resolves_two_baidu_sources_and_three_excel_accounts():
-    from modules.project_config import build_runtime_config_from_project, load_project_config, validate_project_config
-    from modules.baidu_multi_source import resolve_baidu_sources
-
-    project = load_project_config(Path.cwd(), "hefei_bai")
-    runtime = build_runtime_config_from_project(project, {})
-    sources = resolve_baidu_sources(runtime)
-
-    assert validate_project_config(project) == []
-    assert project["project_id"] == "hefei_bai"
-    assert project["project_name"] == "合肥白"
-    assert [source["source_id"] for source in sources] == ["hefei_bai_huaxia", "hefei_bai_xinhuaxia"]
-    assert [source["credential_profile"] for source in sources] == [
-        "hefei_bai_huaxia_baidu",
-        "hefei_bai_xinhuaxia_baidu",
-    ]
-    assert [account["standard_name"] for account in project["excel_accounts"]] == [
-        "华夏白癜风-新",
-        "华夏白癜风-新2",
-        "新华夏白癜风3",
-    ]
-    assert list(runtime["accounts"]) == ["华夏白癜风-新", "华夏白癜风-新2", "新华夏白癜风3"]
-    assert runtime["kst"]["promotion_id_accounts"] == {
-        "64544816": "华夏白癜风-新",
-        "64607455": "华夏白癜风-新2",
-        "34910745": "新华夏白癜风3",
-    }
-
-
-def test_secrets_example_has_empty_hefei_bai_profiles():
+def test_retired_hefei_bai_project_and_example_profiles_are_absent():
     root = Path(__file__).resolve().parents[1]
     data = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
 
+    assert not (root / "configs" / "projects" / "hefei_bai.json").exists()
     for profile in ["hefei_bai_huaxia_baidu", "hefei_bai_xinhuaxia_baidu"]:
-        assert data["baidu"][profile] == {"username": "", "password": ""}
+        assert profile not in data["baidu"]
 
 
 def test_validate_project_config_rejects_duplicate_baidu_name_inside_same_source():

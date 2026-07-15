@@ -24,6 +24,29 @@ def infer_stage(line: str) -> str | None:
     return None
 
 
+def infer_pet_event(line: str) -> str | None:
+    text = str(line or "").strip().lower()
+    if not text:
+        return None
+    if any(token in text for token in ("[error]", "[错误]", "失败", "failed", "异常", "未通过", "中断")):
+        return "failed"
+    if "顶部用户名已匹配" in text or "百度账号登录完成" in text or "登录成功" in text:
+        return "login_ready"
+    if "已填写百度登录字段" in text or "登录提交按钮" in text or ("切换" in text and ("账号" in text or "账户" in text)):
+        return "login"
+    if "[1/4]" in text and "百度" in text:
+        return "baidu"
+    if "百度" in text and any(token in text for token in ("数据已读取", "读取完成", "自检：通过", "表格数据已稳定")):
+        return "baidu_ready"
+    if "[2/4]" in text or "解析快商通" in text:
+        return "kst"
+    if "[3/4]" in text or "数据合并" in text or "合并百度" in text:
+        return "merge"
+    if "[4/4]" in text or "写入 excel" in text or "excel 写入" in text:
+        return "excel"
+    return None
+
+
 try:  # pragma: no cover - import depends on optional GUI dependencies.
     from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 except Exception:  # pragma: no cover
@@ -67,13 +90,17 @@ class QtTaskRunner(QObject):
     def is_running(self) -> bool:
         return self._process.state() != QProcess.ProcessState.NotRunning
 
-    def start(self, command: list[str], cwd: str | Path) -> None:
+    def start(self, command: list[str], cwd: str | Path, extra_env: dict[str, str] | None = None) -> None:
         if self.is_running():
             self.failed_to_start.emit("已有任务正在运行，请等待当前任务结束。")
             return
         if not command:
             self.failed_to_start.emit("命令为空，无法启动任务。")
             return
+        process_env = build_process_environment()
+        for key, value in (extra_env or {}).items():
+            process_env.insert(str(key), str(value))
+        self._process.setProcessEnvironment(process_env)
         self._process.setWorkingDirectory(str(cwd))
         self._process.start(command[0], command[1:])
 

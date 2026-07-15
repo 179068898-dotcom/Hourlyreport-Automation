@@ -1,6 +1,6 @@
 # AGENTS.md
 
-本文件给所有参与本仓库开发的 AI Agent / 自动化助手使用。无论使用 Codex、Claude、OpenClaw、夏思道或其他平台，都必须优先遵守本文件。
+本文件给所有参与本仓库开发的 AI Agent / 自动化助手使用。无论使用 Codex、Claude、HERMES（夏思道）或其他平台，都必须优先遵守本文件。
 
 ## 基本约定
 
@@ -35,20 +35,20 @@
 .venv\Scripts\python.exe menu.py
 ```
 
-OpenClaw / 自动代执行必须走固定 BAT 入口，不要绕过 BAT 自己拼 `main.py`：
+HERMES（夏思道）/ 自动代执行必须走 2026-07-10 更新的固定 BAT 入口，不要绕过 BAT 自己拼 `main.py`：
 
 ```cmd
-run_openclaw_hourly.bat 11点
-run_openclaw_hourly.bat 15点
-run_openclaw_hourly.bat 18点
-run_openclaw_daily.bat
-run_openclaw_daily.bat 2026-05-26
+run_hermes_hourly.bat 11点
+run_hermes_hourly.bat 15点
+run_hermes_hourly.bat 18点
+run_hermes_daily.bat
+run_hermes_daily.bat 2026-07-09
 ```
 
 固定窗口规则：
 
-- 小时报窗口标题应为 `OpenClaw Hourly - fixed entry`。
-- 日报窗口标题应为 `OpenClaw Daily - fixed entry`。
+- 小时报窗口标题应为 `HERMES Hourly - fixed entry - 20260710`。
+- 日报窗口标题应为 `HERMES Daily - fixed entry - 20260710`。
 - BAT 会固定工作目录、UTF-8 环境和 `.venv` Python。
 - BAT 会先跑 preflight，失败则停止，不得继续写 Excel。
 - 不要自行拆分 `fetch/parse/merge/write` 去代替完整任务。
@@ -56,7 +56,7 @@ run_openclaw_daily.bat 2026-05-26
 
 ## Preflight 规则
 
-OpenClaw 默认使用快速预检以减少多项目排队耗时：
+HERMES 默认使用快速预检以减少多项目排队耗时：
 
 ```cmd
 .venv\Scripts\python.exe main.py --mode preflight --quick
@@ -205,15 +205,15 @@ chromium.connect_over_cdp("http://127.0.0.1:9222")
 
 ## 文档同步
 
-修改固定入口、Chrome 策略、preflight、日报稳定性或 OpenClaw 执行方式时，至少同步检查这些文件：
+修改固定入口、Chrome 策略、preflight、日报稳定性或 HERMES 执行方式时，至少同步检查这些文件：
 
 - `AGENTS.md`
 - `CLAUDE.md`
 - `xia_sidao使用说明.md`
-- `docs/openclaw_hourly_sop.md`
-- `docs/openclaw_daily_sop.md`
-- `run_openclaw_hourly.bat`
-- `run_openclaw_daily.bat`
+- `docs/hermes_hourly_sop.md`
+- `docs/hermes_daily_sop.md`
+- `run_hermes_hourly.bat`
+- `run_hermes_daily.bat`
 
 如果只改其中一处，必须说明为什么其他文件无需同步。
 

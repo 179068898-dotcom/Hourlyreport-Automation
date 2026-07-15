@@ -21,6 +21,9 @@ from modules.baidu_daily import fetch_baidu_daily
 from modules.baidu_detector import baidu_detect
 from modules.baidu_overview import baidu_open_overview, baidu_prepare_overview
 from modules.baidu_validator import print_baidu_validate_summary, validate_baidu_account_data
+from modules.baidu_report_api import fetch_baidu_api_probe
+from modules.baidu_api_simulation import simulate_baidu_api_hourly
+from modules.baidu_oauth_bundle import BaiduOAuthImportError, import_baidu_oauth_bundle
 from modules.browser_manager import test_browser_connect, test_browser_launch
 from modules.data_merger import merge_daily_files, merge_data_files
 from modules.daily_excel_inspector import inspect_daily_excel_structure
@@ -57,6 +60,9 @@ def main() -> int | None:
         "fetch-baidu",
         "fetch-baidu-auto",
         "fetch-baidu-daily",
+        "test-baidu-api",
+        "simulate-baidu-api-hourly",
+        "import-baidu-oauth",
         "baidu-detect",
         "baidu-open-overview",
         "baidu-prepare-overview",
@@ -86,6 +92,7 @@ def main() -> int | None:
     parser.add_argument("--quick", action="store_true", help="preflight 快速模式：跳过耗时的 Excel sheet 结构扫描")
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
     parser.add_argument("--verbose", action="store_true", help="启用详细终端输出")
+    parser.add_argument("--api-profile", default=None, help="百度 OAuth 授权导入使用的本地 API profile")
     args = parser.parse_args()
 
     if args.verbose:
@@ -248,6 +255,45 @@ def main() -> int | None:
             print_success(f"百度日报读取完成：reports/baidu_daily_data.json")
             verbose_print(f"自检报告：reports/baidu_daily_validate_report.json")
         return
+    if args.mode == "test-baidu-api":
+        report = fetch_baidu_api_probe(
+            config=config,
+            root=ROOT,
+            logger=logger,
+            target_date=args.date,
+            period=args.period,
+        )
+        if report.get("errors"):
+            print_error("百度 API 只读探测失败，已输出报告：reports/baidu_api_probe_report.json")
+            return 1
+        print_success("百度 API 只读探测通过：reports/baidu_api_probe_report.json")
+        return 0
+    if args.mode == "simulate-baidu-api-hourly":
+        report = simulate_baidu_api_hourly(
+            config=config,
+            root=ROOT,
+            logger=logger,
+            period=args.period,
+            target_date=args.date,
+        )
+        if report.get("errors"):
+            print_error("百度 API 小时报模拟失败：reports/baidu_api_hourly_simulation_report.json")
+            return 1
+        print_success("百度 API 小时报模拟通过：reports/baidu_api_hourly_simulation_report.json")
+        print_quiet_line(f"仅预览 {len(report.get('planned_writes') or [])} 个写入单元格，未修改 Excel")
+        return 0
+    if args.mode == "import-baidu-oauth":
+        if not args.file or not args.api_profile:
+            print_error("导入授权需要同时提供 --file 和 --api-profile")
+            return 1
+        try:
+            report = import_baidu_oauth_bundle(ROOT, args.file, args.api_profile)
+        except BaiduOAuthImportError as exc:
+            print_error(f"百度 OAuth 授权导入失败：{exc}")
+            return 1
+        print_success(f"百度 OAuth 授权已导入：{report['api_profile']}")
+        print_quiet_line(f"识别子账户 {report['sub_account_count']} 个；授权文件请立即人工删除")
+        return 0
     if args.mode == "baidu-detect":
         report = baidu_detect(config=config, root=ROOT, logger=logger)
         out = ROOT / "reports" / "baidu_detect_report.json"

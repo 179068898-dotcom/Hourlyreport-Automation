@@ -26,6 +26,7 @@
       "source_id": "shenyang_niu_zhongya",
       "source_name": "沈阳中亚",
       "credential_profile": "shenyang_niu_zhongya_baidu",
+      "api_profile": "shenyang_niu_zhongya_baidu",
       "accounts": [
         {
           "standard_name": "沈阳中亚01",
@@ -54,6 +55,7 @@
       "source_id": "shenyang_niu_yinkang",
       "source_name": "沈阳银康",
       "credential_profile": "shenyang_niu_yinkang_baidu",
+      "api_profile": "shenyang_niu_yinkang_baidu",
       "accounts": [
         {
           "standard_name": "沈阳银康01",

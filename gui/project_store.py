@@ -14,7 +14,7 @@ class ProjectSummary:
 
     @property
     def label(self) -> str:
-        return f"{self.project_name} ({self.project_id})"
+        return self.project_name
 
 
 def load_project_summaries(root: str | Path) -> list[ProjectSummary]:

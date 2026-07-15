@@ -62,7 +62,7 @@ MORE_FEATURES_MENU_TEXT = """
 更多功能
 1. 报告与日志
 2. 配置诊断
-3. OpenClaw 帮助
+3. HERMES / 夏思道帮助
 4. 多百度来源摘要
 5. 项目信息详情
 6. 高级分步调试
@@ -110,16 +110,15 @@ ADVANCED_DEBUG_MENU_TEXT = """
 0. 返回
 """
 
-OPENCLAW_MENU_TEXT = """
-OpenClaw 帮助
-1. 显示小时报 OpenClaw 命令
-2. 显示日报 OpenClaw 命令
+HERMES_MENU_TEXT = """
+HERMES / 夏思道帮助
+1. 显示小时报 HERMES 命令
+2. 显示日报 HERMES 命令
 3. 打开小时报 SOP
 4. 打开日报 SOP
 5. 显示凭据与 CAS 规则
 0. 返回
 """
-
 
 def _resolve(root: Path, value: str | Path | None) -> Path | None:
     if value in (None, ""):
@@ -214,17 +213,18 @@ def _recent_reports(root: Path, limit: int = 10) -> list[Path]:
     return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)[:limit]
 
 
-def build_openclaw_help_lines() -> list[str]:
+def build_hermes_help_lines() -> list[str]:
     return [
+        "固定入口同步日期：2026-07-10",
         "小时报：",
-        "  run_openclaw_hourly.bat 11点",
-        "  run_openclaw_hourly.bat 15点",
-        "  run_openclaw_hourly.bat 18点",
+        "  run_hermes_hourly.bat 11点",
+        "  run_hermes_hourly.bat 15点",
+        "  run_hermes_hourly.bat 18点",
         "日报：",
-        "  run_openclaw_daily.bat",
-        "  run_openclaw_daily.bat 2026-05-24",
+        "  run_hermes_daily.bat",
+        "  run_hermes_daily.bat 2026-07-09",
         "规则：",
-        "- OpenClaw 优先调用 bat。",
+        "- HERMES（夏思道）只调用固定 bat。",
         "- preflight 失败后不得继续执行。",
         "- 不得询问或输出真实百度密码。",
         "- 遇到验证码、安全验证、滑块时停止并报告。",
@@ -330,7 +330,7 @@ def _execute_preflight(
     task: str,
     logger,
 ) -> dict[str, Any]:
-    report = run_preflight(root, project, config, task=task)
+    report = run_preflight(root, project, config, task=task, quick=True)
     out = root / "reports" / "preflight_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -444,23 +444,23 @@ def _run_advanced_debug_menu(root: Path, input_func: Callable[[str], str], outpu
         _pause(input_func)
 
 
-def _run_openclaw_menu(root: Path, input_func: Callable[[str], str], output_func: Callable[[str], None]) -> None:
-    lines = build_openclaw_help_lines()
+def _run_hermes_menu(root: Path, input_func: Callable[[str], str], output_func: Callable[[str], None]) -> None:
+    lines = build_hermes_help_lines()
     while True:
-        _print_text_block("OpenClaw 帮助", OPENCLAW_MENU_TEXT.strip().splitlines()[1:], output_func)
+        _print_text_block("HERMES / 夏思道帮助", HERMES_MENU_TEXT.strip().splitlines()[1:], output_func)
         choice = input_func("  请选择选项：").strip()
         if choice == "0":
             return
         if choice == "1":
-            _print_text_block("OpenClaw 小时报命令", lines[:4], output_func)
+            _print_text_block("HERMES 小时报命令", lines[:5], output_func)
         elif choice == "2":
-            _print_text_block("OpenClaw 日报命令", lines[4:7], output_func)
+            _print_text_block("HERMES 日报命令", lines[5:8], output_func)
         elif choice == "3":
-            _open_path(root / "docs" / "openclaw_hourly_sop.md", output_func)
+            _open_path(root / "docs" / "hermes_hourly_sop.md", output_func)
         elif choice == "4":
-            _open_path(root / "docs" / "openclaw_daily_sop.md", output_func)
+            _open_path(root / "docs" / "hermes_daily_sop.md", output_func)
         elif choice == "5":
-            _print_text_block("凭据与 CAS 规则", lines[7:], output_func)
+            _print_text_block("凭据与 CAS 规则", lines[8:], output_func)
         else:
             output_func("  无效选项，请重新选择。")
             continue
@@ -484,7 +484,7 @@ def _run_more_features_menu(
         elif choice == "2":
             _run_diagnostic_menu(root, input_func, output_func)
         elif choice == "3":
-            _run_openclaw_menu(root, input_func, output_func)
+            _run_hermes_menu(root, input_func, output_func)
         elif choice == "4":
             _print_text_block("多百度来源摘要", build_baidu_source_summary_lines(get_current_project(root)), output_func)
             _pause(input_func)

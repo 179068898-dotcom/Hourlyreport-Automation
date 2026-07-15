@@ -1,16 +1,15 @@
 @echo off
-setlocal
-title 百度日报小时报控制台
-chcp 65001 >nul
+setlocal EnableExtensions DisableDelayedExpansion
+title Baidu Data Automation Console
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
-cd /d "%~dp0"
+cd /d "%~dp0" || exit /b 1
 
 if not exist ".venv\Scripts\python.exe" (
-  echo [提示] 首次启动需要先安装运行环境。
+  echo [INFO] First launch: preparing the runtime environment...
   call "%~dp0install_env.bat"
   if errorlevel 1 (
-    echo [错误] 运行环境安装失败。
+    echo [ERROR] Runtime environment setup failed.
     pause
     exit /b 1
   )
@@ -18,10 +17,10 @@ if not exist ".venv\Scripts\python.exe" (
 
 ".venv\Scripts\python.exe" -c "import PySide6" >nul 2>nul
 if errorlevel 1 (
-  echo [提示] 正在安装图形界面组件，请稍等...
-  ".venv\Scripts\python.exe" -m pip install PySide6 pyinstaller
+  echo [INFO] Installing the desktop interface...
+  ".venv\Scripts\python.exe" -m pip install PySide6 --disable-pip-version-check
   if errorlevel 1 (
-    echo [错误] 图形界面组件安装失败。
+    echo [ERROR] Desktop interface installation failed.
     pause
     exit /b 1
   )

@@ -1,7 +1,7 @@
 @echo off
-setlocal
+setlocal EnableExtensions DisableDelayedExpansion
 title hourly_report_bot - menu
-cd /d "%~dp0"
+cd /d "%~dp0" || exit /b 1
 
 echo ==========================================
 echo hourly_report_bot - menu

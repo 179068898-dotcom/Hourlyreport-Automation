@@ -199,12 +199,25 @@ def inspect_daily_worksheet(ws: Worksheet, config: dict[str, Any], excel_path: s
     return report
 
 
+def _write_daily_structure_outputs(report: dict[str, Any], root: Path, ws: Worksheet | None = None) -> dict[str, Any]:
+    report_path = root / "reports" / "daily_excel_structure_report.json"
+    dump_path = root / "reports" / "daily_sheet_text_dump.csv"
+    report["outputs"] = {
+        "report": str(report_path),
+        "sheet_text_dump": str(dump_path),
+        "sheet_text_dump_generated": False,
+    }
+    if report.get("errors") and ws is not None:
+        _write_sheet_dump(_scan_non_empty_cells(ws, _build_merged_value_map(ws)), dump_path)
+        report["outputs"]["sheet_text_dump_generated"] = True
+    _write_json(report_path, report)
+    return report
+
+
 def inspect_daily_excel_structure(config: dict[str, Any], root: Path, logger) -> dict[str, Any]:
     excel_path = Path(config["excel_path"])
     if not excel_path.is_absolute():
         excel_path = root / excel_path
-    report_path = root / "reports" / "daily_excel_structure_report.json"
-    dump_path = root / "reports" / "daily_sheet_text_dump.csv"
     sheet_name = config.get("daily_sheet_name", DAILY_SHEET_NAME)
     report: dict[str, Any] = {
         "mode": "inspect-daily-excel",
@@ -214,30 +227,24 @@ def inspect_daily_excel_structure(config: dict[str, Any], root: Path, logger) ->
         "allowed_fields": ALLOWED_FIELDS,
         "forbidden_fields": FORBIDDEN_FIELDS,
         "accounts": {},
-        "outputs": {
-            "report": str(report_path),
-            "sheet_text_dump": str(dump_path),
-        },
+        "outputs": {},
         "errors": [],
     }
     if not excel_path.exists():
         report["errors"].append(f"找不到 Excel 文件：{excel_path}")
-        _write_json(report_path, report)
+        _write_daily_structure_outputs(report, root)
         return report
     wb = load_workbook(excel_path, data_only=False, read_only=False)
     report["available_sheets"] = wb.sheetnames
     if sheet_name not in wb.sheetnames:
         report["errors"].append(f"找不到 sheet：{sheet_name}")
-        _write_json(report_path, report)
+        _write_daily_structure_outputs(report, root)
+        wb.close()
         return report
     ws = wb[sheet_name]
     report = inspect_daily_worksheet(ws, config, str(excel_path))
-    report["outputs"] = {
-        "report": str(report_path),
-        "sheet_text_dump": str(dump_path),
-    }
-    _write_sheet_dump(_scan_non_empty_cells(ws, _build_merged_value_map(ws)), dump_path)
-    _write_json(report_path, report)
+    _write_daily_structure_outputs(report, root, ws)
+    wb.close()
     if report["errors"]:
         logger.warning("日报 Excel 结构识别存在问题：%s", report["errors"])
     else:

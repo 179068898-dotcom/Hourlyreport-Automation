@@ -2,18 +2,42 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import zipfile
 from pathlib import Path
 
-DEFAULT_VERSION = "2.0"
-EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "__pycache__", ".pytest_cache", "build"}
-DESKTOP_DIST_DIR = "百度日报小时报控制台"
+DEFAULT_VERSION = "hermes_20260710"
+EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud"}
+DESKTOP_EXE = "百度数据自动化控制台.exe"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec"}
-EXCLUDE_FILES = {"config.json", "credentials.local.json", ".ignore"}
+EXCLUDE_FILES = {
+    "config.json",
+    "credentials.local.json",
+    ".ignore",
+    "nul",
+    "_verify_excel.py",
+    "build_desktop_exe.bat",
+    "requirements-dev.txt",
+    "design-qa.md",
+}
 EXCLUDE_REPORT_FILES = {"menu_task_status.json", "browser_login_state.json", "unknown_baidu_accounts.json"}
+LEGACY_ROOT_FILES = {
+    "create_config.bat",
+    "run_11.bat",
+    "run_15.bat",
+    "run_18.bat",
+    "run_fetch_baidu.bat",
+    "run_fetch_baidu_15.bat",
+    "run_inspect.bat",
+    "run_mock_write.bat",
+    "run_parse_kst_export_15.bat",
+    "run_test_browser_connect.bat",
+    "setup_env.bat",
+    "START_HERE.bat",
+}
 
 REQUIRED_INTERNAL_PROFILES = [
     "kunming_niu_baidu",
@@ -32,22 +56,40 @@ def normalize_version(version: str | None) -> str:
     raw = (version or DEFAULT_VERSION).strip()
     if not raw:
         raw = DEFAULT_VERSION
-    return raw if raw.startswith("v") else f"v{raw}"
+    if raw.startswith("v") or not re.fullmatch(r"\d+(?:\.\d+)*", raw):
+        return raw
+    return f"v{raw}"
 
 
-def release_name(version: str | None = None, internal: bool = False) -> str:
+def release_name(version: str | None = None, internal: bool = False, online_update: bool = False) -> str:
+    if internal and online_update:
+        raise ValueError("内部包与在线更新包不能同时生成")
+    if online_update:
+        normalized = normalize_version(version)
+        clean_version = normalized[1:] if normalized.startswith("v") else normalized
+        return f"baidu_data_automation_update_{clean_version}.zip"
     prefix = "hourly_report_bot_internal" if internal else "hourly_report_bot_release"
     return f"{prefix}_{normalize_version(version)}.zip"
 
 
-def should_include_file(path: Path, internal: bool = False) -> bool:
+def should_include_file(path: Path, internal: bool = False, online_update: bool = False) -> bool:
     parts = path.parts
+    if online_update and parts and parts[0] in {
+        "configs", "secrets", "reports", "logs", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"
+    }:
+        return False
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
     if parts and parts[0] == "dist":
-        if len(parts) == 2 and path.suffix.lower() == ".zip":
-            return False
-        return internal and len(parts) >= 2 and parts[1] == DESKTOP_DIST_DIR
+        return (internal or online_update) and len(parts) == 2 and parts[1] == DESKTOP_EXE
+    if parts and parts[0] == "tests":
+        return False
+    if len(parts) >= 2 and parts[0] == "docs" and parts[1] == "superpowers":
+        return False
+    if parts and parts[0] == "tools" and path.name != "bootstrap_python.ps1":
+        return False
+    if len(parts) == 1 and path.name in LEGACY_ROOT_FILES:
+        return False
     if path.name in EXCLUDE_FILES:
         return False
     if path.suffix.lower() in EXCLUDE_SUFFIXES:
@@ -60,7 +102,7 @@ def should_include_file(path: Path, internal: bool = False) -> bool:
             return internal
         return False
     if parts and parts[0] in EXCLUDE_RUNTIME_DIRS:
-        return False
+        return path.name == ".gitkeep"
     # 运行时目录只保留 .gitkeep
     if parts and parts[0] in RUNTIME_KEEP_DIRS:
         if path.name in EXCLUDE_REPORT_FILES:
@@ -97,11 +139,18 @@ def _validate_internal_secrets(root: Path) -> list[str]:
     return errors
 
 
-def build_release(root: str | Path, version: str | None = None, internal: bool = False) -> Path:
+def build_release(
+    root: str | Path,
+    version: str | None = None,
+    internal: bool = False,
+    online_update: bool = False,
+) -> Path:
+    if internal and online_update:
+        raise ValueError("内部包与在线更新包不能同时生成")
     root_path = Path(root)
     dist_dir = root_path / "dist"
     dist_dir.mkdir(exist_ok=True)
-    release_path = dist_dir / release_name(version, internal=internal)
+    release_path = dist_dir / release_name(version, internal=internal, online_update=online_update)
     if release_path.exists():
         release_path.unlink()
 
@@ -110,8 +159,16 @@ def build_release(root: str | Path, version: str | None = None, internal: bool =
             if path.is_dir():
                 continue
             rel = path.relative_to(root_path)
-            if should_include_file(rel, internal=internal):
-                archive.write(path, rel.as_posix())
+            if should_include_file(rel, internal=internal, online_update=online_update):
+                archive_name = DESKTOP_EXE if rel.parts == ("dist", DESKTOP_EXE) else rel.as_posix()
+                if rel.as_posix() == "configs/app_config.json":
+                    app_config = json.loads(path.read_text(encoding="utf-8"))
+                    app_config.pop("desktop_pet_position", None)
+                    app_config["desktop_pet"] = "clawd"
+                    app_config["desktop_pet_scale"] = 1.0
+                    archive.writestr(archive_name, json.dumps(app_config, ensure_ascii=False, indent=2) + "\n")
+                else:
+                    archive.write(path, archive_name)
     return release_path
 
 
@@ -119,6 +176,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="构建百度竞价日报/小时报自动化工具发布包")
     parser.add_argument("--version", default=DEFAULT_VERSION, help="发布版本号，例如 2.0 或 v2.0")
     parser.add_argument("--internal", action="store_true", help="构建内部包（包含 secrets/secrets.json）")
+    parser.add_argument("--online-update", action="store_true", help="构建在线更新包（包含 GUI，排除所有用户配置）")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -130,9 +188,14 @@ def main() -> None:
                 print(f"[失败] {err}")
             sys.exit(1)
 
-    release_path = build_release(root, version=args.version, internal=args.internal)
+    release_path = build_release(
+        root,
+        version=args.version,
+        internal=args.internal,
+        online_update=args.online_update,
+    )
     size_mb = release_path.stat().st_size / 1024 / 1024
-    pkg_type = "内部包" if args.internal else "普通包"
+    pkg_type = "在线更新包" if args.online_update else ("内部包" if args.internal else "普通包")
     print(f"{pkg_type}已生成：{release_path}")
     print(f"大小：{size_mb:.2f} MB")
 

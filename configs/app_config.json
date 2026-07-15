@@ -1,5 +1,11 @@
 {
   "default_project_id": "kunming_niu",
   "projects_dir": "configs/projects",
-  "secrets_file": "secrets/secrets.json"
+  "secrets_file": "secrets/secrets.json",
+  "desktop_pet": "hidden",
+  "desktop_pet_scale": 0.81,
+  "desktop_pet_position": {
+    "x": 1762,
+    "y": 922
+  }
 }

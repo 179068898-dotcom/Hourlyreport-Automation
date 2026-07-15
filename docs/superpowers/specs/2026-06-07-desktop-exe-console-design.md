@@ -82,7 +82,7 @@ Quick preflight command:
 .venv\Scripts\python.exe main.py --mode preflight --task hourly --quick
 ```
 
-The GUI may use a temporary app config copy when running a selected project so it does not unexpectedly overwrite `configs/app_config.json`. The existing OpenClaw BAT entry remains unchanged.
+The GUI may use a temporary app config copy when running a selected project so it does not unexpectedly overwrite `configs/app_config.json`. The HERMES BAT entry remains unchanged.
 
 ## Safety Rules
 
@@ -93,7 +93,7 @@ The GUI may use a temporary app config copy when running a selected project so i
 - Do not hide long-running work; always show progress and logs.
 - Do not print or reveal stored passwords in the UI.
 - Do not allow concurrent task runs in the first version.
-- Keep OpenClaw BAT compatibility intact.
+- Keep HERMES BAT compatibility intact.
 
 ## Environment Check
 
@@ -138,5 +138,5 @@ Manual GUI checks cover:
 - Editing Excel or project config paths in the GUI.
 - Editing account usernames or passwords.
 - Running two projects in parallel.
-- Replacing OpenClaw BAT workflows.
+- Replacing HERMES BAT workflows.
 - Sending QQ, WeChat, screenshots, or external messages.

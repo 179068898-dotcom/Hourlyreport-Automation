@@ -513,25 +513,33 @@ def _wait_for_search_promotion_content(page, logger, timeout_ms: int = 10000) ->
 
 def _refresh_report_and_wait_for_data(page, config: dict[str, Any], logger) -> str:
     logger.info("抓取前刷新百度 report 页面，避免读取未完成加载的数据")
+    reload_completed = False
     try:
         page.reload(wait_until="domcontentloaded", timeout=60000)
+        reload_completed = True
     except Exception as exc:
         logger.info("刷新百度 report 页面异常，继续等待当前页面数据：%s", exc)
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
-    except Exception:
-        logger.info("刷新后 networkidle 等待超时，继续轮询账户表格")
 
-    deadline = datetime.now().timestamp() + int(config.get("baidu", {}).get("report_table_wait_seconds", 30))
+    baidu_config = config.get("baidu", {})
+    settle_ms = int(baidu_config.get("report_settle_ms", 300))
+    poll_interval_ms = int(baidu_config.get("report_poll_interval_ms", 300))
+    if reload_completed and settle_ms > 0:
+        page.wait_for_timeout(settle_ms)
+
+    deadline = datetime.now().timestamp() + int(baidu_config.get("report_table_wait_seconds", 30))
     last_text = ""
+    previous_signature = ""
     while datetime.now().timestamp() < deadline:
         last_text = _read_page_text(page)
         extraction = extract_baidu_rows_from_page(page, config)
         if extraction.get("debug", {}).get("parse_ready"):
-            logger.info("百度 report 页面账户表格已加载且可解析")
-            return last_text
+            signature = json.dumps(extraction.get("rows") or [], ensure_ascii=False, sort_keys=True, default=str)
+            if signature == previous_signature:
+                logger.info("百度 report 页面账户表格已加载、稳定且可解析")
+                return last_text
+            previous_signature = signature
         try:
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(poll_interval_ms)
         except Exception:
             break
     logger.info("百度 report 页面账户表格等待结束，但仍不可解析")
