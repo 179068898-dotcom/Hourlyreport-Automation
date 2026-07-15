@@ -5439,6 +5439,169 @@ def test_baidu_oauth_bundle_import_is_atomic_and_does_not_expose_tokens(tmp_path
     assert len(list((tmp_path / "backups").glob("secrets_before_oauth_*.json"))) == 1
 
 
+def test_secrets_package_round_trip_fully_replaces_target_and_backs_up(tmp_path):
+    from modules.secrets_package import export_secrets_package, import_secrets_package
+
+    source = tmp_path / "source.json"
+    package = tmp_path / "team.baidu-secrets"
+    target = tmp_path / "receiver" / "secrets" / "secrets.json"
+    source_payload = {
+        "baidu": {"demo": {"username": "fake-user", "password": "fake-password"}},
+        "baidu_api": {"demo": {"access_token": "fake.access.token"}},
+        "shared_setting": {"enabled": True},
+    }
+    old_payload = {
+        "baidu": {"old": {"username": "old-user", "password": "old-password"}},
+        "local_only": True,
+    }
+    source.write_text(json.dumps(source_payload, ensure_ascii=False), encoding="utf-8")
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps(old_payload, ensure_ascii=False), encoding="utf-8")
+    old_bytes = target.read_bytes()
+
+    export_report = export_secrets_package(source, package)
+    import_report = import_secrets_package(package, target, tmp_path / "backups")
+
+    assert export_report["package_path"] == str(package)
+    assert json.loads(target.read_text(encoding="utf-8")) == source_payload
+    backup_path = Path(import_report["backup_path"])
+    assert backup_path.name.startswith("secrets_before_package_import_")
+    assert backup_path.read_bytes() == old_bytes
+    assert json.loads(backup_path.read_text(encoding="utf-8")) == old_payload
+    assert import_report["baidu_profile_count"] == 1
+    assert import_report["api_profile_count"] == 1
+    assert "fake-password" not in json.dumps(import_report, ensure_ascii=False)
+    assert "fake.access.token" not in json.dumps(import_report, ensure_ascii=False)
+
+
+def test_secrets_package_rejects_checksum_mismatch_without_changing_target(tmp_path):
+    import pytest
+
+    from modules.secrets_package import SecretsPackageError, import_secrets_package
+
+    target = tmp_path / "secrets.json"
+    target.write_text('{"baidu":{"keep":{}}}', encoding="utf-8")
+    before = target.read_bytes()
+    package = tmp_path / "bad.baidu-secrets"
+    package.write_text(json.dumps({
+        "format": "baidu-secrets-package-v1",
+        "exported_at": "2026-07-15T15:30:00",
+        "payload_sha256": "0" * 64,
+        "secrets": {"baidu": {}},
+    }), encoding="utf-8")
+
+    with pytest.raises(SecretsPackageError, match="校验"):
+        import_secrets_package(package, target, tmp_path / "backups")
+
+    assert target.read_bytes() == before
+    assert not (tmp_path / "backups").exists()
+
+
+def test_secrets_package_import_creates_missing_target_and_rejects_bad_structure(tmp_path):
+    import pytest
+
+    from modules.secrets_package import SecretsPackageError, export_secrets_package, import_secrets_package
+
+    invalid_source = tmp_path / "invalid.json"
+    invalid_source.write_text('{"baidu": []}', encoding="utf-8")
+    with pytest.raises(SecretsPackageError, match="baidu"):
+        export_secrets_package(invalid_source, tmp_path / "invalid.baidu-secrets")
+
+    source = tmp_path / "source.json"
+    package = tmp_path / "valid.baidu-secrets"
+    target = tmp_path / "new-root" / "secrets" / "secrets.json"
+    source.write_text('{"baidu": {}, "baidu_api": {}}', encoding="utf-8")
+    export_secrets_package(source, package)
+
+    report = import_secrets_package(package, target, tmp_path / "backups")
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"baidu": {}, "baidu_api": {}}
+    assert report["backup_path"] is None
+
+
+def test_secrets_package_rejects_malformed_or_wrong_format_package(tmp_path):
+    import pytest
+
+    from modules.secrets_package import SecretsPackageError, import_secrets_package
+
+    target = tmp_path / "secrets.json"
+    target.write_text('{"baidu":{"keep":{}}}', encoding="utf-8")
+    before = target.read_bytes()
+    malformed = tmp_path / "malformed.baidu-secrets"
+    malformed.write_text('{"format":', encoding="utf-8")
+    wrong_format = tmp_path / "wrong.baidu-secrets"
+    wrong_format.write_text(json.dumps({
+        "format": "unknown-v1",
+        "payload_sha256": "0" * 64,
+        "secrets": {"baidu": {}},
+    }), encoding="utf-8")
+
+    with pytest.raises(SecretsPackageError, match="合法 JSON"):
+        import_secrets_package(malformed, target, tmp_path / "backups")
+    with pytest.raises(SecretsPackageError, match="格式或版本"):
+        import_secrets_package(wrong_format, target, tmp_path / "backups")
+
+    assert target.read_bytes() == before
+
+
+def test_secrets_package_atomic_replace_failure_keeps_original_target(tmp_path, monkeypatch):
+    import pytest
+    import modules.secrets_package as secrets_package
+
+    source = tmp_path / "source.json"
+    package = tmp_path / "team.baidu-secrets"
+    target = tmp_path / "secrets.json"
+    source.write_text('{"baidu":{"new":{}}}', encoding="utf-8")
+    target.write_text('{"baidu":{"keep":{}}}', encoding="utf-8")
+    secrets_package.export_secrets_package(source, package)
+    before = target.read_bytes()
+    monkeypatch.setattr(secrets_package.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("locked")))
+
+    with pytest.raises(secrets_package.SecretsPackageError, match="无法写入"):
+        secrets_package.import_secrets_package(package, target, tmp_path / "backups")
+
+    assert target.read_bytes() == before
+    assert not list(target.parent.glob("secrets.json.*.tmp"))
+
+
+def test_secrets_package_backup_directory_error_is_actionable_and_keeps_target(tmp_path):
+    import pytest
+
+    from modules.secrets_package import SecretsPackageError, export_secrets_package, import_secrets_package
+
+    source = tmp_path / "source.json"
+    package = tmp_path / "team.baidu-secrets"
+    target = tmp_path / "secrets.json"
+    blocked_backup_dir = tmp_path / "backups"
+    source.write_text('{"baidu":{"new":{}}}', encoding="utf-8")
+    target.write_text('{"baidu":{"keep":{}}}', encoding="utf-8")
+    blocked_backup_dir.write_text("not a directory", encoding="utf-8")
+    export_secrets_package(source, package)
+    before = target.read_bytes()
+
+    with pytest.raises(SecretsPackageError, match="备份"):
+        import_secrets_package(package, target, blocked_backup_dir)
+
+    assert target.read_bytes() == before
+
+
+def test_secrets_package_cleanup_error_does_not_hide_atomic_write_failure(tmp_path, monkeypatch):
+    import pytest
+    import modules.secrets_package as secrets_package
+
+    source = tmp_path / "source.json"
+    package = tmp_path / "team.baidu-secrets"
+    target = tmp_path / "secrets.json"
+    source.write_text('{"baidu":{"new":{}}}', encoding="utf-8")
+    target.write_text('{"baidu":{"keep":{}}}', encoding="utf-8")
+    secrets_package.export_secrets_package(source, package)
+    monkeypatch.setattr(secrets_package.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace locked")))
+    monkeypatch.setattr(secrets_package.Path, "unlink", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("unlink locked")))
+
+    with pytest.raises(secrets_package.SecretsPackageError, match="无法写入"):
+        secrets_package.import_secrets_package(package, target, tmp_path / "backups")
+
+
 def test_baidu_oauth_callback_exchanges_code_and_exports_subaccounts(tmp_path, monkeypatch):
     import importlib.util
 
@@ -5562,8 +5725,24 @@ def test_online_update_file_filter_never_includes_user_configuration():
     assert should_include_file(Path("secrets") / "secrets.json", online_update=True) is False
 
 
-def test_internal_build_includes_secrets_json():
-    """内部 build_release 包含 secrets/secrets.json。"""
+def test_release_filter_excludes_exported_authorization_packages():
+    assert should_include_file(Path("百度授权配置.baidu-secrets"), internal=True) is False
+    assert should_include_file(Path("exports") / "team.baidu-secrets", online_update=True) is False
+    assert should_include_file(Path("nested") / "team.baidu-secrets") is False
+
+
+def test_gitignore_excludes_exported_authorization_packages():
+    root = Path(__file__).resolve().parents[1]
+    ignored_patterns = {
+        line.strip()
+        for line in (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert "*.baidu-secrets" in ignored_patterns
+
+
+def test_internal_build_excludes_secrets_json():
+    """内部 build_release 也不再包含 secrets/secrets.json。"""
     root = Path(__file__).resolve().parents[1]
     release = build_release(root, version="0.4.15", internal=True)
     assert "hourly_report_bot_internal_v0.4.15" in release.name
@@ -5571,7 +5750,27 @@ def test_internal_build_includes_secrets_json():
     import zipfile
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
-    assert "secrets/secrets.json" in names
+    assert "secrets/secrets.json" not in names
+    assert "secrets/secrets.example.json" in names
+
+
+def test_built_archive_excludes_authorization_package_and_real_secrets(tmp_path):
+    import zipfile
+
+    (tmp_path / "main.py").write_text("print('demo')\n", encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.json").write_text('{"baidu": {}}', encoding="utf-8")
+    (tmp_path / "secrets" / "secrets.example.json").write_text('{"baidu": {}}', encoding="utf-8")
+    (tmp_path / "team.baidu-secrets").write_text("sensitive-placeholder", encoding="utf-8")
+
+    release = build_release(tmp_path, version="config-safe", internal=True)
+
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+    assert "main.py" in names
+    assert "secrets/secrets.example.json" in names
+    assert "secrets/secrets.json" not in names
+    assert "team.baidu-secrets" not in names
 
 
 def test_internal_build_includes_desktop_exe_when_available():
@@ -5609,85 +5808,6 @@ def test_default_internal_release_name_uses_hermes_date_marker():
     from tools.build_release import release_name
 
     assert release_name(internal=True) == "hourly_report_bot_internal_hermes_20260710.zip"
-
-
-def test_internal_build_validates_missing_profile(tmp_path):
-    """内部包缺少 profile 时校验失败。"""
-    from tools.build_release import _validate_internal_secrets
-
-    (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
-        "baidu": {
-            "kunming_niu_baidu": {"username": "a", "password": "b"},
-            "nanjing_niu_baidu": {"username": "a", "password": "b"},
-        }
-    }, ensure_ascii=False), encoding="utf-8")
-
-    errors = _validate_internal_secrets(tmp_path)
-    assert len(errors) > 0
-    assert any("缺少百度凭据 profile" in e for e in errors)
-
-
-def test_internal_build_validates_empty_credentials(tmp_path):
-    """内部包 profile 账号或密码为空时校验失败。"""
-    from tools.build_release import _validate_internal_secrets
-
-    (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
-        "baidu": {
-            "kunming_niu_baidu": {"username": "", "password": "b"},
-            "nanjing_niu_baidu": {"username": "a", "password": ""},
-            "ningbo_niu_baidu": {"username": "a", "password": "b"},
-            "changsha_niu_baidu": {"username": "a", "password": "b"},
-        }
-    }, ensure_ascii=False), encoding="utf-8")
-
-    errors = _validate_internal_secrets(tmp_path)
-    assert len(errors) > 0
-    assert any("未填写账号" in e for e in errors)
-    assert any("未填写密码" in e for e in errors)
-
-
-def test_internal_build_requires_shenyang_multi_source_profiles(tmp_path):
-    """内部包必须同时具备沈阳中亚与沈阳银康百度凭据。"""
-    from tools.build_release import _validate_internal_secrets
-
-    (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
-        "baidu": {
-            "kunming_niu_baidu": {"username": "a", "password": "b"},
-            "nanjing_niu_baidu": {"username": "a", "password": "b"},
-            "ningbo_niu_baidu": {"username": "a", "password": "b"},
-            "changsha_niu_baidu": {"username": "a", "password": "b"},
-        }
-    }, ensure_ascii=False), encoding="utf-8")
-
-    errors = _validate_internal_secrets(tmp_path)
-    assert "缺少百度凭据 profile：shenyang_niu_zhongya_baidu" in errors
-    assert "缺少百度凭据 profile：shenyang_niu_yinkang_baidu" in errors
-
-
-def test_internal_build_validates_all_complete(tmp_path):
-    """内部包六个 profile 完整时校验通过。"""
-    from tools.build_release import _validate_internal_secrets
-
-    (tmp_path / "secrets").mkdir()
-    (tmp_path / "secrets" / "secrets.json").write_text(json.dumps({
-            "baidu": {
-                "kunming_niu_baidu": {"username": "a", "password": "b"},
-                "nanjing_niu_baidu": {"username": "a", "password": "b"},
-                "ningbo_niu_baidu": {"username": "a", "password": "b"},
-                "changsha_niu_baidu": {"username": "a", "password": "b"},
-                "shenyang_niu_zhongya_baidu": {"username": "a", "password": "b"},
-                "shenyang_niu_yinkang_baidu": {"username": "a", "password": "b"},
-                "qingdao_bai_baidu": {"username": "a", "password": "b"},
-                "shenyang_bai_source_a_baidu": {"username": "a", "password": "b"},
-                "shenyang_bai_source_b_baidu": {"username": "a", "password": "b"},
-            }
-        }, ensure_ascii=False), encoding="utf-8")
-
-    errors = _validate_internal_secrets(tmp_path)
-    assert errors == []
 
 
 # ── 夏思道说明文件测试 ────────────────────────────────────
@@ -5913,7 +6033,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.hourly_title.text() == "小时报选择"
     assert window.daily_title.text() == "日报执行"
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
-        "项目配置检查", "恢复备份", "桌面宠物", "退出程序"
+        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
     ]
     assert window.minimize_button.toolTip() == "最小化"
     assert window.maximize_button.toolTip() == "最大化"
@@ -6147,12 +6267,14 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统配置") + 20
     assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
-        "项目配置检查", "恢复备份", "桌面宠物", "退出程序"
+        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
     ]
     from gui.main_window import InlineMenuRow
     inline_labels = [row.text() for row in window.inline_config_menu.findChildren(InlineMenuRow)]
     assert "更新 Excel 路径" not in inline_labels
     assert "更新账号密码" not in inline_labels
+    assert "导入授权配置" in inline_labels
+    assert "导出授权配置" in inline_labels
     assert [action.text() for action in window.pet_menu.actions() if not action.isSeparator()] == [
         "Clawd 小螃蟹", "隐藏宠物"
     ]
@@ -6185,6 +6307,181 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     window.on_update_ready("2026.7.15.102", Path("update.zip"))
     assert window.update_button.text() == "更新"
     assert "2026.7.15.102" in window.update_button.toolTip()
+    window.close()
+
+
+def _write_minimal_gui_project(root: Path) -> None:
+    projects = root / "configs" / "projects"
+    projects.mkdir(parents=True)
+    (root / "configs" / "app_config.json").write_text(json.dumps({
+        "default_project_id": "demo",
+        "projects_dir": "configs/projects",
+        "secrets_file": "secrets/secrets.json",
+    }, ensure_ascii=False), encoding="utf-8")
+    (projects / "demo.json").write_text(json.dumps({
+        "project_id": "demo",
+        "project_name": "演示项目",
+        "excel": {"path": str(root / "target.xlsx")},
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def test_desktop_gui_exports_authorization_config_with_standard_extension(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    import gui.main_window as main_window
+
+    _write_minimal_gui_project(tmp_path)
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text('{"baidu": {}}', encoding="utf-8")
+    selected = tmp_path / "百度授权配置"
+    calls = []
+    messages = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args, **kwargs: (str(selected), "授权配置"))
+    monkeypatch.setattr(
+        main_window,
+        "export_secrets_package",
+        lambda source, output: calls.append((Path(source), Path(output))) or {"package_path": str(output)},
+        raising=False,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: messages.append(args[2]))
+
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    window.export_authorization_config()
+
+    assert calls == [(secrets_path, Path(str(selected) + ".baidu-secrets"))]
+    assert messages and "明文" in messages[0]
+    window.close()
+
+
+def test_desktop_gui_imports_authorization_config_then_runs_project_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    import gui.main_window as main_window
+
+    _write_minimal_gui_project(tmp_path)
+    package = tmp_path / "team.baidu-secrets"
+    package.write_text("{}", encoding="utf-8")
+    import_calls = []
+    preflight_calls = []
+    information_calls = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args, **kwargs: (str(package), "授权配置"))
+    monkeypatch.setattr(
+        main_window,
+        "import_secrets_package",
+        lambda source, target, backups: import_calls.append((Path(source), Path(target), Path(backups))) or {
+            "package_path": str(source),
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: information_calls.append(args))
+
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    window.project_combo.set_multi_mode(True)
+    window.run_environment_preflight = lambda allow_multi=False: preflight_calls.append(allow_multi)
+    window.import_authorization_config()
+
+    assert import_calls == [(package, tmp_path / "secrets" / "secrets.json", tmp_path / "backups")]
+    assert preflight_calls == [True]
+    assert information_calls == []
+    window.close()
+
+
+def test_desktop_gui_real_authorization_import_replaces_secrets_then_checks(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog
+    import gui.main_window as main_window
+    from modules.secrets_package import export_secrets_package
+
+    _write_minimal_gui_project(tmp_path)
+    source = tmp_path / "admin-secrets.json"
+    package = tmp_path / "team.baidu-secrets"
+    target = tmp_path / "secrets" / "secrets.json"
+    source_payload = {
+        "baidu": {"shared": {"username": "fake-user", "password": "fake-password"}},
+        "baidu_api": {"shared": {"access_token": "fake.access.token"}},
+    }
+    source.write_text(json.dumps(source_payload, ensure_ascii=False), encoding="utf-8")
+    target.parent.mkdir(parents=True)
+    target.write_text('{"baidu":{"old":{}}}', encoding="utf-8")
+    export_secrets_package(source, package)
+    preflight_calls = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args, **kwargs: (str(package), "授权配置"))
+
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    window.run_environment_preflight = lambda allow_multi=False: preflight_calls.append(allow_multi)
+    window.import_authorization_config()
+
+    assert json.loads(target.read_text(encoding="utf-8")) == source_payload
+    assert len(list((tmp_path / "backups").glob("secrets_before_package_import_*.json"))) == 1
+    assert preflight_calls == [True]
+    window.close()
+
+
+def test_desktop_gui_import_failure_explains_reason_and_allows_retry(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    import gui.main_window as main_window
+    from modules.secrets_package import SecretsPackageError
+
+    _write_minimal_gui_project(tmp_path)
+    bad_package = tmp_path / "bad.baidu-secrets"
+    good_package = tmp_path / "good.baidu-secrets"
+    selections = iter(((str(bad_package), "授权配置"), (str(good_package), "授权配置")))
+    import_calls = []
+    preflight_calls = []
+    warnings = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args, **kwargs: next(selections))
+
+    def fake_import(source, target, backups):
+        import_calls.append(Path(source))
+        if Path(source) == bad_package:
+            raise SecretsPackageError("授权配置包校验失败")
+        return {"package_path": str(source)}
+
+    monkeypatch.setattr(main_window, "import_secrets_package", fake_import, raising=False)
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: warnings.append(args[2]) or QMessageBox.StandardButton.Retry,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    window.run_environment_preflight = lambda allow_multi=False: preflight_calls.append(allow_multi)
+    window.import_authorization_config()
+
+    assert import_calls == [bad_package, good_package]
+    assert warnings == ["授权配置包校验失败"]
+    assert preflight_calls == [True]
+    window.close()
+
+
+def test_desktop_gui_blocks_authorization_import_while_task_is_running(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    import gui.main_window as main_window
+
+    _write_minimal_gui_project(tmp_path)
+    dialog_calls = []
+    warnings = []
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: dialog_calls.append(True) or ("", ""),
+    )
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: warnings.append(args[2]))
+
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    window.runner.is_running = lambda: True
+    window.import_authorization_config()
+
+    assert dialog_calls == []
+    assert warnings and "任务" in warnings[0]
     window.close()
 
 

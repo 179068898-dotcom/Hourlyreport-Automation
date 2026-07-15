@@ -59,6 +59,7 @@
 - `secrets` 必须是对象，`baidu` 必须是对象；存在 `baidu_api` 时也必须是对象。
 - 重新计算并严格比对 `payload_sha256`，不一致时拒绝导入。
 - 完整覆盖本机 `secrets/secrets.json`，不做字段合并。
+- 日报、小时报或环境安装正在运行时拒绝导入，避免在任务中途替换凭据。
 - 目标路径固定通过 GUI 的 `credentials_config_path()` 获取，当前为项目根目录下的 `secrets/secrets.json`。
 - 目标文件存在时，先静默备份到 `backups/secrets_before_package_import_YYYYMMDD_HHMMSS.json`。
 - 先将新配置写入同目录临时文件，刷新并关闭文件后使用 `os.replace()` 原子替换目标文件。
@@ -94,6 +95,7 @@
 ## 发布边界
 
 - `.baidu-secrets` 必须加入发布包排除后缀，普通包、内部包和在线更新包都不得意外携带用户导出的配置包。
+- 普通包、内部包和在线更新包都不得包含真实 `secrets/secrets.json`，程序包与授权配置包分开传递。
 - 在线更新仍保护 `secrets/`，不会覆盖已经导入的本机配置。
 - 配置包不得提交 Git，不得上传 GitHub Release。
 

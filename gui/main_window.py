@@ -68,6 +68,11 @@ from gui.project_store import ProjectSummary, load_project_summaries
 from gui.task_runner import QtTaskRunner, infer_pet_event
 from gui.update_manager import APP_EXE_NAME, GitHubUpdateManager, launch_update_helper
 from modules.project_config import get_excel_path, load_project_config
+from modules.secrets_package import (
+    SecretsPackageError,
+    export_secrets_package,
+    import_secrets_package,
+)
 
 
 STAGES = [
@@ -303,6 +308,8 @@ class InlineConfigMenu(QFrame):
     project_check_requested = Signal()
     update_path_requested = Signal()
     update_credentials_requested = Signal()
+    import_secrets_requested = Signal()
+    export_secrets_requested = Signal()
     restore_backup_requested = Signal()
     pet_mode_requested = Signal(str)
     pet_scale_requested = Signal(float)
@@ -323,6 +330,8 @@ class InlineConfigMenu(QFrame):
         # 配置文件编辑能力继续保留给现有脚本，仅暂时从普通用户菜单隐藏。
         # layout.addWidget(self._action_row("更新 Excel 路径", self.update_path_requested.emit))
         # layout.addWidget(self._action_row("更新账号密码", self.update_credentials_requested.emit))
+        layout.addWidget(self._action_row("导入授权配置", self.import_secrets_requested.emit))
+        layout.addWidget(self._action_row("导出授权配置", self.export_secrets_requested.emit))
         layout.addWidget(self._action_row("恢复备份", self.restore_backup_requested.emit))
         layout.addWidget(self._separator())
 
@@ -1365,16 +1374,22 @@ class MainWindow(QMainWindow):
         self.project_check_action = QAction("项目配置检查", self.system_config_menu)
         update_path_action = QAction("更新 Excel 路径", self.system_config_menu)
         update_credentials_action = QAction("更新账号密码", self.system_config_menu)
+        import_secrets_action = QAction("导入授权配置", self.system_config_menu)
+        export_secrets_action = QAction("导出授权配置", self.system_config_menu)
         restore_backup_action = QAction("恢复备份", self.system_config_menu)
         self.project_check_action.triggered.connect(self.run_environment_preflight)
         update_path_action.triggered.connect(self.open_selected_project_config)
         update_credentials_action.triggered.connect(self.open_credentials_config)
+        import_secrets_action.triggered.connect(self.import_authorization_config)
+        export_secrets_action.triggered.connect(self.export_authorization_config)
         restore_backup_action.triggered.connect(self.restore_backup)
         self.system_config_menu.addAction(self.project_check_action)
         self.system_config_menu.addSeparator()
         # 保留 QAction 和处理函数，暂时不向菜单暴露路径、账号密码编辑入口。
         # self.system_config_menu.addAction(update_path_action)
         # self.system_config_menu.addAction(update_credentials_action)
+        self.system_config_menu.addAction(import_secrets_action)
+        self.system_config_menu.addAction(export_secrets_action)
         self.system_config_menu.addAction(restore_backup_action)
         self.system_config_menu.addSeparator()
         self.pet_menu = QMenu("桌面宠物", self.system_config_menu)
@@ -1401,6 +1416,8 @@ class MainWindow(QMainWindow):
         self.inline_config_menu.project_check_requested.connect(self.run_environment_preflight)
         self.inline_config_menu.update_path_requested.connect(self.open_selected_project_config)
         self.inline_config_menu.update_credentials_requested.connect(self.open_credentials_config)
+        self.inline_config_menu.import_secrets_requested.connect(self.import_authorization_config)
+        self.inline_config_menu.export_secrets_requested.connect(self.export_authorization_config)
         self.inline_config_menu.restore_backup_requested.connect(self.restore_backup)
         self.inline_config_menu.pet_mode_requested.connect(self.set_desktop_pet_mode)
         self.inline_config_menu.pet_scale_requested.connect(self.set_desktop_pet_scale)
@@ -2549,6 +2566,80 @@ class MainWindow(QMainWindow):
         self.open_path(path)
         self.append_log(f"已打开账号密码配置：{path}")
 
+    def export_authorization_config(self) -> None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_dir = Path.home() / "Documents"
+        if not default_dir.exists():
+            default_dir = Path.home()
+        default_path = default_dir / f"百度授权配置_{timestamp}.baidu-secrets"
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "导出授权配置",
+            str(default_path),
+            "授权配置包 (*.baidu-secrets);;所有文件 (*.*)",
+        )
+        if not selected:
+            return
+
+        output_path = Path(selected)
+        if output_path.suffix.casefold() != ".baidu-secrets":
+            output_path = Path(str(output_path) + ".baidu-secrets")
+        try:
+            report = export_secrets_package(self.credentials_config_path(), output_path)
+        except SecretsPackageError as exc:
+            QMessageBox.warning(self, "导出授权配置失败", str(exc))
+            self.append_log(f"导出授权配置失败：{exc}")
+            return
+
+        package_path = report.get("package_path") or str(output_path)
+        self.append_log(f"授权配置已导出：{package_path}")
+        QMessageBox.information(
+            self,
+            "授权配置已导出",
+            f"配置包已保存到：\n{package_path}\n\n这是包含账号密码和 OAuth Token 的明文文件，请仅在公司内部妥善传递。",
+        )
+
+    def import_authorization_config(self) -> None:
+        if self.runner.is_running() or self.environment_runner.is_running():
+            QMessageBox.warning(
+                self,
+                "任务正在运行",
+                "当前任务尚未结束，请等待任务完成后再导入授权配置。",
+            )
+            return
+        while True:
+            selected, _ = QFileDialog.getOpenFileName(
+                self,
+                "导入授权配置",
+                str(Path.home()),
+                "授权配置包 (*.baidu-secrets);;所有文件 (*.*)",
+            )
+            if not selected:
+                return
+            try:
+                report = import_secrets_package(
+                    selected,
+                    self.credentials_config_path(),
+                    self.root / "backups",
+                )
+            except SecretsPackageError as exc:
+                self.append_log(f"导入授权配置失败：{exc}")
+                choice = QMessageBox.warning(
+                    self,
+                    "导入授权配置失败",
+                    str(exc),
+                    QMessageBox.StandardButton.Retry | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Retry,
+                )
+                if choice == QMessageBox.StandardButton.Retry:
+                    continue
+                return
+
+            package_path = report.get("package_path") or selected
+            self.append_log(f"授权配置导入完成：{package_path}")
+            self.run_environment_preflight(allow_multi=True)
+            return
+
     def restore_backup(self) -> None:
         try:
             target_path = self.selected_project_excel_path()
@@ -2802,11 +2893,11 @@ class MainWindow(QMainWindow):
         self.desktop_pet.announce(f"{self.selected_project_name()} {self.display_daily_date()}日报正在做。", "running")
         self.start_command("日报执行中", command)
 
-    def run_environment_preflight(self) -> None:
-        self.run_preflight("hourly")
+    def run_environment_preflight(self, allow_multi: bool = False) -> None:
+        self.run_preflight("hourly", allow_multi=allow_multi)
 
-    def run_preflight(self, task: str) -> None:
-        if self.multi_project_execution_pending():
+    def run_preflight(self, task: str, allow_multi: bool = False) -> None:
+        if not allow_multi and self.multi_project_execution_pending():
             return
         project_id = self.selected_project_id()
         command = build_preflight_command(self.root, task, project_id=project_id)

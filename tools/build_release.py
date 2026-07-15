@@ -3,17 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import sys
 import zipfile
 from datetime import date
 from pathlib import Path
 
 DEFAULT_VERSION = "hermes_20260710"
-EXCLUDE_DIRS = {".venv", ".git", ".claude", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud"}
+EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud"}
 DESKTOP_EXE = "百度数据自动化控制台.exe"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
-EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec"}
+EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec", ".baidu-secrets"}
 EXCLUDE_FILES = {
     "config.json",
     "credentials.local.json",
@@ -39,18 +38,6 @@ LEGACY_ROOT_FILES = {
     "setup_env.bat",
     "START_HERE.bat",
 }
-
-REQUIRED_INTERNAL_PROFILES = [
-    "kunming_niu_baidu",
-    "nanjing_niu_baidu",
-    "ningbo_niu_baidu",
-    "changsha_niu_baidu",
-    "shenyang_niu_zhongya_baidu",
-    "shenyang_niu_yinkang_baidu",
-    "qingdao_bai_baidu",
-    "shenyang_bai_source_a_baidu",
-    "shenyang_bai_source_b_baidu",
-]
 
 ONLINE_VERSION_PATTERN = re.compile(r"^v?(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$")
 
@@ -119,12 +106,12 @@ def should_include_file(path: Path, internal: bool = False, online_update: bool 
         return False
     if path.suffix.lower() in EXCLUDE_SUFFIXES:
         return False
-    # secrets: 普通包排除 secrets.json，内部包包含
+    # 所有程序发布包都排除真实凭据；授权配置通过独立配置包传递。
     if len(parts) >= 2 and parts[0] == "secrets":
         if path.name == "secrets.example.json":
             return True
         if path.name == "secrets.json":
-            return internal
+            return False
         return False
     if parts and parts[0] in EXCLUDE_RUNTIME_DIRS:
         return path.name == ".gitkeep"
@@ -137,31 +124,6 @@ def should_include_file(path: Path, internal: bool = False, online_update: bool 
     if parts and parts[0] == "samples":
         return path.name == ".gitkeep"
     return True
-
-
-def _validate_internal_secrets(root: Path) -> list[str]:
-    """校验内部包所需的百度凭据 profile 是否完整。返回错误列表。"""
-    secrets_path = root / "secrets" / "secrets.json"
-    errors: list[str] = []
-    if not secrets_path.exists():
-        errors.append("缺少 secrets/secrets.json")
-        return errors
-    try:
-        data = json.loads(secrets_path.read_text(encoding="utf-8"))
-    except Exception:
-        errors.append("secrets/secrets.json 无法解析")
-        return errors
-    baidu = data.get("baidu", {})
-    for profile in REQUIRED_INTERNAL_PROFILES:
-        item = baidu.get(profile)
-        if not isinstance(item, dict):
-            errors.append(f"缺少百度凭据 profile：{profile}")
-            continue
-        if not item.get("username", "").strip():
-            errors.append(f"未填写账号：{profile}")
-        if not item.get("password", "").strip():
-            errors.append(f"未填写密码：{profile}")
-    return errors
 
 
 def build_release(
@@ -200,18 +162,11 @@ def build_release(
 def main() -> None:
     parser = argparse.ArgumentParser(description="构建百度竞价日报/小时报自动化工具发布包")
     parser.add_argument("--version", default=DEFAULT_VERSION, help="发布版本号，例如 2.0 或 v2.0")
-    parser.add_argument("--internal", action="store_true", help="构建内部包（包含 secrets/secrets.json）")
+    parser.add_argument("--internal", action="store_true", help="构建内部包（不包含本机账号和授权配置）")
     parser.add_argument("--online-update", action="store_true", help="构建在线更新包（包含 GUI，排除所有用户配置）")
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
-
-    if args.internal:
-        errors = _validate_internal_secrets(root)
-        if errors:
-            for err in errors:
-                print(f"[失败] {err}")
-            sys.exit(1)
 
     release_path = build_release(
         root,

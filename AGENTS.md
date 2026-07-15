@@ -34,6 +34,8 @@
 - 示例：`2026.7.15.101` 的下一次发布若发生在 2026-07-16，版本号必须是 `2026.7.16.102`；同日再次发布则为 `2026.7.16.103`。
 - GitHub Release tag 使用 `v<版本号>`，在线更新 ZIP 使用 `baidu_data_automation_update_<版本号>.zip`。
 - 在线更新包只能包含程序文件，不得覆盖 `configs/`、`secrets/`、日志、报告、备份、快商通导出目录或浏览器数据。
+- `.baidu-secrets` 是包含完整账号密码和 OAuth Token 的明文授权配置包，禁止提交 Git、写入日志或打入任何发布包。
+- 普通包、内部包和在线更新包都不得包含 `secrets/secrets.json`；真实凭据只能通过独立 `.baidu-secrets` 配置包传递。
 
 ## 百度 API 开发边界
 

@@ -36,4 +36,5 @@ nul
 cloud/*/build/
 cloud/*/dist/
 *.baidu-auth
+*.baidu-secrets
 reports/baidu_daily_page_text_dump.txt
