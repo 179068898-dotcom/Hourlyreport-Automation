@@ -1231,7 +1231,11 @@ class MainWindow(QMainWindow):
         self.environment_runner.finished.connect(self.on_environment_install_finished)
         self.environment_runner.failed_to_start.connect(self.on_environment_install_failed)
 
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Window)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Window
+            | Qt.WindowType.WindowMinimizeButtonHint
+        )
         icon = QIcon(str(app_icon_path(self.root)))
         self.setWindowIcon(icon)
         self.setWindowTitle("百度数据自动化控制台")
@@ -1322,6 +1326,12 @@ class MainWindow(QMainWindow):
     def _style_menu(self, menu: QMenu, width: int = 228) -> None:
         menu.setMinimumWidth(width)
         menu.setFont(QFont(FONT_FAMILY, MAIN_FONT_PT))
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        menu.setWindowFlags(
+            menu.windowFlags()
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
         menu.setStyleSheet(f"""
             QMenu {{
                 background: #ffffff;

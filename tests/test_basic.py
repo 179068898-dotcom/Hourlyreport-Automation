@@ -6023,6 +6023,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.status_title.isHidden()
     assert window.status_detail.isHidden()
     assert bool(window.windowFlags() & Qt.WindowType.FramelessWindowHint)
+    assert bool(window.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint)
     assert window.title_bar.objectName() == "titleBar"
     assert window.title_bar.height() == 39
     assert 40 <= window.spinner.width() <= 52
@@ -7289,6 +7290,7 @@ def test_desktop_pet_keeps_running_when_console_is_hidden(monkeypatch):
 
 def test_desktop_gui_tray_icon_opens_console_and_exposes_exit(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication, QSystemTrayIcon
     from gui.main_window import MainWindow
 
@@ -7298,6 +7300,9 @@ def test_desktop_gui_tray_icon_opens_console_and_exposes_exit(monkeypatch):
     assert not window.tray_icon.icon().isNull()
     assert [action.text() for action in window.tray_menu.actions()] == ["打开控制台", "退出程序"]
     assert window.tray_icon.contextMenu() is window.tray_menu
+    assert window.tray_menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert bool(window.tray_menu.windowFlags() & Qt.WindowType.NoDropShadowWindowHint)
+    assert "border-radius: 10px" in window.tray_menu.styleSheet()
 
     window.hide()
     window.tray_icon.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
