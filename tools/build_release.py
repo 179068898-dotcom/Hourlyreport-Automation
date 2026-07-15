@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import zipfile
+from datetime import date
 from pathlib import Path
 
 DEFAULT_VERSION = "hermes_20260710"
@@ -51,6 +52,31 @@ REQUIRED_INTERNAL_PROFILES = [
     "shenyang_bai_source_b_baidu",
 ]
 
+ONLINE_VERSION_PATTERN = re.compile(r"^v?(\d{4})\.(\d{1,2})\.(\d{1,2})\.(\d+)$")
+
+
+def validate_online_version(version: str) -> str:
+    raw = str(version or "").strip()
+    match = ONLINE_VERSION_PATTERN.fullmatch(raw)
+    if not match:
+        raise ValueError("在线版本号必须使用 YYYY.M.D.NNN 格式")
+
+    year, month, day, counter = (int(part) for part in match.groups())
+    try:
+        date(year, month, day)
+    except ValueError as exc:
+        raise ValueError(f"在线版本号日期无效：{year}.{month}.{day}") from exc
+    if counter < 100:
+        raise ValueError("在线版本号的永久累计序号必须从 100 起")
+    return f"{year}.{month}.{day}.{counter}"
+
+
+def next_online_version(latest_version: str, release_date: date | None = None) -> str:
+    current = validate_online_version(latest_version)
+    counter = int(current.rsplit(".", 1)[1]) + 1
+    target_date = release_date or date.today()
+    return f"{target_date.year}.{target_date.month}.{target_date.day}.{counter}"
+
 
 def normalize_version(version: str | None) -> str:
     raw = (version or DEFAULT_VERSION).strip()
@@ -65,8 +91,7 @@ def release_name(version: str | None = None, internal: bool = False, online_upda
     if internal and online_update:
         raise ValueError("内部包与在线更新包不能同时生成")
     if online_update:
-        normalized = normalize_version(version)
-        clean_version = normalized[1:] if normalized.startswith("v") else normalized
+        clean_version = validate_online_version(version or "")
         return f"baidu_data_automation_update_{clean_version}.zip"
     prefix = "hourly_report_bot_internal" if internal else "hourly_report_bot_release"
     return f"{prefix}_{normalize_version(version)}.zip"

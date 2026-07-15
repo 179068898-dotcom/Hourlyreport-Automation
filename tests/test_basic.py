@@ -5532,6 +5532,27 @@ def test_online_update_build_contains_program_but_excludes_user_data():
     assert not any(name.startswith("browser_profile/") for name in names)
 
 
+def test_online_release_version_counter_never_resets_with_date():
+    from datetime import date
+
+    from tools.build_release import next_online_version, validate_online_version
+
+    assert validate_online_version("2026.7.15.101") == "2026.7.15.101"
+    assert next_online_version("2026.7.15.101", date(2026, 7, 16)) == "2026.7.16.102"
+    assert next_online_version("2026.7.16.102", date(2026, 7, 16)) == "2026.7.16.103"
+
+
+def test_online_release_version_rejects_invalid_date_or_counter():
+    import pytest
+
+    from tools.build_release import validate_online_version
+
+    with pytest.raises(ValueError, match="日期"):
+        validate_online_version("2026.2.30.102")
+    with pytest.raises(ValueError, match="100"):
+        validate_online_version("2026.7.16.99")
+
+
 def test_online_update_file_filter_never_includes_user_configuration():
     assert should_include_file(Path("main.py"), online_update=True) is True
     assert should_include_file(Path("gui") / "main_window.py", online_update=True) is True
