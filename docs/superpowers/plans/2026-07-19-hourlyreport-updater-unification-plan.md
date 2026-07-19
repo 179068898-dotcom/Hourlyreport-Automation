@@ -9,7 +9,7 @@
 - `tools/build_desktop_exe.py`：生成 `hourlyreport_automation.exe`。
 - `tools/build_release.py`：生成统一命名的在线包与首次安装包。
 - `tests/test_basic.py`：更新协议、安全边界、GUI 状态、构建命名和兼容迁移回归测试。
-- `docs/online_update_sop.md`、`README.md`、`AGENTS.md`：发布与桥接说明。
+- `docs/online_update_sop.md`、`README.md`、`AGENTS.md`：发布与 104 基线说明。
 
 ## 任务一：锁定新发布协议
 
@@ -44,13 +44,13 @@
 
 更新 GUI 测试，要求标题布局间距为 2 px，系统配置与数据模式按钮宽度仅比文字宽 10 px 左右。修改按钮固定尺寸与样式内边距，保持悬浮区域居中且不裁字。
 
-## 任务五：同步文档与桥接发布规则
+## 任务五：同步文档与 104 基线发布规则
 
 更新 `AGENTS.md`、`README.md` 和 `docs/online_update_sop.md`：
 
 - 新仓库、新 tag、新资产与新 EXE 名称。
-- 首个迁移版本必须同时上传新旧仓库。
-- 后续只发布新仓库。
+- 104 重新制作完整内部基线包并人工分发。
+- 104 及后续版本只访问和发布新仓库。
 - 真实 secrets 和用户配置继续禁止进入任何发布包。
 
 ## 任务六：验证、提交与目录迁移

@@ -102,14 +102,14 @@ STAGES = [
 TITLE_FONT_PT = 10
 MAIN_FONT_PT = 9
 SUB_FONT_PT = 8
-FONT_LIGHT_FAMILY = "Microsoft YaHei Light"
+FONT_LIGHT_FAMILY = "Microsoft YaHei"
 FONT_REGULAR_FAMILY = "Microsoft YaHei"
-FONT_TITLE_FAMILY = "Microsoft YaHei UI"
-FONT_FAMILY = FONT_REGULAR_FAMILY
+FONT_TITLE_FAMILY = "Microsoft YaHei"
+FONT_FAMILY = FONT_TITLE_FAMILY
 FONT_STACK = '"Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif'
-FONT_MENU_STACK = '"Microsoft YaHei Light", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
-FONT_REGULAR_STACK = '"Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif'
-FONT_TITLE_STACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
+FONT_MENU_STACK = FONT_STACK
+FONT_REGULAR_STACK = FONT_STACK
+FONT_TITLE_STACK = FONT_STACK
 BASE_WINDOW_SIZE = QSize(966, 700)
 
 
@@ -157,6 +157,11 @@ def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
         painter.drawArc(QRectF(s * 0.18, s * 0.18, s * 0.64, s * 0.64), 35 * 16, 285 * 16)
         painter.drawLine(round(s * 0.30), round(s * 0.29), round(s * 0.18), round(s * 0.30))
         painter.drawLine(round(s * 0.30), round(s * 0.29), round(s * 0.27), round(s * 0.42))
+    elif kind == "download":
+        painter.drawLine(round(s * 0.50), round(s * 0.18), round(s * 0.50), round(s * 0.62))
+        painter.drawLine(round(s * 0.34), round(s * 0.48), round(s * 0.50), round(s * 0.64))
+        painter.drawLine(round(s * 0.66), round(s * 0.48), round(s * 0.50), round(s * 0.64))
+        painter.drawLine(round(s * 0.25), round(s * 0.80), round(s * 0.75), round(s * 0.80))
     elif kind == "flow":
         painter.drawRoundedRect(QRectF(s * 0.20, s * 0.22, s * 0.60, s * 0.46), s * 0.08, s * 0.08)
         painter.drawLine(round(s * 0.34), round(s * 0.38), round(s * 0.62), round(s * 0.38))
@@ -1517,13 +1522,16 @@ class MainWindow(QMainWindow):
         icon = QIcon(str(app_icon_path(self.root)))
         self.setWindowIcon(icon)
         self.setWindowTitle(PRODUCT_DISPLAY_NAME)
-        self.setFont(QFont(FONT_FAMILY, MAIN_FONT_PT))
+        base_font = QFont(FONT_FAMILY, MAIN_FONT_PT)
+        base_font.setWeight(QFont.Weight.Bold)
+        self.setFont(base_font)
         self.setFixedSize(BASE_WINDOW_SIZE)
         self._drag_offset = None
         self._build_ui()
         self._apply_style()
         self._build_tray()
         self.update_manager = GitHubUpdateManager(self)
+        self.update_manager.checking.connect(self.on_update_checking)
         self.update_manager.download_progress.connect(self.on_update_download_progress)
         self.update_manager.ready.connect(self.on_update_ready)
         self.update_manager.up_to_date.connect(self.on_update_up_to_date)
@@ -1668,15 +1676,16 @@ class MainWindow(QMainWindow):
         self.title_bar.setObjectName("titleBar")
         self.title_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.title_bar.setFixedHeight(39)
-        title_layout = QHBoxLayout(self.title_bar)
+        self.title_layout = QHBoxLayout(self.title_bar)
+        title_layout = self.title_layout
         title_layout.setContentsMargins(14, 0, 10, 0)
-        title_layout.setSpacing(10)
+        title_layout.setSpacing(2)
         self.spinner = ClawdAnimator(self.title_bar, width=46, height=24, background="#edf0f4")
         title_layout.addWidget(self.spinner)
         self.title_label = QLabel(PRODUCT_DISPLAY_NAME)
         self.title_label.setObjectName("windowTitleLabel")
         title_font = QFont(FONT_TITLE_FAMILY, TITLE_FONT_PT)
-        title_font.setWeight(QFont.Weight.DemiBold)
+        title_font.setWeight(QFont.Weight.Bold)
         self.title_label.setFont(title_font)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         title_layout.addWidget(self.title_label)
@@ -1690,7 +1699,7 @@ class MainWindow(QMainWindow):
         title_text_height = max(self.title_label.fontMetrics().height(), config_metrics.height()) + 4
         self.title_label.setFixedHeight(title_text_height)
         self.system_config_button.setFixedSize(
-            config_metrics.horizontalAdvance(self.system_config_button.text()) + 18,
+            config_metrics.horizontalAdvance(self.system_config_button.text()) + 10,
             title_text_height,
         )
         self.system_config_menu = QMenu(self.system_config_button)
@@ -1754,7 +1763,7 @@ class MainWindow(QMainWindow):
         self.data_mode_button.setFont(QFont(config_font))
         data_mode_metrics = self.data_mode_button.fontMetrics()
         self.data_mode_button.setFixedSize(
-            data_mode_metrics.horizontalAdvance(self.data_mode_button.text()) + 18,
+            data_mode_metrics.horizontalAdvance(self.data_mode_button.text()) + 10,
             title_text_height,
         )
         self.data_mode_menu = InlineDataModeMenu(self)
@@ -1764,9 +1773,9 @@ class MainWindow(QMainWindow):
 
         self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
-        self.update_button.setIcon(make_line_icon("loop", "#536a89", 16))
-        self.update_button.setIconSize(QSize(15, 15))
-        self.update_button.setFixedHeight(title_text_height)
+        self.update_button.setProperty("updateState", "hidden")
+        self.update_button.setIconSize(QSize(13, 13))
+        self.update_button.setFixedSize(22, 22)
         self.update_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.update_button.setToolTip("检查更新")
         self.update_button.clicked.connect(self.install_downloaded_update)
@@ -2075,7 +2084,9 @@ class MainWindow(QMainWindow):
         self.log_view = LogConsole()
         self.log_view.setReadOnly(True)
         self.log_view.setObjectName("logConsole")
-        self.log_view.setFont(QFont("Consolas", MAIN_FONT_PT))
+        log_font = QFont(FONT_REGULAR_FAMILY, MAIN_FONT_PT)
+        log_font.setWeight(QFont.Weight.Normal)
+        self.log_view.setFont(log_font)
         self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.log_ready_dot = self.log_view.ready_dot
         self.log_ready_badge = self.log_view.ready_label
@@ -2086,8 +2097,9 @@ class MainWindow(QMainWindow):
             QMainWindow {
                 background: #eef3f8;
                 color: #16233b;
-                font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+                font-family: "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;
                 font-size: 9pt;
+                font-weight: 700;
             }
             QFrame#titleBar {
                 background: #eef3f8;
@@ -2096,7 +2108,7 @@ class MainWindow(QMainWindow):
             QLabel#windowTitleLabel {
                 color: #0f172a;
                 font-size: 10pt;
-                font-weight: 400;
+                font-weight: 700;
             }
             QPushButton#systemConfigButton {
                 background: transparent;
@@ -2383,7 +2395,7 @@ class MainWindow(QMainWindow):
                 color: #101b2e;
                 font-family: {FONT_TITLE_STACK};
                 font-size: 10pt;
-                font-weight: 600;
+                font-weight: 700;
             }}
             QPushButton {{ outline: 0; }}
             QPushButton#systemConfigButton, QPushButton#dataModeButton {{
@@ -2391,10 +2403,11 @@ class MainWindow(QMainWindow):
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 8px;
-                padding: 0 8px;
+                padding: 0 4px;
                 color: #6f7b8d;
                 font-family: {FONT_MENU_STACK};
                 font-size: 9pt;
+                font-weight: 400;
                 text-align: center;
             }}
             QPushButton#systemConfigButton:hover, QPushButton#dataModeButton:hover {{
@@ -2405,21 +2418,18 @@ class MainWindow(QMainWindow):
             QPushButton#dataModeButton::menu-indicator {{ image: none; width: 0; }}
             QPushButton#updateButton {{
                 min-height: 0;
-                background: transparent;
-                border: 1px solid transparent;
-                border-radius: 7px;
-                padding: 0 8px;
-                color: #536176;
+                background: #3897eb;
+                border: 1px solid #2e8ddd;
+                border-radius: 11px;
+                padding: 0;
+                color: #ffffff;
                 font-size: 9pt;
                 text-align: center;
             }}
-            QPushButton#updateButton:hover {{
-                background: #e7edf5;
-                border-color: #d5deea;
-                color: #16243a;
-            }}
-            QPushButton#updateButton:pressed {{ background: #dce5f0; }}
-            QPushButton#updateButton:disabled {{ color: #8896aa; }}
+            QPushButton#updateButton[updateState="ready"] {{ padding: 0 8px; }}
+            QPushButton#updateButton:hover {{ background: #2689df; border-color: #237dc9; }}
+            QPushButton#updateButton:pressed {{ background: #1f7dcc; }}
+            QPushButton#updateButton:disabled {{ color: #ffffff; }}
             QPushButton#windowControlButton, QPushButton#windowCloseButton {{
                 background: transparent;
                 border: 1px solid transparent;
@@ -2458,7 +2468,7 @@ class MainWindow(QMainWindow):
                 color: #101b2e;
                 font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
-                font-weight: 600;
+                font-weight: 700;
             }}
             QLabel#sectionTitle {{
                 color: #17243b;
@@ -2469,6 +2479,7 @@ class MainWindow(QMainWindow):
             QLabel#mutedText, QLabel#taskProgressText {{
                 color: #65758e;
                 font-size: 8pt;
+                font-weight: 400;
             }}
             QLabel#readyDot {{
                 background: #4fbd68;
@@ -2492,6 +2503,7 @@ class MainWindow(QMainWindow):
                 color: #1e2d45;
                 font-family: {FONT_REGULAR_STACK};
                 font-size: 9pt;
+                font-weight: 400;
                 text-align: left;
             }}
             QPushButton#projectCombo:hover, QPushButton#projectCombo:pressed,
@@ -2525,6 +2537,7 @@ class MainWindow(QMainWindow):
                 border-radius: 6px;
                 padding: 0;
                 font-size: 8pt;
+                font-weight: 400;
             }}
             QPushButton#projectModeButton:checked {{
                 color: #246bce;
@@ -2586,6 +2599,7 @@ class MainWindow(QMainWindow):
                 font-family: {FONT_REGULAR_STACK};
                 text-align: left;
                 font-size: 9pt;
+                font-weight: 400;
             }}
             QPushButton#periodButton:hover {{ border-color: #91afe0; background: #f8fbff; }}
             QPushButton#periodButton:checked {{
@@ -2598,7 +2612,7 @@ class MainWindow(QMainWindow):
                 color: #101b2e;
                 font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
-                font-weight: 600;
+                font-weight: 700;
             }}
             QFrame#flowStatusCard {{
                 background: #fbfdff;
@@ -2609,7 +2623,7 @@ class MainWindow(QMainWindow):
                 color: #101b2e;
                 font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
-                font-weight: 600;
+                font-weight: 700;
             }}
             QLabel#currentTaskSubtitle {{ color: #65758e; font-size: 9pt; }}
             QLabel#statusBadge {{
@@ -2695,25 +2709,58 @@ class MainWindow(QMainWindow):
             return
         self.update_manager.start()
 
+    def _set_update_button_state(self, state: str, *, tooltip: str = "") -> None:
+        self.update_button.setProperty("updateState", state)
+        if state == "checking":
+            self.update_button.setText("")
+            self.update_button.setIcon(make_line_icon("loop", "#ffffff", 16))
+            self.update_button.setFixedSize(22, 22)
+            self.update_button.setEnabled(False)
+            self.update_button.setToolTip(tooltip or "正在检查更新")
+            self.update_button.show()
+        elif state == "downloading":
+            self.update_button.setText("")
+            self.update_button.setIcon(make_line_icon("download", "#ffffff", 16))
+            self.update_button.setFixedSize(22, 22)
+            self.update_button.setEnabled(False)
+            self.update_button.setToolTip(tooltip)
+            self.update_button.show()
+        elif state == "ready":
+            self.update_button.setIcon(QIcon())
+            self.update_button.setText("更新")
+            width = self.update_button.fontMetrics().horizontalAdvance("更新") + 18
+            self.update_button.setFixedSize(width, 22)
+            self.update_button.setEnabled(True)
+            self.update_button.setToolTip(tooltip)
+            self.update_button.show()
+        elif state == "installing":
+            self.update_button.setIcon(make_line_icon("loop", "#ffffff", 16))
+            self.update_button.setText("")
+            self.update_button.setFixedSize(22, 22)
+            self.update_button.setEnabled(False)
+            self.update_button.setToolTip(tooltip or "正在安装更新")
+            self.update_button.show()
+        else:
+            self.update_button.hide()
+        self._refresh_widget_style(self.update_button)
+
+    def on_update_checking(self) -> None:
+        self._set_update_button_state("checking")
+
     def on_update_download_progress(self, value: int) -> None:
         progress = max(0, min(100, int(value)))
-        self.update_button.setText(f"下载 {progress}%")
-        self.update_button.setEnabled(False)
-        self.update_button.show()
+        self._set_update_button_state("downloading", tooltip=f"正在下载更新 {progress}%")
 
     def on_update_ready(self, version: str, archive_path: str | Path) -> None:
         self.pending_update_version = version
         self.pending_update_archive = Path(archive_path)
-        self.update_button.setText("更新")
-        self.update_button.setToolTip(f"更新到 {version}")
-        self.update_button.setEnabled(True)
-        self.update_button.show()
+        self._set_update_button_state("ready", tooltip=f"更新到 {version}")
 
     def on_update_up_to_date(self) -> None:
-        self.update_button.hide()
+        self._set_update_button_state("hidden")
 
     def on_update_failed(self, _message: str) -> None:
-        self.update_button.hide()
+        self._set_update_button_state("hidden")
 
     def install_downloaded_update(self) -> None:
         if not self.pending_update_archive or not self.pending_update_version:
@@ -2734,8 +2781,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "更新失败", f"无法启动更新程序：{exc}")
             return
-        self.update_button.setEnabled(False)
-        self.update_button.setText("正在重启")
+        self._set_update_button_state("installing")
         self.exit_application()
 
     def toggle_maximize(self) -> None:

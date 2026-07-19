@@ -10,12 +10,13 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from gui.branding import PRODUCT_DISPLAY_NAME
+from gui.font_manager import load_private_ui_font
 from gui.main_window import create_window
 from gui.single_instance import SingleInstanceGuard
 
 
 GUI_SCALE_FACTOR = "1.0"
-WINDOWS_APP_ID_PREFIX = "BaiduDataAutomation.Console"
+WINDOWS_APP_ID_PREFIX = "HourlyreportAutomation.Console"
 
 
 class IncompleteInstallationError(RuntimeError):
@@ -43,7 +44,7 @@ def resolve_app_root(candidates: list[Path] | None = None) -> Path:
             ):
                 return path
 
-    if any("baidu_data_automation_update_" in path.name.lower() for path in search_candidates):
+    if any(path.name.lower().startswith("hourlyreport_automation_v") for path in search_candidates):
         raise IncompleteInstallationError(
             "当前目录是在线更新包，不能单独用于新电脑首次安装。请改用首次安装包完整解压后再运行。"
         )
@@ -90,6 +91,7 @@ def main() -> int:
     os.environ["QT_SCALE_FACTOR"] = GUI_SCALE_FACTOR
     configure_windows_app_identity(root)
     app = QApplication(sys.argv)
+    load_private_ui_font(root)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName(PRODUCT_DISPLAY_NAME)
     instance_guard = SingleInstanceGuard()

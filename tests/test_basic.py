@@ -8350,9 +8350,9 @@ def test_online_update_build_contains_program_but_excludes_user_data():
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "baidu_data_automation_update_2026.7.15.101.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.15.101.zip"
     assert release_name("2026.7.15.101", online_update=True) == release.name
-    assert "百度数据自动化控制台.exe" in names
+    assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
     assert not any(name.startswith("configs/") for name in names)
@@ -8369,7 +8369,7 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     from tools.build_release import build_release, release_name
 
     (tmp_path / "dist").mkdir()
-    (tmp_path / "dist" / "百度数据自动化控制台.exe").write_bytes(b"exe")
+    (tmp_path / "dist" / "hourlyreport_automation.exe").write_bytes(b"exe")
     (tmp_path / "configs" / "projects").mkdir(parents=True)
     (tmp_path / "configs" / "app_config.json").write_text(json.dumps({
         "default_project_id": "demo",
@@ -8388,9 +8388,9 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "baidu_data_automation_first_install_2026.7.17.103.zip"
+    assert release.name == "Hourlyreport_automation_first_install_v2026.7.17.103.zip"
     assert release_name("2026.7.17.103", first_install=True) == release.name
-    assert "百度数据自动化控制台.exe" in names
+    assert "hourlyreport_automation.exe" in names
     assert "configs/app_config.json" in names
     assert "configs/projects/demo.json" in names
     assert "secrets/secrets.example.json" in names
@@ -8412,7 +8412,7 @@ def test_first_install_build_refuses_incomplete_source_tree(tmp_path):
     with pytest.raises(ValueError, match="首次安装包源文件不完整.*exe"):
         build_release(tmp_path, version="2026.7.17.103", first_install=True)
 
-    assert not (tmp_path / "dist" / "baidu_data_automation_first_install_2026.7.17.103.zip").exists()
+    assert not (tmp_path / "dist" / "Hourlyreport_automation_first_install_v2026.7.17.103.zip").exists()
 
 
 def test_online_release_version_counter_never_resets_with_date():
@@ -8439,7 +8439,7 @@ def test_online_release_version_rejects_invalid_date_or_counter():
 def test_online_update_file_filter_never_includes_user_configuration():
     assert should_include_file(Path("main.py"), online_update=True) is True
     assert should_include_file(Path("gui") / "main_window.py", online_update=True) is True
-    assert should_include_file(Path("dist") / "百度数据自动化控制台.exe", online_update=True) is True
+    assert should_include_file(Path("dist") / "hourlyreport_automation.exe", online_update=True) is True
     assert should_include_file(Path("configs") / "app_config.json", online_update=True) is False
     assert should_include_file(Path("configs") / "projects" / "kunming_niu.json", online_update=True) is False
     assert should_include_file(Path("secrets") / "secrets.json", online_update=True) is False
@@ -8498,7 +8498,7 @@ def test_built_archive_excludes_authorization_package_and_real_secrets(tmp_path)
 
 def test_internal_build_includes_desktop_exe_when_available():
     root = Path(__file__).resolve().parents[1]
-    exe = root / "dist" / "百度数据自动化控制台.exe"
+    exe = root / "dist" / "hourlyreport_automation.exe"
     exe.parent.mkdir(parents=True, exist_ok=True)
     if not exe.exists():
         exe.write_bytes(b"placeholder exe")
@@ -8508,7 +8508,7 @@ def test_internal_build_includes_desktop_exe_when_available():
     import zipfile
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
-    assert "百度数据自动化控制台.exe" in names
+    assert "hourlyreport_automation.exe" in names
     assert not any(name.startswith("dist/") for name in names)
     assert not any("_internal" in name for name in names)
     assert release.name == "hourly_report_bot_internal_v2.0.zip"
@@ -8881,7 +8881,7 @@ def test_desktop_gui_rejects_standalone_online_update_folder(tmp_path):
 
     from gui.app import IncompleteInstallationError, resolve_app_root
 
-    update_root = tmp_path / "baidu_data_automation_update_2026.7.16.102"
+    update_root = tmp_path / "Hourlyreport_automation_v2026.7.16.102"
     update_root.mkdir()
     (update_root / "main.py").write_text("print('update only')\n", encoding="utf-8")
 
@@ -8940,6 +8940,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert bool(window.windowFlags() & Qt.WindowType.WindowMinimizeButtonHint)
     assert window.title_bar.objectName() == "titleBar"
     assert window.title_bar.height() == 39
+    assert window.title_layout.spacing() == 2
     assert 40 <= window.spinner.width() <= 52
     assert window.spinner.height() <= 26
     assert window.spinner.objectName() == "clawdAnimator"
@@ -9157,12 +9158,12 @@ def test_desktop_gui_data_source_save_failure_rolls_back_without_sensitive_detai
     window.close()
 
 
-def test_gui_visible_name_changes_without_renaming_update_assets(monkeypatch):
+def test_gui_uses_unified_hourlyreport_technical_names(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
     from gui.desktop_pet import ClawdDesktopPet
     from gui.main_window import MainWindow
-    from gui.update_manager import APP_EXE_NAME, UPDATE_ASSET_PATTERN
+    from gui.update_manager import APP_EXE_NAME, GITHUB_LATEST_RELEASE_URL, UPDATE_ASSET_PATTERN
     from tools.build_desktop_exe import APP_NAME
     from tools.build_release import DESKTOP_EXE, release_name
 
@@ -9173,10 +9174,11 @@ def test_gui_visible_name_changes_without_renaming_update_assets(monkeypatch):
 
     assert window.tray_icon.toolTip() == "蚁之力 · 竞价数据自动化"
     assert "蚁之力 · 竞价数据自动化" in pet.toolTip()
-    assert APP_EXE_NAME == "百度数据自动化控制台.exe"
-    assert APP_NAME == "百度数据自动化控制台"
+    assert APP_EXE_NAME == "hourlyreport_automation.exe"
+    assert APP_NAME == "hourlyreport_automation"
     assert DESKTOP_EXE == APP_EXE_NAME
-    assert UPDATE_ASSET_PATTERN.fullmatch("baidu_data_automation_update_2026.7.17.103.zip")
+    assert GITHUB_LATEST_RELEASE_URL == "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
+    assert UPDATE_ASSET_PATTERN.fullmatch("Hourlyreport_automation_v2026.7.17.103.zip")
     assert release_name("2026.7.17.103", internal=True).startswith("hourly_report_bot_internal_")
     assert release_name("2026.7.17.103") == "hourly_report_bot_release_v2026.7.17.103.zip"
 
@@ -9351,7 +9353,7 @@ def test_desktop_gui_flow_uses_clawd_idle_and_dance_modes(monkeypatch):
     window.close()
 
 
-def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch):
+def test_desktop_gui_uses_vista_yahei_bold_with_regular_secondary_text(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
@@ -9365,16 +9367,21 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
     assert window.font().family() == "Microsoft YaHei"
-    assert window.title_label.font().family() == "Microsoft YaHei UI"
-    assert window.title_label.font().weight() == QFont.Weight.DemiBold
-    assert window.system_config_button.font().family() == "Microsoft YaHei Light"
-    assert window.data_mode_button.font().family() == "Microsoft YaHei Light"
-    assert window.log_view.font().family() in {"Consolas", "Cascadia Mono"}
+    assert window.font().weight() == QFont.Weight.Bold
+    assert window.title_label.font().family() == "Microsoft YaHei"
+    assert window.title_label.font().weight() == QFont.Weight.Bold
+    assert window.system_config_button.font().family() == "Microsoft YaHei"
+    assert window.system_config_button.font().weight() == QFont.Weight.Normal
+    assert window.data_mode_button.font().family() == "Microsoft YaHei"
+    assert window.data_mode_button.font().weight() == QFont.Weight.Normal
+    assert window.log_view.font().family() == "Microsoft YaHei"
+    assert window.log_view.font().weight() == QFont.Weight.Normal
     assert window.log_view.font().pointSize() == MAIN_FONT_PT
     assert 'font-family: "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;' in window.styleSheet()
-    assert 'font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
-    assert "font-weight: 600" in window.styleSheet()
+    assert "font-weight: 600" not in window.styleSheet()
+    assert "font-weight: 700" in window.styleSheet()
+    assert "font-weight: 400" in window.styleSheet()
     assert "QScrollBar:vertical" in window.styleSheet()
     window.close()
 
@@ -9392,7 +9399,8 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.system_config_button.text() == "系统配置"
     assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize() - 1
     assert window.data_mode_button.font().pointSize() == window.system_config_button.font().pointSize()
-    assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统配置") + 20
+    assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统配置") + 12
+    assert window.data_mode_button.width() <= window.data_mode_button.fontMetrics().horizontalAdvance("数据模式") + 12
     assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
         "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
@@ -9428,14 +9436,47 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.selected_project_config_path().name.endswith(".json")
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
     assert window.update_button.isHidden()
-    assert window.update_button.text() == "更新"
+    window.on_update_checking()
+    assert not window.update_button.isHidden()
+    assert window.update_button.property("updateState") == "checking"
+    assert window.update_button.text() == ""
+    assert not window.update_button.icon().isNull()
     window.on_update_download_progress(41)
     assert not window.update_button.isHidden()
-    assert window.update_button.text() == "下载 41%"
+    assert window.update_button.property("updateState") == "downloading"
+    assert window.update_button.text() == ""
+    assert "41%" in window.update_button.toolTip()
+    assert not window.update_button.icon().isNull()
     window.on_update_ready("2026.7.15.102", Path("update.zip"))
+    assert window.update_button.property("updateState") == "ready"
     assert window.update_button.text() == "更新"
+    assert window.update_button.icon().isNull()
     assert "2026.7.15.102" in window.update_button.toolTip()
+    window.on_update_up_to_date()
+    assert window.update_button.isHidden()
     window.close()
+
+
+def test_private_ui_font_prefers_bundled_vista_face(tmp_path, monkeypatch):
+    from gui import font_manager
+
+    font_path = tmp_path / "assets" / "fonts" / "microsoft_yahei_vista_bold.ttf"
+    font_path.parent.mkdir(parents=True)
+    font_path.write_bytes(b"licensed-font-placeholder")
+    loaded = []
+    monkeypatch.setattr(
+        font_manager.QFontDatabase,
+        "addApplicationFont",
+        lambda path: loaded.append(Path(path)) or 9,
+    )
+    monkeypatch.setattr(
+        font_manager.QFontDatabase,
+        "applicationFontFamilies",
+        lambda _font_id: ["Microsoft YaHei"],
+    )
+
+    assert font_manager.load_private_ui_font(tmp_path) == font_path
+    assert loaded == [font_path]
 
 
 def _write_minimal_gui_project(root: Path) -> None:
@@ -10119,16 +10160,20 @@ def test_desktop_window_entry_runs_first_startup_directory_initialization(tmp_pa
 
 
 def test_online_update_selects_newer_github_release_asset():
-    from gui.update_manager import CURRENT_VERSION, parse_version, select_release_update
+    from gui.update_manager import CURRENT_VERSION, parse_release_version, parse_version, select_release_update
 
     assert CURRENT_VERSION == "2026.7.19.104"
     assert parse_version("v2026.7.19.104") == (2026, 7, 19, 104)
+    assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
+    assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
         "tag_name": "v2026.7.19.105",
+        "draft": False,
+        "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "baidu_data_automation_update_2026.7.19.105.zip",
+                "name": "Hourlyreport_automation_v2026.7.19.105.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -10144,6 +10189,16 @@ def test_online_update_selects_newer_github_release_asset():
     assert update.sha256 == "a" * 64
     assert select_release_update(payload, "2026.7.19.105") is None
 
+    for invalid in (
+        {**payload, "draft": True},
+        {**payload, "prerelease": True},
+        {**payload, "tag_name": "release-2026.7.19.105"},
+        {**payload, "assets": [{**payload["assets"][1], "digest": ""}]},
+        {**payload, "assets": [{**payload["assets"][1], "digest": "sha256:not-a-hash"}]},
+        {**payload, "assets": [{**payload["assets"][1], "size": 0}]},
+    ):
+        assert select_release_update(invalid, CURRENT_VERSION) is None
+
 
 def test_online_update_archive_rejects_path_traversal(tmp_path):
     import pytest
@@ -10156,9 +10211,9 @@ def test_online_update_archive_rejects_path_traversal(tmp_path):
         archive.writestr("gui/main_window.py", "ok")
         archive.writestr("gui/version.py", "CURRENT_VERSION = 'test'")
         archive.writestr("main.py", "ok")
-        archive.writestr("百度数据自动化控制台.exe", "exe")
+        archive.writestr("hourlyreport_automation.exe", "exe")
     assert validate_update_archive(valid) == [
-        "gui/main_window.py", "gui/version.py", "main.py", "百度数据自动化控制台.exe"
+        "gui/main_window.py", "gui/version.py", "main.py", "hourlyreport_automation.exe"
     ]
 
     malicious = tmp_path / "malicious.zip"
@@ -10166,6 +10221,65 @@ def test_online_update_archive_rejects_path_traversal(tmp_path):
         archive.writestr("../secrets/secrets.json", "bad")
     with pytest.raises(ValueError, match="不安全"):
         validate_update_archive(malicious)
+
+
+def test_online_update_download_rejects_size_mismatch(tmp_path, monkeypatch):
+    import io
+    import pytest
+
+    import gui.update_manager as update_manager
+
+    class Response(io.BytesIO):
+        headers = {"Content-Length": "4"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    monkeypatch.setattr(update_manager, "_update_storage_dir", lambda: tmp_path)
+    monkeypatch.setattr(update_manager.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(b"data"))
+    update = update_manager.ReleaseUpdate(
+        version="2026.7.19.105",
+        download_url="https://example/update.zip",
+        asset_name="Hourlyreport_automation_v2026.7.19.105.zip",
+        sha256="a" * 64,
+        size=5,
+    )
+
+    with pytest.raises(ValueError, match="大小"):
+        update_manager.GitHubUpdateManager()._download(update)
+    assert not (tmp_path / update.asset_name).exists()
+
+
+def test_update_install_dialog_matches_compact_codex_style(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from gui.update_dialog import UpdateInstallDialog
+
+    app = QApplication.instance() or QApplication([])
+    dialog = UpdateInstallDialog("2026.7.19.105")
+    dialog.set_progress(35, "正在备份当前程序…")
+
+    assert dialog.windowTitle() == "正在安装更新"
+    assert dialog.title_label.text() == "正在安装更新"
+    assert "安装完成后" in dialog.detail_label.text()
+    assert dialog.progress_bar.value() == 35
+    assert dialog.stage_label.text() == "正在备份当前程序…"
+    assert dialog.width() <= 460
+    assert dialog.height() <= 150
+    assert "border-radius" in dialog.styleSheet()
+    dialog.close()
+
+
+def test_update_helper_uses_progress_dialog_and_canonical_exe():
+    from gui.update_manager import UPDATE_HELPER_SOURCE
+
+    assert "run_update_install_dialog" in UPDATE_HELPER_SOURCE
+    assert "hourlyreport_automation.exe" in UPDATE_HELPER_SOURCE
+    assert "rollback" in UPDATE_HELPER_SOURCE
 
 
 def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_missing(tmp_path, monkeypatch):
@@ -10798,8 +10912,9 @@ def test_desktop_gui_app_icon_assets_and_build_icon_are_configured():
     image = QImage(str(source))
     assert not image.isNull()
     corner = image.pixelColor(max(1, image.width() // 32), max(1, image.height() // 32))
-    assert corner.alpha() == 255
-    assert min(corner.red(), corner.green(), corner.blue()) >= 225
+    assert corner.alpha() == 0
+    center = image.pixelColor(image.width() // 2, image.height() // 2)
+    assert center.alpha() == 255
 
 
 def test_desktop_gui_windows_app_id_changes_when_icon_changes(tmp_path):
@@ -10814,7 +10929,7 @@ def test_desktop_gui_windows_app_id_changes_when_icon_changes(tmp_path):
     icon.write_bytes(b"second-icon")
     second_id = windows_app_user_model_id(tmp_path)
 
-    assert first_id.startswith("BaiduDataAutomation.Console.")
+    assert first_id.startswith("HourlyreportAutomation.Console.")
     assert first_id != second_id
     source = (Path(__file__).resolve().parents[1] / "gui" / "app.py").read_text(encoding="utf-8")
     assert source.index("configure_windows_app_identity(root)") < source.index("QApplication(sys.argv)")

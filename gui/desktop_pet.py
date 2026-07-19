@@ -16,7 +16,7 @@ CELL_SIZE = QSize(192, 208)
 ATLAS_SIZE = QSize(1536, 2288)
 BASE_PET_SIZE = QSize(108, 117)
 BASE_WINDOW_SIZE = QSize(122, 128)
-FONT_FAMILY = "Microsoft YaHei Light"
+FONT_FAMILY = "Microsoft YaHei"
 
 ANIMATIONS: dict[str, tuple[int, tuple[int, ...]]] = {
     "idle": (0, (280, 110, 110, 140, 140, 320)),

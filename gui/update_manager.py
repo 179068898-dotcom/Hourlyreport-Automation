@@ -19,10 +19,12 @@ from gui.version import CURRENT_VERSION
 
 
 GITHUB_LATEST_RELEASE_URL = (
-    "https://api.github.com/repos/179068898-dotcom/baidu-automation-releases/releases/latest"
+    "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
 )
-UPDATE_ASSET_PATTERN = re.compile(r"^baidu_data_automation_update_(\d+(?:\.\d+){3})\.zip$")
-APP_EXE_NAME = "百度数据自动化控制台.exe"
+UPDATE_ASSET_PATTERN = re.compile(r"^Hourlyreport_automation_v(\d+(?:\.\d+){3})\.zip$")
+RELEASE_TAG_PATTERN = re.compile(r"^(?:Hourlyreport_)?v(\d+(?:\.\d+){3})$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+APP_EXE_NAME = "hourlyreport_automation.exe"
 PROTECTED_UPDATE_ROOTS = {
     "configs",
     "secrets",
@@ -55,10 +57,20 @@ def parse_version(value: str) -> tuple[int, int, int, int]:
     return tuple(int(part) for part in parts)  # type: ignore[return-value]
 
 
+def parse_release_version(tag_name: str) -> str:
+    match = RELEASE_TAG_PATTERN.fullmatch(str(tag_name or "").strip())
+    if not match:
+        raise ValueError(f"无效 Release tag：{tag_name}")
+    version = match.group(1)
+    parse_version(version)
+    return version
+
+
 def select_release_update(payload: dict[str, Any], current_version: str) -> ReleaseUpdate | None:
-    tag_name = str(payload.get("tag_name") or "")
+    if payload.get("draft") or payload.get("prerelease"):
+        return None
     try:
-        release_version = tag_name.removeprefix("v")
+        release_version = parse_release_version(str(payload.get("tag_name") or ""))
         if parse_version(release_version) <= parse_version(current_version):
             return None
     except ValueError:
@@ -77,7 +89,9 @@ def select_release_update(payload: dict[str, Any], current_version: str) -> Rele
         digest = str(asset.get("digest") or "")
         sha256 = digest.split(":", 1)[1].lower() if digest.startswith("sha256:") else ""
         size = int(asset.get("size") or 0)
-        if size < 0 or size > 500 * 1024 * 1024:
+        if not SHA256_PATTERN.fullmatch(sha256):
+            continue
+        if size <= 0 or size > 500 * 1024 * 1024:
             continue
         return ReleaseUpdate(release_version, download_url, name, sha256, size)
     return None
@@ -114,12 +128,13 @@ def _sha256(path: Path) -> str:
 def _update_storage_dir() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
     base = Path(local_app_data) if local_app_data else Path.home() / "AppData" / "Local"
-    path = base / "BaiduDataAutomation" / "updates"
+    path = base / "HourlyreportAutomation" / "updates"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
 class GitHubUpdateManager(QObject):
+    checking = Signal()
     download_progress = Signal(int)
     ready = Signal(str, str)
     up_to_date = Signal()
@@ -132,6 +147,7 @@ class GitHubUpdateManager(QObject):
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
+        self.checking.emit()
         self._thread = threading.Thread(target=self._check_and_download, daemon=True, name="github-update-check")
         self._thread.start()
 
@@ -141,7 +157,7 @@ class GitHubUpdateManager(QObject):
                 GITHUB_LATEST_RELEASE_URL,
                 headers={
                     "Accept": "application/vnd.github+json",
-                    "User-Agent": f"BaiduDataAutomation/{CURRENT_VERSION}",
+                    "User-Agent": f"HourlyreportAutomation/{CURRENT_VERSION}",
                     "X-GitHub-Api-Version": "2022-11-28",
                 },
             )
@@ -159,7 +175,11 @@ class GitHubUpdateManager(QObject):
 
     def _download(self, update: ReleaseUpdate) -> Path:
         target = _update_storage_dir() / update.asset_name
-        if target.is_file() and (not update.sha256 or _sha256(target) == update.sha256):
+        if (
+            target.is_file()
+            and target.stat().st_size == update.size
+            and _sha256(target) == update.sha256
+        ):
             self.download_progress.emit(100)
             return target
 
@@ -167,7 +187,7 @@ class GitHubUpdateManager(QObject):
         partial.unlink(missing_ok=True)
         request = urllib.request.Request(
             update.download_url,
-            headers={"User-Agent": f"BaiduDataAutomation/{CURRENT_VERSION}"},
+            headers={"User-Agent": f"HourlyreportAutomation/{CURRENT_VERSION}"},
         )
         downloaded = 0
         with urllib.request.urlopen(request, timeout=20) as response, partial.open("wb") as output:
@@ -180,7 +200,10 @@ class GitHubUpdateManager(QObject):
                 downloaded += len(chunk)
                 if total > 0:
                     self.download_progress.emit(min(99, int(downloaded * 100 / total)))
-        if update.sha256 and _sha256(partial) != update.sha256:
+        if downloaded != update.size:
+            partial.unlink(missing_ok=True)
+            raise ValueError(f"更新包大小校验失败：期望 {update.size}，实际 {downloaded}")
+        if _sha256(partial) != update.sha256:
             partial.unlink(missing_ok=True)
             raise ValueError("更新包 SHA-256 校验失败")
         partial.replace(target)
@@ -195,13 +218,29 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
+ROOT_ARG = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
+if str(ROOT_ARG) not in sys.path:
+    sys.path.insert(0, str(ROOT_ARG))
+
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+from gui.update_dialog import UpdateInstallDialog
+
 
 PROTECTED = {"configs", "secrets", "logs", "reports", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"}
+CANONICAL_EXE = "hourlyreport_automation.exe"
+
+
+class UpdateSignals(QObject):
+    progress = Signal(int, str)
+    completed = Signal(bool, str, str)
 
 
 def wait_for_exit(pid: int) -> None:
@@ -209,7 +248,7 @@ def wait_for_exit(pid: int) -> None:
         try:
             os.kill(pid, 0)
         except OSError:
-            time.sleep(1.0)
+            time.sleep(0.5)
             return
         time.sleep(0.5)
     raise RuntimeError("旧程序未能及时退出")
@@ -230,6 +269,7 @@ def safe_members(archive: zipfile.ZipFile):
 def replace_with_retry(source: Path, target: Path) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     staged = target.with_name(target.name + ".update-new")
+    staged.unlink(missing_ok=True)
     shutil.copy2(source, staged)
     for attempt in range(60):
         try:
@@ -237,40 +277,123 @@ def replace_with_retry(source: Path, target: Path) -> None:
             return
         except PermissionError:
             if attempt == 59:
+                staged.unlink(missing_ok=True)
                 raise
             time.sleep(0.5)
+
+
+def backup_target(root: Path, backup: Path, target: Path, backed_up: set[Path]) -> bool:
+    relative = target.relative_to(root)
+    if relative in backed_up:
+        return target.exists()
+    backed_up.add(relative)
+    if not target.exists():
+        return False
+    destination = backup / relative
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(target, destination)
+    return True
+
+
+def rollback(root: Path, backup: Path, created: set[Path], backed_up: set[Path]) -> None:
+    for relative in sorted(created, key=lambda item: len(item.parts), reverse=True):
+        (root / relative).unlink(missing_ok=True)
+    for relative in backed_up:
+        source = backup / relative
+        if source.is_file():
+            replace_with_retry(source, root / relative)
+
+
+def apply_update(
+    root: Path,
+    package: Path,
+    version: str,
+    pid: int,
+    storage: Path,
+    signals: UpdateSignals,
+) -> tuple[bool, str, Path]:
+    log_path = storage / "update_apply.log"
+    backup = storage / "backups" / (version + "_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+    backed_up: set[Path] = set()
+    created: set[Path] = set()
+    try:
+        signals.progress.emit(8, "正在关闭旧程序…")
+        wait_for_exit(pid)
+        signals.progress.emit(18, "正在校验更新包…")
+        with tempfile.TemporaryDirectory(prefix="hourlyreport-update-") as temp_dir:
+            temp = Path(temp_dir)
+            with zipfile.ZipFile(package) as archive:
+                members = list(safe_members(archive))
+                archive.extractall(temp, [info for info, _member in members])
+            if not any(member.as_posix().casefold() == CANONICAL_EXE.casefold() for _info, member in members):
+                raise ValueError("更新包缺少主程序")
+            total = max(1, len(members))
+            for index, (_info, member) in enumerate(members, start=1):
+                source = temp.joinpath(*member.parts)
+                target = root.joinpath(*member.parts)
+                existed = backup_target(root, backup, target, backed_up)
+                if not existed:
+                    created.add(target.relative_to(root))
+                replace_with_retry(source, target)
+                signals.progress.emit(20 + int(index * 65 / total), "正在安装程序文件…")
+
+        canonical = root / CANONICAL_EXE
+        signals.progress.emit(96, "正在完成更新…")
+        log_path.write_text(f"updated={version}\n", encoding="utf-8")
+        return True, "", canonical
+    except Exception as exc:
+        try:
+            rollback(root, backup, created, backed_up)
+            rollback_result = "rollback=ok"
+        except Exception as rollback_exc:
+            rollback_result = f"rollback=failed:{rollback_exc}"
+        log_path.write_text(f"failed={exc}\n{rollback_result}\n", encoding="utf-8")
+        return False, str(exc), root / CANONICAL_EXE
+
+
+def run_update_install_dialog(
+    root: Path,
+    package: Path,
+    version: str,
+    pid: int,
+    storage: Path,
+) -> int:
+    app = QApplication.instance() or QApplication(sys.argv[:1])
+    dialog = UpdateInstallDialog(version)
+    signals = UpdateSignals()
+    result = {"ok": False}
+
+    def finished(ok: bool, message: str, launcher: str) -> None:
+        result["ok"] = ok
+        if ok:
+            dialog.set_progress(100, "更新完成，正在重启…")
+            QApplication.processEvents()
+            subprocess.Popen([launcher], cwd=str(root))
+        else:
+            dialog.hide()
+            QMessageBox.critical(None, "更新失败", f"程序已尝试恢复原版本。\n\n失败原因：{message}")
+        app.quit()
+
+    signals.progress.connect(dialog.set_progress)
+    signals.completed.connect(finished)
+    dialog.show()
+
+    def worker() -> None:
+        ok, message, launcher = apply_update(root, package, version, pid, storage, signals)
+        signals.completed.emit(ok, message, str(launcher))
+
+    threading.Thread(target=worker, daemon=True, name="hourlyreport-update-apply").start()
+    app.exec()
+    return 0 if result["ok"] else 1
 
 
 def main() -> int:
     root = Path(sys.argv[1]).resolve()
     package = Path(sys.argv[2]).resolve()
     version = sys.argv[3]
-    launcher = Path(sys.argv[4]).resolve()
     pid = int(sys.argv[5])
     storage = Path(sys.argv[6]).resolve()
-    log_path = storage / "update_apply.log"
-    try:
-        wait_for_exit(pid)
-        backup = storage / "backups" / (version + "_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
-        with tempfile.TemporaryDirectory(prefix="baidu-update-") as temp_dir:
-            temp = Path(temp_dir)
-            with zipfile.ZipFile(package) as archive:
-                members = list(safe_members(archive))
-                archive.extractall(temp, [info for info, _member in members])
-            for _info, member in members:
-                source = temp.joinpath(*member.parts)
-                target = root.joinpath(*member.parts)
-                if target.exists():
-                    backup_target = backup.joinpath(*member.parts)
-                    backup_target.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(target, backup_target)
-                replace_with_retry(source, target)
-        subprocess.Popen([str(launcher)], cwd=str(root))
-        log_path.write_text(f"updated={version}\n", encoding="utf-8")
-        return 0
-    except Exception as exc:
-        log_path.write_text(f"failed={exc}\n", encoding="utf-8")
-        return 1
+    return run_update_install_dialog(root, package, version, pid, storage)
 
 
 if __name__ == "__main__":

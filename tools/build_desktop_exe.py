@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 
-APP_NAME = "百度数据自动化控制台"
+APP_NAME = "hourlyreport_automation"
 
 
 def build_desktop_exe(root: str | Path) -> int:

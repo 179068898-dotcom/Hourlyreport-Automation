@@ -8,8 +8,8 @@ from datetime import date
 from pathlib import Path
 
 DEFAULT_VERSION = "hermes_20260710"
-EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud"}
-DESKTOP_EXE = "百度数据自动化控制台.exe"
+EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", ".superpowers", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud"}
+DESKTOP_EXE = "hourlyreport_automation.exe"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec", ".baidu-secrets", ".baidu-auth"}
@@ -84,10 +84,10 @@ def release_name(
         raise ValueError("内部包、首次安装包与在线更新包不能同时生成")
     if first_install:
         clean_version = validate_online_version(version or "")
-        return f"baidu_data_automation_first_install_{clean_version}.zip"
+        return f"Hourlyreport_automation_first_install_v{clean_version}.zip"
     if online_update:
         clean_version = validate_online_version(version or "")
-        return f"baidu_data_automation_update_{clean_version}.zip"
+        return f"Hourlyreport_automation_v{clean_version}.zip"
     prefix = "hourly_report_bot_internal" if internal else "hourly_report_bot_release"
     return f"{prefix}_{normalize_version(version)}.zip"
 
@@ -160,6 +160,17 @@ def _validate_first_install_source(root: Path) -> None:
         raise ValueError("首次安装包源文件不完整：" + "、".join(missing))
 
 
+def _validate_online_update_source(root: Path) -> None:
+    required_files = (
+        root / "dist" / DESKTOP_EXE,
+        root / "main.py",
+        root / "gui" / "version.py",
+    )
+    missing = [str(path.relative_to(root)) for path in required_files if not path.is_file()]
+    if missing:
+        raise ValueError("在线更新包源文件不完整：" + "、".join(missing))
+
+
 def build_release(
     root: str | Path,
     version: str | None = None,
@@ -174,6 +185,8 @@ def build_release(
     dist_dir.mkdir(exist_ok=True)
     if first_install:
         _validate_first_install_source(root_path)
+    if online_update:
+        _validate_online_update_source(root_path)
     release_path = dist_dir / release_name(
         version,
         internal=internal,
