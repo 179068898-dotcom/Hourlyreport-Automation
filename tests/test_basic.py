@@ -10282,6 +10282,101 @@ def test_update_helper_uses_progress_dialog_and_canonical_exe():
     assert "rollback" in UPDATE_HELPER_SOURCE
 
 
+def _load_update_helper_namespace(root: Path, monkeypatch):
+    import sys
+
+    from gui.update_manager import UPDATE_HELPER_SOURCE
+
+    monkeypatch.setattr(sys, "argv", ["apply_update.py", str(root)])
+    namespace = {"__name__": "update_helper_test", "__file__": "apply_update.py"}
+    exec(compile(UPDATE_HELPER_SOURCE, "apply_update.py", "exec"), namespace)
+    namespace["wait_for_exit"] = lambda _pid: None
+    return namespace
+
+
+def test_update_helper_applies_program_files_without_touching_config(tmp_path, monkeypatch):
+    import zipfile
+
+    root = tmp_path / "app"
+    storage = tmp_path / "storage"
+    root.mkdir()
+    storage.mkdir()
+    (root / "hourlyreport_automation.exe").write_bytes(b"old-exe")
+    (root / "main.py").write_text("old-main", encoding="utf-8")
+    (root / "configs").mkdir()
+    (root / "configs" / "app_config.json").write_text("private-config", encoding="utf-8")
+    package = tmp_path / "update.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("hourlyreport_automation.exe", b"new-exe")
+        archive.writestr("main.py", "new-main")
+        archive.writestr("gui/version.py", "CURRENT_VERSION='next'")
+
+    namespace = _load_update_helper_namespace(root, monkeypatch)
+
+    class Emitter:
+        def emit(self, *_args):
+            pass
+
+    signals = type("Signals", (), {"progress": Emitter()})()
+    ok, message, launcher = namespace["apply_update"](
+        root, package, "2026.7.19.105", 123, storage, signals
+    )
+
+    assert ok is True
+    assert message == ""
+    assert launcher == root / "hourlyreport_automation.exe"
+    assert launcher.read_bytes() == b"new-exe"
+    assert (root / "main.py").read_text(encoding="utf-8") == "new-main"
+    assert (root / "configs" / "app_config.json").read_text(encoding="utf-8") == "private-config"
+    backups = list((storage / "backups").glob("2026.7.19.105_*"))
+    assert len(backups) == 1
+    assert (backups[0] / "hourlyreport_automation.exe").read_bytes() == b"old-exe"
+
+
+def test_update_helper_rolls_back_partial_install_failure(tmp_path, monkeypatch):
+    import zipfile
+
+    root = tmp_path / "app"
+    storage = tmp_path / "storage"
+    root.mkdir()
+    storage.mkdir()
+    (root / "hourlyreport_automation.exe").write_bytes(b"old-exe")
+    (root / "main.py").write_text("old-main", encoding="utf-8")
+    package = tmp_path / "update.zip"
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("hourlyreport_automation.exe", b"new-exe")
+        archive.writestr("main.py", "new-main")
+        archive.writestr("gui/version.py", "CURRENT_VERSION='next'")
+
+    namespace = _load_update_helper_namespace(root, monkeypatch)
+    original_replace = namespace["replace_with_retry"]
+    failed = {"value": False}
+
+    def fail_once(source, target):
+        if Path(target).name == "main.py" and not failed["value"]:
+            failed["value"] = True
+            raise OSError("simulated apply failure")
+        return original_replace(source, target)
+
+    namespace["replace_with_retry"] = fail_once
+
+    class Emitter:
+        def emit(self, *_args):
+            pass
+
+    signals = type("Signals", (), {"progress": Emitter()})()
+    ok, message, _launcher = namespace["apply_update"](
+        root, package, "2026.7.19.105", 123, storage, signals
+    )
+
+    assert ok is False
+    assert "simulated apply failure" in message
+    assert (root / "hourlyreport_automation.exe").read_bytes() == b"old-exe"
+    assert (root / "main.py").read_text(encoding="utf-8") == "old-main"
+    assert not (root / "gui" / "version.py").exists()
+    assert "rollback=ok" in (storage / "update_apply.log").read_text(encoding="utf-8")
+
+
 def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_missing(tmp_path, monkeypatch):
     import gui.environment_check as environment_check
 
