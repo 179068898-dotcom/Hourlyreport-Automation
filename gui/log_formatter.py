@@ -42,7 +42,7 @@ def _replace_words(escaped: str, words: list[str], class_name: str) -> str:
     return escaped
 
 
-def format_log_html(line: str) -> str:
+def format_log_fragment(line: str) -> str:
     escaped = html.escape(str(line or ""))
 
     escaped = PATH_PATTERN.sub(lambda match: _wrap(match.group(0), "log-path"), escaped)
@@ -54,4 +54,8 @@ def format_log_html(line: str) -> str:
     escaped = _replace_words(escaped, ["失败", "错误", "ERROR", "failed"], "log-error")
     escaped = _replace_words(escaped, ["Excel", ".xlsx"], "log-excel")
 
-    return f"<div>{escaped}</div>"
+    return escaped
+
+
+def format_log_html(line: str) -> str:
+    return f"<div>{format_log_fragment(line)}</div>"

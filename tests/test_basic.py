@@ -8411,6 +8411,23 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     assert "requirements-runtime.txt" in names
 
 
+def test_windows_installer_definition_allows_path_selection_and_preserves_user_data():
+    from tools.build_windows_installer import installer_name
+
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "tools" / "hourlyreport_automation_installer.iss").read_text(encoding="utf-8")
+
+    assert installer_name("2026.7.19.106") == "Hourlyreport_automation_setup_v2026.7.19.106.exe"
+    assert "DisableDirPage=no" in source
+    assert "PrivilegesRequired=lowest" in source
+    assert "{localappdata}\\Programs\\Hourlyreport Automation" in source
+    assert "{autodesktop}" in source
+    assert "{autoprograms}" in source
+    assert "onlyifdoesntexist" in source
+    assert "uninsneveruninstall" in source
+    assert 'Excludes: "configs\\*,secrets\\*,logs\\*,reports\\*,backups\\*,kst_exports\\*"' in source
+
+
 def test_first_install_build_refuses_incomplete_source_tree(tmp_path):
     import pytest
 
@@ -9871,6 +9888,8 @@ def test_desktop_gui_restore_backup_overwrites_project_excel_after_safety_backup
     assert target_excel.read_text(encoding="utf-8") == "restored excel"
     assert len(safety_backups) == 1
     assert safety_backups[0].read_text(encoding="utf-8") == "current excel"
+    while window.has_pending_log_display():
+        window.drain_log_display()
     assert "恢复备份完成" in window.log_view.toPlainText()
     window.close()
 
@@ -10116,6 +10135,57 @@ def test_desktop_gui_log_formatter_highlights_key_content():
     assert "log-path" in html
     assert "log-project" in html
     assert "青岛白" in html
+
+
+def test_gui_log_history_is_timestamped_appended_and_redacted(tmp_path):
+    from datetime import datetime
+
+    from gui.log_history import append_history_line
+
+    first = append_history_line(
+        tmp_path,
+        "登录完成 password=plain-text accessToken=token-value",
+        now=datetime(2026, 7, 19, 15, 30, 5),
+    )
+    second = append_history_line(
+        tmp_path,
+        "项目写入完成",
+        now=datetime(2026, 7, 19, 15, 30, 6),
+    )
+
+    assert first == second == tmp_path / "logs" / "gui_history.log"
+    content = first.read_text(encoding="utf-8")
+    assert "[2026-07-19 15:30:05] 登录完成 password=*** accessToken=***" in content
+    assert "[2026-07-19 15:30:06] 项目写入完成" in content
+    assert "plain-text" not in content
+    assert "token-value" not in content
+
+
+def test_gui_log_typewriter_scales_with_backlog_and_does_not_render_all_at_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    from gui.log_history import typewriter_batch_size
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    window.reset_log_display()
+    text = "正在快速读取并核对百度推广账户数据，界面将跟随任务速度逐字显示。"
+
+    window.append_log(text)
+
+    assert window.log_view.toPlainText() == ""
+    assert text in (tmp_path / "logs" / "gui_history.log").read_text(encoding="utf-8")
+    window.drain_log_display()
+    partial = window.log_view.toPlainText()
+    assert 0 < len(partial) < len(text)
+    assert typewriter_batch_size(5000) > typewriter_batch_size(50)
+    while window.has_pending_log_display():
+        window.drain_log_display()
+    assert window.log_view.toPlainText() == text
+    window.close()
 
 
 def test_desktop_gui_environment_check_reports_missing_python(tmp_path):

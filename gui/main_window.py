@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import sys
+from collections import deque
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QRegion,
+    QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -55,7 +57,8 @@ from gui.environment_check import (
     initialize_kst_directories_once,
     run_environment_check,
 )
-from gui.log_formatter import format_log_html
+from gui.log_formatter import format_log_fragment
+from gui.log_history import append_history_line, typewriter_batch_size
 from gui.pet_settings import (
     PET_CLAWD,
     PET_HIDDEN,
@@ -1483,6 +1486,14 @@ class MainWindow(QMainWindow):
         self.current_start_time = ""
         self._last_pet_event = ""
         self._quitting = False
+        self._log_queue: deque[str] = deque()
+        self._log_current_line: str | None = None
+        self._log_current_visible = 0
+        self._log_current_block = -1
+        self._log_pending_chars = 0
+        self._log_timer = QTimer(self)
+        self._log_timer.setInterval(16)
+        self._log_timer.timeout.connect(self.drain_log_display)
         self.pending_update_release: ReleaseUpdate | None = None
         self.pending_update_version = ""
         self.pending_update_archive: Path | None = None
@@ -3257,7 +3268,7 @@ class MainWindow(QMainWindow):
         self.reset_stages()
         self.progress_text.setText("正在检查环境...")
         report = run_environment_check(self.root)
-        self.log_view.clear()
+        self.reset_log_display()
         self.append_log("环境检测开始")
         startup_kst = getattr(self, "startup_kst_initialization", None)
         if startup_kst and startup_kst.get("status") != "skipped":
@@ -3428,7 +3439,7 @@ class MainWindow(QMainWindow):
         self.status_title.setText(title)
         self.status_detail.setText("任务正在运行，请不要关闭窗口。")
         self.progress_text.setText("任务已创建，等待启动...")
-        self.log_view.clear()
+        self.reset_log_display()
         if self.current_task_type in {"hourly", "daily"}:
             self._task_stop_gate = self.root / "reports" / f".gui_task_stop_{os.getpid()}.gate"
             clear_task_stop_gate(self._task_stop_gate)
@@ -3624,9 +3635,71 @@ class MainWindow(QMainWindow):
             self._refresh_widget_style(label)
 
     def append_log(self, text: str) -> None:
-        self.log_view.append(format_log_html(text))
+        value = str(text or "")
+        lines = value.splitlines() or [""]
+        for line in lines:
+            try:
+                append_history_line(self.root, line)
+            except OSError:
+                pass
+            self._log_queue.append(line)
+            self._log_pending_chars += max(1, len(line))
+        if not self._log_timer.isActive():
+            self._log_timer.start()
+
+    def reset_log_display(self) -> None:
+        self._log_timer.stop()
+        self._log_queue.clear()
+        self._log_current_line = None
+        self._log_current_visible = 0
+        self._log_current_block = -1
+        self._log_pending_chars = 0
+        self.log_view.clear()
+
+    def has_pending_log_display(self) -> bool:
+        return self._log_current_line is not None or bool(self._log_queue)
+
+    def _begin_log_line(self) -> None:
+        self._log_current_line = self._log_queue.popleft()
+        self._log_current_visible = 0
+        cursor = self.log_view.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if not self.log_view.document().isEmpty():
+            cursor.insertBlock()
+        self._log_current_block = cursor.blockNumber()
+
+    def _render_current_log_line(self) -> None:
+        block = self.log_view.document().findBlockByNumber(self._log_current_block)
+        if not block.isValid() or self._log_current_line is None:
+            return
+        cursor = QTextCursor(block)
+        cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+        cursor.removeSelectedText()
+        cursor.insertHtml(format_log_fragment(self._log_current_line[: self._log_current_visible]))
+
+    def drain_log_display(self) -> None:
+        budget = typewriter_batch_size(self._log_pending_chars)
+        while budget > 0 and self.has_pending_log_display():
+            if self._log_current_line is None:
+                self._begin_log_line()
+            if self._log_current_line is None:
+                break
+            remaining = len(self._log_current_line) - self._log_current_visible
+            if remaining <= 0:
+                self._log_pending_chars = max(0, self._log_pending_chars - 1)
+                self._log_current_line = None
+                continue
+            count = min(budget, remaining)
+            self._log_current_visible += count
+            self._log_pending_chars = max(0, self._log_pending_chars - count)
+            budget -= count
+            self._render_current_log_line()
+            if self._log_current_visible >= len(self._log_current_line):
+                self._log_current_line = None
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        if not self.has_pending_log_display():
+            self._log_timer.stop()
 
     def open_path(self, path: Path) -> None:
         path.mkdir(exist_ok=True) if path.suffix == "" else None
