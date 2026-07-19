@@ -38,6 +38,11 @@ PROTECTED_UPDATE_ROOTS = {
     "runtime",
 }
 REQUIRED_UPDATE_FILES = {APP_EXE_NAME, "main.py", "gui/version.py"}
+WINDOWS_RESERVED_PATH_NAMES = {
+    "con", "prn", "aux", "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
 
 
 @dataclass(frozen=True)
@@ -97,19 +102,36 @@ def select_release_update(payload: dict[str, Any], current_version: str) -> Rele
     return None
 
 
+def _validated_update_member(filename: str, protected_roots: set[str]) -> PurePosixPath:
+    normalized = str(filename).replace("\\", "/")
+    raw_parts = normalized.split("/")
+    if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValueError(f"更新包包含不安全路径：{filename}")
+    for part in raw_parts:
+        if part.endswith((" ", ".")) or ":" in part or any(ord(char) < 32 for char in part):
+            raise ValueError(f"更新包包含不安全的 Windows 路径：{filename}")
+        device_name = part.split(".", 1)[0].casefold()
+        if device_name in WINDOWS_RESERVED_PATH_NAMES:
+            raise ValueError(f"更新包包含不安全的 Windows 设备名：{filename}")
+    member = PurePosixPath(*raw_parts)
+    if member.parts[0].casefold() in protected_roots:
+        raise ValueError(f"更新包试图覆盖受保护目录：{filename}")
+    return member
+
+
 def validate_update_archive(path: str | Path) -> list[str]:
     archive_path = Path(path)
     safe_names: list[str] = []
+    windows_names: set[str] = set()
     with zipfile.ZipFile(archive_path) as archive:
         for info in archive.infolist():
             if info.is_dir():
                 continue
-            normalized = info.filename.replace("\\", "/")
-            member = PurePosixPath(normalized)
-            if member.is_absolute() or not member.parts or ".." in member.parts:
-                raise ValueError(f"更新包包含不安全路径：{info.filename}")
-            if member.parts[0].casefold() in PROTECTED_UPDATE_ROOTS:
-                raise ValueError(f"更新包试图覆盖受保护目录：{info.filename}")
+            member = _validated_update_member(info.filename, PROTECTED_UPDATE_ROOTS)
+            windows_name = "/".join(part.casefold() for part in member.parts)
+            if windows_name in windows_names:
+                raise ValueError(f"更新包包含重复的 Windows 路径：{info.filename}")
+            windows_names.add(windows_name)
             safe_names.append(member.as_posix())
     missing = sorted(REQUIRED_UPDATE_FILES.difference(safe_names))
     if missing:
@@ -236,6 +258,7 @@ from gui.update_dialog import UpdateInstallDialog
 
 PROTECTED = {"configs", "secrets", "logs", "reports", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"}
 CANONICAL_EXE = "hourlyreport_automation.exe"
+WINDOWS_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 
 
 class UpdateSignals(QObject):
@@ -254,15 +277,32 @@ def wait_for_exit(pid: int) -> None:
     raise RuntimeError("旧程序未能及时退出")
 
 
+def safe_member_path(filename: str) -> PurePosixPath:
+    normalized = str(filename).replace("\\", "/")
+    raw_parts = normalized.split("/")
+    if not normalized or normalized.startswith("/") or any(part in {"", ".", ".."} for part in raw_parts):
+        raise ValueError("更新包路径不安全")
+    for part in raw_parts:
+        if part.endswith((" ", ".")) or ":" in part or any(ord(char) < 32 for char in part):
+            raise ValueError("更新包包含不安全的 Windows 路径")
+        if part.split(".", 1)[0].casefold() in WINDOWS_RESERVED:
+            raise ValueError("更新包包含不安全的 Windows 设备名")
+    member = PurePosixPath(*raw_parts)
+    if member.parts[0].casefold() in PROTECTED:
+        raise ValueError("更新包包含受保护目录")
+    return member
+
+
 def safe_members(archive: zipfile.ZipFile):
+    windows_names: set[str] = set()
     for info in archive.infolist():
         if info.is_dir():
             continue
-        member = PurePosixPath(info.filename.replace("\\", "/"))
-        if member.is_absolute() or ".." in member.parts or not member.parts:
-            raise ValueError("更新包路径不安全")
-        if member.parts[0].casefold() in PROTECTED:
-            raise ValueError("更新包包含受保护目录")
+        member = safe_member_path(info.filename)
+        windows_name = "/".join(part.casefold() for part in member.parts)
+        if windows_name in windows_names:
+            raise ValueError("更新包包含重复的 Windows 路径")
+        windows_names.add(windows_name)
         yield info, member
 
 
@@ -296,12 +336,21 @@ def backup_target(root: Path, backup: Path, target: Path, backed_up: set[Path]) 
 
 
 def rollback(root: Path, backup: Path, created: set[Path], backed_up: set[Path]) -> None:
+    errors: list[str] = []
     for relative in sorted(created, key=lambda item: len(item.parts), reverse=True):
-        (root / relative).unlink(missing_ok=True)
-    for relative in backed_up:
+        try:
+            (root / relative).unlink(missing_ok=True)
+        except OSError as exc:
+            errors.append(f"删除 {relative} 失败：{exc}")
+    for relative in sorted(backed_up, key=lambda item: item.as_posix().casefold()):
         source = backup / relative
         if source.is_file():
-            replace_with_retry(source, root / relative)
+            try:
+                replace_with_retry(source, root / relative)
+            except OSError as exc:
+                errors.append(f"恢复 {relative} 失败：{exc}")
+    if errors:
+        raise RuntimeError("；".join(errors))
 
 
 def apply_update(
@@ -311,7 +360,7 @@ def apply_update(
     pid: int,
     storage: Path,
     signals: UpdateSignals,
-) -> tuple[bool, str, Path]:
+) -> tuple[bool, str, Path | None]:
     log_path = storage / "update_apply.log"
     backup = storage / "backups" / (version + "_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
     backed_up: set[Path] = set()
@@ -342,12 +391,17 @@ def apply_update(
         log_path.write_text(f"updated={version}\n", encoding="utf-8")
         return True, "", canonical
     except Exception as exc:
+        rollback_error = None
         try:
             rollback(root, backup, created, backed_up)
             rollback_result = "rollback=ok"
         except Exception as rollback_exc:
+            rollback_error = rollback_exc
             rollback_result = f"rollback=failed:{rollback_exc}"
         log_path.write_text(f"failed={exc}\n{rollback_result}\n", encoding="utf-8")
+        if rollback_error is not None:
+            message = f"{exc}；自动恢复未完全成功：{rollback_error}。请保留更新备份并联系管理员。"
+            return False, message, None
         return False, str(exc), root / CANONICAL_EXE
 
 
@@ -372,6 +426,8 @@ def run_update_install_dialog(
         else:
             dialog.hide()
             QMessageBox.critical(None, "更新失败", f"程序已尝试恢复原版本。\n\n失败原因：{message}")
+            if launcher and Path(launcher).is_file():
+                subprocess.Popen([launcher], cwd=str(root))
         app.quit()
 
     signals.progress.connect(dialog.set_progress)
@@ -380,7 +436,7 @@ def run_update_install_dialog(
 
     def worker() -> None:
         ok, message, launcher = apply_update(root, package, version, pid, storage, signals)
-        signals.completed.emit(ok, message, str(launcher))
+        signals.completed.emit(ok, message, str(launcher) if launcher else "")
 
     threading.Thread(target=worker, daemon=True, name="hourlyreport-update-apply").start()
     app.exec()

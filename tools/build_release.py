@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import zipfile
@@ -10,6 +11,7 @@ from pathlib import Path
 DEFAULT_VERSION = "hermes_20260710"
 EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", ".superpowers", "browser_profile", "runtime", "__pycache__", ".pytest_cache", "build", "cloud"}
 DESKTOP_EXE = "hourlyreport_automation.exe"
+DESKTOP_BUILD_MANIFEST = "hourlyreport_automation.build.json"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
 EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec", ".baidu-secrets", ".baidu-auth"}
@@ -160,15 +162,74 @@ def _validate_first_install_source(root: Path) -> None:
         raise ValueError("首次安装包源文件不完整：" + "、".join(missing))
 
 
-def _validate_online_update_source(root: Path) -> None:
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _source_fingerprint(root: Path) -> str:
+    candidates = [root / "main.py", root / "menu.py"]
+    for folder in (root / "gui", root / "modules"):
+        if folder.is_dir():
+            candidates.extend(folder.rglob("*.py"))
+    candidates.extend((root / "assets" / name) for name in ("app_icon.ico", "app_icon.png"))
+    digest = hashlib.sha256()
+    for path in sorted({item for item in candidates if item.is_file()}, key=lambda item: item.relative_to(root).as_posix()):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _source_version(root: Path) -> str:
+    version_file = root / "gui" / "version.py"
+    text = version_file.read_text(encoding="utf-8")
+    match = re.search(r'^CURRENT_VERSION\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+    if not match:
+        raise ValueError(f"无法读取源码版本：{version_file}")
+    return validate_online_version(match.group(1))
+
+
+def _validate_desktop_build(root: Path, expected_version: str) -> None:
+    executable = root / "dist" / DESKTOP_EXE
+    manifest_path = root / "dist" / DESKTOP_BUILD_MANIFEST
+    if not manifest_path.is_file():
+        raise ValueError(f"缺少桌面程序构建清单：{manifest_path.relative_to(root)}")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("桌面程序构建清单无效") from exc
+    if str(manifest.get("version") or "") != expected_version:
+        raise ValueError("桌面程序构建清单版本与发布版本不一致")
+    if str(manifest.get("executable") or "").casefold() != DESKTOP_EXE.casefold():
+        raise ValueError("桌面程序构建清单的 EXE 名称无效")
+    if int(manifest.get("size") or 0) != executable.stat().st_size:
+        raise ValueError("桌面程序构建清单大小与 EXE 不一致")
+    if str(manifest.get("sha256") or "").lower() != _sha256(executable):
+        raise ValueError("桌面程序构建清单 SHA-256 与 EXE 不一致")
+    if str(manifest.get("source_sha256") or "").lower() != _source_fingerprint(root):
+        raise ValueError("桌面程序构建清单与当前源码不一致，请重新构建 EXE")
+
+
+def _validate_online_update_source(root: Path, version: str) -> None:
     required_files = (
         root / "dist" / DESKTOP_EXE,
         root / "main.py",
         root / "gui" / "version.py",
+        root / "dist" / DESKTOP_BUILD_MANIFEST,
     )
     missing = [str(path.relative_to(root)) for path in required_files if not path.is_file()]
     if missing:
         raise ValueError("在线更新包源文件不完整：" + "、".join(missing))
+    clean_version = validate_online_version(version)
+    source_version = _source_version(root)
+    if source_version != clean_version:
+        raise ValueError(f"源码版本 {source_version} 与发布版本 {clean_version} 不一致")
+    _validate_desktop_build(root, clean_version)
 
 
 def build_release(
@@ -185,8 +246,13 @@ def build_release(
     dist_dir.mkdir(exist_ok=True)
     if first_install:
         _validate_first_install_source(root_path)
+        clean_version = validate_online_version(version or "")
+        source_version = _source_version(root_path)
+        if source_version != clean_version:
+            raise ValueError(f"源码版本 {source_version} 与发布版本 {clean_version} 不一致")
+        _validate_desktop_build(root_path, clean_version)
     if online_update:
-        _validate_online_update_source(root_path)
+        _validate_online_update_source(root_path, version or "")
     release_path = dist_dir / release_name(
         version,
         internal=internal,

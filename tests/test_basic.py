@@ -8344,14 +8344,14 @@ def test_online_update_build_contains_program_but_excludes_user_data():
     from tools.build_release import release_name
 
     root = Path(__file__).resolve().parents[1]
-    release = build_release(root, version="2026.7.15.101", online_update=True)
+    release = build_release(root, version="2026.7.19.104", online_update=True)
 
     import zipfile
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.15.101.zip"
-    assert release_name("2026.7.15.101", online_update=True) == release.name
+    assert release.name == "Hourlyreport_automation_v2026.7.19.104.zip"
+    assert release_name("2026.7.19.104", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -8366,6 +8366,7 @@ def test_online_update_build_contains_program_but_excludes_user_data():
 def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     import zipfile
 
+    from tools.build_desktop_exe import write_build_manifest
     from tools.build_release import build_release, release_name
 
     (tmp_path / "dist").mkdir()
@@ -8381,8 +8382,13 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     (tmp_path / "secrets" / "secrets.example.json").write_text('{"baidu":{}}', encoding="utf-8")
     (tmp_path / "secrets" / "secrets.json").write_text('{"secret":"must-not-ship"}', encoding="utf-8")
     (tmp_path / "main.py").write_text("print('ok')", encoding="utf-8")
+    (tmp_path / "gui").mkdir()
+    (tmp_path / "gui" / "version.py").write_text(
+        'CURRENT_VERSION = "2026.7.17.103"\n', encoding="utf-8"
+    )
     (tmp_path / "install_env.bat").write_text("@echo off\r\n", encoding="ascii")
     (tmp_path / "requirements-runtime.txt").write_text("openpyxl\n", encoding="utf-8")
+    write_build_manifest(tmp_path, tmp_path / "dist" / "hourlyreport_automation.exe", "2026.7.17.103")
 
     release = build_release(tmp_path, version="2026.7.17.103", first_install=True)
     with zipfile.ZipFile(release) as archive:
@@ -8855,14 +8861,14 @@ def test_task_runner_preserves_utf8_characters_split_across_process_chunks():
     assert output.values == ["[API] 正在读取"]
 
 
-def test_desktop_gui_requirements_include_gui_packaging_deps():
+def test_desktop_gui_requirements_keep_updater_ui_in_runtime_and_packager_in_dev():
     root = Path(__file__).resolve().parents[1]
     requirements = (root / "requirements-dev.txt").read_text(encoding="utf-8")
     runtime = (root / "requirements-runtime.txt").read_text(encoding="utf-8")
 
     assert "PySide6" in requirements
     assert "pyinstaller" in requirements
-    assert "PySide6" not in runtime
+    assert "PySide6" in runtime
     assert "pyinstaller" not in runtime
     assert "playwright" in runtime
 
@@ -10223,6 +10229,27 @@ def test_online_update_archive_rejects_path_traversal(tmp_path):
         validate_update_archive(malicious)
 
 
+def test_online_update_archive_rejects_windows_alias_and_device_paths(tmp_path):
+    import pytest
+    import zipfile
+
+    from gui.update_manager import validate_update_archive
+
+    dangerous_names = (
+        "configs./app_config.json",
+        "configs /app_config.json",
+        "configs:stream/app_config.json",
+        "C:/configs/app_config.json",
+        "CON/payload.txt",
+    )
+    for index, name in enumerate(dangerous_names):
+        archive_path = tmp_path / f"dangerous-{index}.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr(name, "bad")
+        with pytest.raises(ValueError, match="不安全|受保护"):
+            validate_update_archive(archive_path)
+
+
 def test_online_update_download_rejects_size_mismatch(tmp_path, monkeypatch):
     import io
     import pytest
@@ -10375,6 +10402,73 @@ def test_update_helper_rolls_back_partial_install_failure(tmp_path, monkeypatch)
     assert (root / "main.py").read_text(encoding="utf-8") == "old-main"
     assert not (root / "gui" / "version.py").exists()
     assert "rollback=ok" in (storage / "update_apply.log").read_text(encoding="utf-8")
+
+
+def test_update_helper_rejects_windows_alias_paths(tmp_path, monkeypatch):
+    namespace = _load_update_helper_namespace(tmp_path, monkeypatch)
+    for name in ("configs./app.json", "configs /app.json", "file:stream", "C:/file", "NUL.txt"):
+        with pytest.raises(ValueError, match="不安全|受保护"):
+            namespace["safe_member_path"](name)
+
+
+def test_update_helper_rollback_continues_after_one_restore_error(tmp_path, monkeypatch):
+    root = tmp_path / "app"
+    backup = tmp_path / "backup"
+    root.mkdir()
+    backup.mkdir()
+    for name in ("a.txt", "b.txt"):
+        (root / name).write_text(f"new-{name}", encoding="utf-8")
+        (backup / name).write_text(f"old-{name}", encoding="utf-8")
+
+    namespace = _load_update_helper_namespace(root, monkeypatch)
+    original_replace = namespace["replace_with_retry"]
+
+    def fail_a_only(source, target):
+        if Path(target).name == "a.txt":
+            raise OSError("a is locked")
+        return original_replace(source, target)
+
+    namespace["replace_with_retry"] = fail_a_only
+
+    with pytest.raises(RuntimeError, match="a is locked"):
+        namespace["rollback"](root, backup, set(), {Path("a.txt"), Path("b.txt")})
+
+    assert (root / "a.txt").read_text(encoding="utf-8") == "new-a.txt"
+    assert (root / "b.txt").read_text(encoding="utf-8") == "old-b.txt"
+
+
+def test_runtime_dependencies_include_update_dialog_toolkit():
+    root = Path(__file__).resolve().parents[1]
+    requirements = (root / "requirements-runtime.txt").read_text(encoding="utf-8").lower()
+    assert "pyside6" in requirements
+
+
+def test_online_release_refuses_source_or_exe_version_mismatch(tmp_path):
+    import json
+    import pytest
+
+    from tools.build_desktop_exe import write_build_manifest
+    from tools.build_release import build_release
+
+    (tmp_path / "dist").mkdir()
+    executable = tmp_path / "dist" / "hourlyreport_automation.exe"
+    executable.write_bytes(b"exe-104")
+    (tmp_path / "gui").mkdir()
+    (tmp_path / "gui" / "version.py").write_text(
+        'CURRENT_VERSION = "2026.7.19.104"\n', encoding="utf-8"
+    )
+    (tmp_path / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    write_build_manifest(tmp_path, executable, "2026.7.19.104")
+
+    with pytest.raises(ValueError, match="源码版本"):
+        build_release(tmp_path, version="2026.7.19.105", online_update=True)
+
+    manifest_path = tmp_path / "dist" / "hourlyreport_automation.build.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sha256"] = "0" * 64
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="构建清单|SHA-256"):
+        build_release(tmp_path, version="2026.7.19.104", online_update=True)
 
 
 def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_missing(tmp_path, monkeypatch):
