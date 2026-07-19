@@ -1,8 +1,9 @@
+<h1 align="center">
+  🐜 蚁之力 · 竞价数据自动化
+</h1>
+
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)">
-    <img alt="蚁之力 · 竞价数据自动化" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MDAiIGhlaWdodD0iMTIwIiB2aWV3Qm94PSIwIDAgNjAwIDEyMCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCUiIHkxPSIwJSIgeDI9IjEwMCUiIHkyPSIwJSI+PHN0b3Agb2Zmc2V0PSIwJSIgc3R5bGU9InN0b3AtY29sb3I6IzY2NzllYSIvPjxzdG9wIG9mZnNldD0iMTAwJSIgc3R5bGU9InN0b3AtY29sb3I6Izc2NDNhYSIvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjx0ZXh0IHg9IjMwMCIgeT0iNjUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxNaWNyb3NvZnQgWWFIZWks5b6u6L2v5qW96buRIiBmb250LXNpemU9IjQ4IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0idXJsKCNnKSI+6Jq55LmL5YqbIOKLuyDot6/lu7jmlbDmja7oh6rliqjljJY8L3RleHQ+PHRleHQgeD0iMzAwIiB5PSIxMDAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtZmFtaWx5PSJBcmlhbCxNaWNyb3NvZnQgWWFIZWkiIGZvbnQtc2l6ZT0iMTgiIGZpbGw9IiM5OTkiPkhPVVJMWV9SRVBPUlRfQk9UPC90ZXh0Pjwvc3ZnPg==" width="600" />
-  </picture>
+  <sub><code>H O U R L Y _ R E P O R T _ B O T</code> &nbsp; · &nbsp; v2026.7.19.106</sub>
 </p>
 
 <p align="center">
