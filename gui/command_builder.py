@@ -30,6 +30,7 @@ def _append_project(command: list[str], project_id: str | None) -> list[str]:
 def build_hourly_command(root: str | Path, period: str, project_id: str | None = None) -> list[str]:
     command = [
         str(python_exe(root)),
+        "-u",
         str(_main_py(root)),
         "--mode",
         "run",
@@ -42,6 +43,7 @@ def build_hourly_command(root: str | Path, period: str, project_id: str | None =
 def build_daily_command(root: str | Path, date_text: str | None, project_id: str | None = None) -> list[str]:
     command = [
         str(python_exe(root)),
+        "-u",
         str(_main_py(root)),
         "--mode",
         "run-daily",
@@ -56,6 +58,7 @@ def build_daily_command(root: str | Path, date_text: str | None, project_id: str
 def build_preflight_command(root: str | Path, task: str, project_id: str | None = None) -> list[str]:
     command = [
         str(python_exe(root)),
+        "-u",
         str(_main_py(root)),
         "--mode",
         "preflight",

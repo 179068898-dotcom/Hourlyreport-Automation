@@ -12,7 +12,7 @@ EXCLUDE_DIRS = {".venv", ".git", ".claude", ".playwright-cli", "browser_profile"
 DESKTOP_EXE = "百度数据自动化控制台.exe"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
-EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec", ".baidu-secrets"}
+EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec", ".baidu-secrets", ".baidu-auth"}
 EXCLUDE_FILES = {
     "config.json",
     "credentials.local.json",
@@ -74,9 +74,17 @@ def normalize_version(version: str | None) -> str:
     return f"v{raw}"
 
 
-def release_name(version: str | None = None, internal: bool = False, online_update: bool = False) -> str:
-    if internal and online_update:
-        raise ValueError("内部包与在线更新包不能同时生成")
+def release_name(
+    version: str | None = None,
+    internal: bool = False,
+    online_update: bool = False,
+    first_install: bool = False,
+) -> str:
+    if sum((bool(internal), bool(online_update), bool(first_install))) > 1:
+        raise ValueError("内部包、首次安装包与在线更新包不能同时生成")
+    if first_install:
+        clean_version = validate_online_version(version or "")
+        return f"baidu_data_automation_first_install_{clean_version}.zip"
     if online_update:
         clean_version = validate_online_version(version or "")
         return f"baidu_data_automation_update_{clean_version}.zip"
@@ -84,7 +92,12 @@ def release_name(version: str | None = None, internal: bool = False, online_upda
     return f"{prefix}_{normalize_version(version)}.zip"
 
 
-def should_include_file(path: Path, internal: bool = False, online_update: bool = False) -> bool:
+def should_include_file(
+    path: Path,
+    internal: bool = False,
+    online_update: bool = False,
+    first_install: bool = False,
+) -> bool:
     parts = path.parts
     if online_update and parts and parts[0] in {
         "configs", "secrets", "reports", "logs", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"
@@ -93,7 +106,7 @@ def should_include_file(path: Path, internal: bool = False, online_update: bool 
     if any(part in EXCLUDE_DIRS for part in parts):
         return False
     if parts and parts[0] == "dist":
-        return (internal or online_update) and len(parts) == 2 and parts[1] == DESKTOP_EXE
+        return (internal or online_update or first_install) and len(parts) == 2 and parts[1] == DESKTOP_EXE
     if parts and parts[0] == "tests":
         return False
     if len(parts) >= 2 and parts[0] == "docs" and parts[1] == "superpowers":
@@ -126,18 +139,47 @@ def should_include_file(path: Path, internal: bool = False, online_update: bool 
     return True
 
 
+def _validate_first_install_source(root: Path) -> None:
+    required_files = (
+        root / "dist" / DESKTOP_EXE,
+        root / "main.py",
+        root / "configs" / "app_config.json",
+        root / "install_env.bat",
+        root / "requirements-runtime.txt",
+    )
+    missing = [str(path.relative_to(root)) for path in required_files if not path.is_file()]
+    projects_dir = root / "configs" / "projects"
+    project_files = [
+        path
+        for path in projects_dir.glob("*.json")
+        if path.name != "project_template.json"
+    ] if projects_dir.is_dir() else []
+    if not project_files:
+        missing.append("configs/projects/*.json")
+    if missing:
+        raise ValueError("首次安装包源文件不完整：" + "、".join(missing))
+
+
 def build_release(
     root: str | Path,
     version: str | None = None,
     internal: bool = False,
     online_update: bool = False,
+    first_install: bool = False,
 ) -> Path:
-    if internal and online_update:
-        raise ValueError("内部包与在线更新包不能同时生成")
+    if sum((bool(internal), bool(online_update), bool(first_install))) > 1:
+        raise ValueError("内部包、首次安装包与在线更新包不能同时生成")
     root_path = Path(root)
     dist_dir = root_path / "dist"
     dist_dir.mkdir(exist_ok=True)
-    release_path = dist_dir / release_name(version, internal=internal, online_update=online_update)
+    if first_install:
+        _validate_first_install_source(root_path)
+    release_path = dist_dir / release_name(
+        version,
+        internal=internal,
+        online_update=online_update,
+        first_install=first_install,
+    )
     if release_path.exists():
         release_path.unlink()
 
@@ -146,7 +188,12 @@ def build_release(
             if path.is_dir():
                 continue
             rel = path.relative_to(root_path)
-            if should_include_file(rel, internal=internal, online_update=online_update):
+            if should_include_file(
+                rel,
+                internal=internal,
+                online_update=online_update,
+                first_install=first_install,
+            ):
                 archive_name = DESKTOP_EXE if rel.parts == ("dist", DESKTOP_EXE) else rel.as_posix()
                 if rel.as_posix() == "configs/app_config.json":
                     app_config = json.loads(path.read_text(encoding="utf-8"))
@@ -163,6 +210,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="构建百度竞价日报/小时报自动化工具发布包")
     parser.add_argument("--version", default=DEFAULT_VERSION, help="发布版本号，例如 2.0 或 v2.0")
     parser.add_argument("--internal", action="store_true", help="构建内部包（不包含本机账号和授权配置）")
+    parser.add_argument("--first-install", action="store_true", help="构建新电脑首次安装包（包含默认配置，不包含真实凭据）")
     parser.add_argument("--online-update", action="store_true", help="构建在线更新包（包含 GUI，排除所有用户配置）")
     args = parser.parse_args()
 
@@ -173,9 +221,15 @@ def main() -> None:
         version=args.version,
         internal=args.internal,
         online_update=args.online_update,
+        first_install=args.first_install,
     )
     size_mb = release_path.stat().st_size / 1024 / 1024
-    pkg_type = "在线更新包" if args.online_update else ("内部包" if args.internal else "普通包")
+    if args.online_update:
+        pkg_type = "在线更新包"
+    elif args.first_install:
+        pkg_type = "首次安装包"
+    else:
+        pkg_type = "内部包" if args.internal else "普通包"
     print(f"{pkg_type}已生成：{release_path}")
     print(f"大小：{size_mb:.2f} MB")
 

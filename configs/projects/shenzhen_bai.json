@@ -2,7 +2,7 @@
   "project_id": "shenzhen_bai",
   "project_name": "深圳白",
   "excel": {
-    "path": "D:\\Seafile\\【竞价】\\【❤深圳白】\\【2026年】【深圳白】竞价数据\\【深圳白】2026竞价数据.xlsx",
+    "path": "D:\\Seafile\\【竞价】\\【❤深圳组】\\【2026】【深圳】竞价数据\\【深圳】2026竞价数据.xlsx",
     "hourly_sheet": "时段数据",
     "daily_sheet": "百度",
     "engine": "openpyxl"
@@ -14,6 +14,8 @@
   },
   "baidu": {
     "credential_profile": "shenzhen_bai_baidu",
+    "api_profile": "shenzhen_bai_baidu",
+    "data_source_mode": "browser",
     "data_path": [
       "首页",
       "数据报告",
@@ -23,42 +25,42 @@
   },
   "accounts": [
     {
-      "standard_name": "深圳白账户01",
+      "standard_name": "益尚8",
       "baidu_names": [
-        "深圳白账户01"
+        "益尚8"
       ],
-      "excel_name": "深圳白账户01",
+      "excel_name": "益尚8",
       "kst_ids": [
-        "TODO_SHENZHEN_BAI_KST_ID_01"
+        "5289605"
       ],
       "kst_names": [
-        "深圳白账户01"
+        "益尚8"
       ]
     },
     {
-      "standard_name": "深圳白账户02",
+      "standard_name": "益尚66",
       "baidu_names": [
-        "深圳白账户02"
+        "益尚66"
       ],
-      "excel_name": "深圳白账户02",
+      "excel_name": "益尚66",
       "kst_ids": [
-        "TODO_SHENZHEN_BAI_KST_ID_02"
+        "5401012"
       ],
       "kst_names": [
-        "深圳白账户02"
+        "益尚66"
       ]
     },
     {
-      "standard_name": "深圳白账户03",
+      "standard_name": "益尚888",
       "baidu_names": [
-        "深圳白账户03"
+        "益尚888"
       ],
-      "excel_name": "深圳白账户03",
+      "excel_name": "益尚888",
       "kst_ids": [
-        "TODO_SHENZHEN_BAI_KST_ID_03"
+        "28492104"
       ],
       "kst_names": [
-        "深圳白账户03"
+        "益尚888"
       ]
     }
   ],

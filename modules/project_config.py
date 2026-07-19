@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
+import warnings
 
 
 APP_CONFIG_PATH = Path("configs/app_config.json")
@@ -19,6 +22,8 @@ REQUIRED_PROJECT_FIELDS = [
 REQUIRED_DAILY_WRITE_FIELDS = ["展现", "点击", "消费", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"]
 REQUIRED_DAILY_FORBIDDEN_FIELDS = ["总对话", "预约", "到诊", "就诊"]
 REQUIRED_PERIODS = ["11点", "15点", "18点"]
+DATA_SOURCE_MODES = {"browser", "api_shadow", "api_preferred"}
+DATA_SOURCE_PREFERENCES = {"api", "browser"}
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -28,6 +33,28 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_json_atomically(path: Path, data: dict[str, Any]) -> None:
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_path = Path(temp_file.name)
+            temp_file.write(json.dumps(data, ensure_ascii=False, indent=2))
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
 
 
 def _resolve(root: Path, value: str | Path) -> Path:
@@ -49,6 +76,18 @@ def load_app_config(root: str | Path) -> dict[str, Any]:
         raise ValueError("configs/app_config.json 缺少 projects_dir")
     if not config.get("secrets_file"):
         raise ValueError("configs/app_config.json 缺少 secrets_file")
+    if "baidu_data_source_preference" not in config:
+        config["baidu_data_source_preference"] = "api"
+    else:
+        preference = str(config["baidu_data_source_preference"]).strip().lower()
+        if preference in DATA_SOURCE_PREFERENCES:
+            config["baidu_data_source_preference"] = preference
+        else:
+            warnings.warn(
+                "baidu_data_source_preference 无效，已按 api 处理",
+                RuntimeWarning,
+            )
+            config["baidu_data_source_preference"] = "api"
     return config
 
 
@@ -301,6 +340,13 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     baidu["credential_project"] = get_credential_profile(project)
     baidu["credential_profile"] = get_credential_profile(project)
     project_baidu = project.get("baidu", {})
+    configured_mode = str(project_baidu.get("data_source_mode") or "browser")
+    preference = normalize_data_source_preference(
+        project.get("_app_config", {}).get("baidu_data_source_preference")
+    )
+    baidu["configured_data_source_mode"] = configured_mode
+    baidu["data_source_preference"] = preference
+    baidu["data_source_mode"] = "api_preferred" if preference == "api" else "browser"
     for key in ("api_profile", "api_timeout_seconds"):
         if project_baidu.get(key) not in (None, ""):
             baidu[key] = project_baidu[key]
@@ -353,6 +399,26 @@ def build_runtime_config_from_project(project: dict[str, Any], base_config: dict
     return config
 
 
+def normalize_data_source_preference(value: Any) -> str:
+    normalized = str(value or "api").strip().lower()
+    return normalized if normalized in DATA_SOURCE_PREFERENCES else "api"
+
+
+def get_data_source_preference(root: str | Path) -> str:
+    return normalize_data_source_preference(
+        load_app_config(root).get("baidu_data_source_preference")
+    )
+
+
+def set_data_source_preference(root: str | Path, preference: str) -> str:
+    root_path = Path(root)
+    app_config = load_app_config(root_path)
+    normalized = normalize_data_source_preference(preference)
+    app_config["baidu_data_source_preference"] = normalized
+    _write_json_atomically(root_path / APP_CONFIG_PATH, app_config)
+    return normalized
+
+
 def _require_nested(errors: list[str], project: dict[str, Any], section: str, key: str) -> None:
     value = project.get(section)
     if not isinstance(value, dict) or key not in value or value.get(key) in (None, ""):
@@ -390,6 +456,10 @@ def validate_project_config(project: dict[str, Any]) -> list[str]:
     data_path = project.get("baidu", {}).get("data_path") if isinstance(project.get("baidu"), dict) else None
     if data_path != ["首页", "数据报告", "数据概览", "搜索推广"]:
         errors.append("baidu.data_path 必须为：首页-数据报告-数据概览-搜索推广")
+
+    data_source_mode = str(project.get("baidu", {}).get("data_source_mode") or "browser")
+    if data_source_mode not in DATA_SOURCE_MODES:
+        errors.append("baidu.data_source_mode 只支持 browser、api_shadow 或 api_preferred")
 
     periods = project.get("hourly", {}).get("periods") if isinstance(project.get("hourly"), dict) else None
     if periods != REQUIRED_PERIODS:
@@ -444,7 +514,7 @@ def _validate_baidu_sources(project: dict[str, Any]) -> list[str]:
         if source_id in seen_source_ids:
             errors.append(f"百度来源 ID 重复：{source_id}")
         seen_source_ids.add(source_id)
-        for field in ["source_id", "source_name", "credential_profile", "accounts"]:
+        for field in ["source_id", "source_name", "credential_profile", "api_profile", "accounts"]:
             if field not in source or source.get(field) in (None, "", []):
                 errors.append(f"缺少字段：baidu_sources[{source_index}].{field}")
         accounts = source.get("accounts")

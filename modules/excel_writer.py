@@ -190,12 +190,13 @@ def _replace_xml_node(xml: str, tag: str, replacement: str | None) -> tuple[str,
 def _restore_sheet_filter_protection_metadata(
     excel_path: Path,
     backup_path: Path,
-    sheet_names: list[str],
+    sheet_names: list[str] | None,
     logger,
 ) -> bool:
     """恢复 openpyxl 保存时容易丢失的保护/筛选 UI 元数据。
 
-    只替换目标 sheet 的 sheetProtection 和 autoFilter 节点，不改单元格值、公式、样式或其他 sheet。
+    sheet_names 为 None 时恢复写前备份中的全部 sheet。只替换 sheetProtection 和
+    autoFilter 节点，不改单元格值、公式、样式或其他 XML 内容。
     """
     if not backup_path.exists() or not excel_path.exists():
         return False
@@ -204,7 +205,16 @@ def _restore_sheet_filter_protection_metadata(
     processed_sheets: list[str] = []
     try:
         with ZipFile(backup_path, "r") as backup_zip, ZipFile(excel_path, "r") as current_zip:
-            for sheet_name in sheet_names:
+            restore_sheet_names = sheet_names
+            if restore_sheet_names is None:
+                workbook_root = ET.fromstring(backup_zip.read("xl/workbook.xml"))
+                restore_sheet_names = [
+                    sheet.attrib["name"]
+                    for sheet in workbook_root.findall(
+                        ".//{http://schemas.openxmlformats.org/spreadsheetml/2006/main}sheet"
+                    )
+                ]
+            for sheet_name in restore_sheet_names:
                 backup_sheet_path = _sheet_xml_path(backup_zip, sheet_name)
                 current_sheet_path = _sheet_xml_path(current_zip, sheet_name)
                 if not backup_sheet_path or not current_sheet_path:
@@ -447,7 +457,7 @@ def mock_write_excel(
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
-        [sheet_name],
+        None,
         logger,
     )
     logger.info("模拟数据已写入并保存：%s", excel_path)
@@ -675,7 +685,7 @@ def write_merged_hourly_data(
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
-        [sheet_name],
+        None,
         logger,
     )
     logger.info("合并数据已写入并保存：%s", excel_path)
@@ -870,7 +880,7 @@ def write_merged_daily_data(
     report["self_check"]["filter_ui_metadata_restored"] = _restore_sheet_filter_protection_metadata(
         excel_path,
         backup_path,
-        [daily_sheet_name],
+        None,
         logger,
     )
     logger.info("日报合并数据已写入并保存：%s", excel_path)

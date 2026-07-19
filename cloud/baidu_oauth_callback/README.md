@@ -9,6 +9,7 @@ Web 函数部署配置：
 - 启动文件：压缩包根目录的 `scf_bootstrap`。
 - 监听端口：9000，由 `app.py` 的 Python 标准库 WSGI 服务处理，不依赖 Flask。
 - 健康检查：根路径和 `/baidu/oauth/callback` 无参数访问时都返回 `status=ready`。
+- 令牌刷新：`POST /baidu/oauth/refresh`，仅接受桌面程序签名请求。
 
 若新建普通事件函数，配置为：
 
@@ -34,7 +35,20 @@ BAIDU_APP_ID=百度应用 ID
 BAIDU_SECRET_KEY=百度应用 secretKey
 BAIDU_ALLOWED_STATES=授权链接中的 state；多个值用英文逗号分隔
 BAIDU_MAX_TIMESTAMP_SKEW_SECONDS=600
+BAIDU_REFRESH_CLIENT_KEY=桌面程序与云函数共享的刷新签名密钥
+BAIDU_REFRESH_MAX_TIMESTAMP_SKEW_SECONDS=300
 ```
+
+`BAIDU_REFRESH_CLIENT_KEY` 必须使用独立随机值，不能与百度 `secretKey` 相同。桌面程序不保存
+百度 `secretKey`；它只使用该独立密钥对刷新请求签名。签名算法为 HMAC-SHA256，签名原文是
+`<Unix 秒时间戳>\n<按键排序的紧凑 JSON 正文>`，请求头固定为：
+
+```text
+X-Baidu-Refresh-Timestamp
+X-Baidu-Refresh-Signature
+```
+
+刷新接口的请求正文、签名、access token、refresh token 和服务端密钥均不得写入腾讯云日志。
 
 部署包由项目根目录执行下面的命令生成：
 

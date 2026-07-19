@@ -3,13 +3,16 @@ import os
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
-from index import main_handler
+from index import main_handler, refresh_handler
 
 
 STATUS_TEXT = {
     200: "OK",
     201: "Created",
     400: "Bad Request",
+    401: "Unauthorized",
+    405: "Method Not Allowed",
+    413: "Payload Too Large",
     404: "Not Found",
     500: "Internal Server Error",
     502: "Bad Gateway",
@@ -23,7 +26,46 @@ def _query_from_environ(environ):
 
 def application(environ, start_response):
     path = environ.get("PATH_INFO", "/")
-    if path not in ("/", "/baidu/oauth/callback", "/baidu/oauth/callback/"):
+    method = str(environ.get("REQUEST_METHOD", "GET")).upper()
+    if path in ("/baidu/oauth/refresh", "/baidu/oauth/refresh/"):
+        if method != "POST":
+            result = {
+                "statusCode": 405,
+                "headers": {"Content-Type": "application/json; charset=utf-8"},
+                "body": json.dumps({"status": "error", "code": "method_not_allowed"}),
+            }
+        else:
+            try:
+                content_length = int(environ.get("CONTENT_LENGTH") or "0")
+            except ValueError:
+                content_length = -1
+            if content_length < 0:
+                result = {
+                    "statusCode": 400,
+                    "headers": {"Content-Type": "application/json; charset=utf-8"},
+                    "body": json.dumps({"status": "error", "code": "invalid_content_length"}),
+                }
+            elif content_length > 65536:
+                result = {
+                    "statusCode": 413,
+                    "headers": {"Content-Type": "application/json; charset=utf-8"},
+                    "body": json.dumps({"status": "error", "code": "payload_too_large"}),
+                }
+            else:
+                body = environ.get("wsgi.input").read(content_length).decode("utf-8")
+                result = refresh_handler(
+                    {
+                        "httpMethod": method,
+                        "path": path,
+                        "headers": {
+                            "X-Baidu-Refresh-Timestamp": environ.get("HTTP_X_BAIDU_REFRESH_TIMESTAMP", ""),
+                            "X-Baidu-Refresh-Signature": environ.get("HTTP_X_BAIDU_REFRESH_SIGNATURE", ""),
+                        },
+                        "body": body,
+                    },
+                    None,
+                )
+    elif path not in ("/", "/baidu/oauth/callback", "/baidu/oauth/callback/"):
         result = {
             "statusCode": 404,
             "headers": {"Content-Type": "application/json; charset=utf-8"},

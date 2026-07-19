@@ -2,7 +2,7 @@
 
 入口同步标记：`HERMES-20260710`
 
-夏思道使用 HERMES 固定入口执行任务，自动代执行只允许调用 `run_hermes_*.bat`。
+当前产品名为“蚁之力 · 竞价数据自动化”。夏思道使用 HERMES 固定入口执行任务，自动代执行只允许调用 `run_hermes_*.bat`。
 
 ## 当前能力
 
@@ -34,10 +34,24 @@ run_hermes_daily.bat 2026-07-09
 
 - 不带日期的日报处理昨天。
 - 固定窗口标题包含 `HERMES`、任务类型和 `20260710`。
+- 小时报窗口标题保持 `HERMES Hourly - fixed entry - 20260710`，日报窗口标题保持 `HERMES Daily - fixed entry - 20260710`。
 - BAT 固定工作目录、UTF-8 和 `.venv` Python。
 - `.venv` 不存在时，BAT 会调用 `install_env.bat` 自动准备环境。
 - 小时报先执行 `preflight --quick`，日报先执行 `preflight --task daily --quick`；失败立即停止。
 - 禁止绕过 BAT 自己拼 `main.py --mode run` 或拆分阶段代替完整任务。
+
+## 百度数据源模式
+
+HERMES 与 GUI、命令行完整任务共享同一应用级偏好 `baidu_data_source_preference`，BAT 文件名、参数和窗口规则不变：
+
+- `A` / `api`：默认 API 优先；Token、网络或完整性异常先在 20 秒总预算内有限自修复，仍失败则自动整项目降级浏览器。
+- `B` / `browser`：强制浏览器，不调用 API，是紧急回退入口。
+
+九个项目、十一个授权已导入，正式发布前必须由开发人员显式运行 `.venv\Scripts\python.exe main.py --mode test-baidu-api-readiness`。该入口只读百度数据，不读写 Excel；Token 过期时可按生产规则备份并原子更新 `secrets/secrets.json`，原文件和备份均为敏感文件。
+
+沈阳牛、沈阳白必须两路 API 全部成功后才合并；任一路失败时丢弃 API 临时结果并整项目降级，禁止混合 API 与浏览器的部分数据。多项目并行尚未投入生产。
+
+API 模式的 preflight 不提前启动 Chrome；只有 API 最终失败、实际降级时才延迟启动 Chrome。普通 GUI 不得自动调用 `test-baidu-api`、`test-baidu-api-readiness`、`simulate-baidu-api-hourly` 或 OAuth 导入等开发探测入口。
 
 ## 执行前
 
@@ -50,7 +64,7 @@ run_hermes_daily.bat 2026-07-09
 ## Chrome 与登录
 
 - 只使用 Google Chrome 调试端口 `9222`，不自动改用 Edge。
-- 先复用已存在的项目专用调试 Chrome；未启动时 preflight 自动尝试启动，不关闭用户已有 Chrome。
+- `A` 模式预检不接触 Chrome，实际降级后才复用或延迟启动项目专用实例；`B` 模式预检继续检查 Chrome 9222。
 - 自动切换账号、清 cookie 和 CAS 登录默认静默，不抢前台。
 - 页面退出失败时，程序会清理当前上下文 cookie/storage 后重登当前项目账号。
 - 遇到验证码、滑块、安全验证或明确要求人工确认时，停止并说明需要人工处理。
@@ -61,7 +75,7 @@ run_hermes_daily.bat 2026-07-09
 - 只写动态识别出的账户和字段区域，不写死单元格坐标。
 - 不修改无关 sheet、公式区、汇总区、截图区或“每日时段统计数据”。
 - 百度日报必须连续快照稳定且通过总计校验后才允许写入；不稳定时整次失败，不写部分结果。
-- 双百度来源任一来源失败时停止，不写入部分来源数据。
+- API 任一路失败先丢弃临时结果并整项目降级浏览器；仅 API 与浏览器均失败时停止，禁止写 Excel。
 - 失败后禁止手工补数字。
 
 ## 成功与失败判断
@@ -94,7 +108,7 @@ logs/run.log
 | 快商通没有 30 分钟内文件 | 正常按 0 对话继续，不当作 BUG |
 | Excel 被占用 | 关闭对应 WPS/Excel 文件后整次重跑 |
 | 百度数据两次不稳定 | 等待页面/API 稳定后整次重跑，不手工补数 |
-| 多来源某一路失败 | 查看 `reports/baidu_multi_source_report.json`，修复后整次重跑 |
+| API 多来源某一路失败 | 程序自动丢弃临时结果并整项目降级浏览器；浏览器也失败时查看 `reports/baidu_multi_source_report.json` 后整次重跑 |
 
 ## 不得做
 

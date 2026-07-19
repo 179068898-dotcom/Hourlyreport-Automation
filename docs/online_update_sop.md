@@ -2,7 +2,9 @@
 
 ## 基线
 
-`2026.7.15.101` 是首个带在线更新器的版本。更早的同事版本必须人工完整安装一次该基线，之后才能在 GUI 启动时自动检查 GitHub Release。
+`2026.7.15.101` 是首个带在线更新器的版本。更早的同事版本必须人工完整安装一次带 `first_install` 标记的首次安装包，之后才能在 GUI 启动时自动检查 GitHub Release。
+
+`baidu_data_automation_update_*.zip` 只用于覆盖已有安装，故意排除 `configs/` 和其他用户数据，不能作为新电脑安装包。新电脑统一使用 `baidu_data_automation_first_install_*.zip`；若误启动不完整的更新目录，GUI 应给出首次安装提示并安全退出，不显示 Python 异常堆栈。
 
 ## 版本号
 
@@ -30,14 +32,20 @@
 3. 同步更新 `gui/version.py` 中的 `CURRENT_VERSION`。
 4. 重新构建 `百度数据自动化控制台.exe`。
 5. 运行基础测试，不通过则停止发布。
-6. 生成只含程序文件的在线更新包：
+6. 如需部署新电脑，生成包含默认配置但不含真实凭据的首次安装包：
 
 ```cmd
-.venv\Scripts\python.exe tools\build_release.py --online-update --version 2026.7.16.102
+.venv\Scripts\python.exe tools\build_release.py --first-install --version 2026.7.17.103
 ```
 
-7. GitHub Release tag 使用 `v2026.7.16.102`，上传同版本 ZIP。
-8. 在一台已安装上一版本的测试电脑上验证“发现更新、下载、安装、重启、保留配置”完整流程。
+7. 生成只含程序文件的在线更新包：
+
+```cmd
+.venv\Scripts\python.exe tools\build_release.py --online-update --version 2026.7.17.103
+```
+
+8. GitHub Release tag 使用 `v2026.7.17.103`，上传同版本 ZIP；首次安装包与在线更新包用途不同，不得混用。
+9. 在一台已安装上一版本的测试电脑上验证“发现更新、下载、安装、重启、保留配置”完整流程，并在一个无配置空目录验证首次安装包可启动。
 
 ## 不得覆盖
 
@@ -52,4 +60,4 @@
 
 ## API 开发关系
 
-在线更新与百度 API 数据源是两条独立能力。服务商审核和九项目验收完成前，发布新版本也不得自动把正式任务切到 API；API 只能通过显式探测、模拟入口验证。
+在线更新与百度 API 数据源是两条独立能力。昆明牛可在 `api_shadow` 中随正常任务只读对账，但正式结果仍以浏览器为准；其余未验收项目不得因发布新版本自动切换数据源。`api_preferred` 必须逐项目连续对账通过并经用户明确批准后才能启用。

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import time
 import urllib.error
 import urllib.request
 from datetime import date, datetime
@@ -9,15 +11,32 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.validators import get_required_accounts, validate_baidu_report
+from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_token
 
 
 REPORT_API_URL = "https://api.baidu.com/json/sms/service/OpenApiReportService/getReportData"
 ACCOUNT_REPORT_TYPE = 2208157
 REPORT_COLUMNS = ["date", "userName", "userId", "impression", "click", "cost"]
+ATTEMPT_ERROR_SUMMARIES = {
+    "api_error": "百度 API 读取失败，请稍后重试",
+    "authorization_error": "百度 API 授权校验失败，请检查授权状态",
+    "configuration_error": "百度 API 配置无效，请检查项目配置",
+    "integrity_error": "百度 API 返回数据未通过完整性校验",
+    "network_error": "百度 API 网络请求失败，请稍后重试",
+    "reauthorization_required": "百度 API 授权已失效，需要重新授权",
+}
 
 
 class BaiduReportApiError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        category: str = "api_error",
+        reauthorization_required: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.category = category
+        self.reauthorization_required = reauthorization_required
 
 
 def _resolve_path(root: Path, value: str | Path) -> Path:
@@ -32,6 +51,23 @@ def _read_json(path: Path) -> dict[str, Any]:
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _write_json_atomic(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _number(value: Any, *, integer: bool = False) -> int | float | None:
@@ -68,7 +104,7 @@ def _account_user_ids(config: dict[str, Any]) -> tuple[list[int], dict[int, str]
     return user_ids, account_by_id
 
 
-def _load_api_auth(root: Path, config: dict[str, Any]) -> tuple[str, str, str]:
+def _load_api_identity(root: Path, config: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     secrets_path = _resolve_path(root, config.get("credentials_path", "secrets/secrets.json"))
     if not secrets_path.exists():
         raise BaiduReportApiError(f"找不到凭据文件：{secrets_path}")
@@ -85,10 +121,21 @@ def _load_api_auth(root: Path, config: dict[str, Any]) -> tuple[str, str, str]:
     if not api_profile:
         raise BaiduReportApiError("当前项目未配置 baidu.api_profile，API 通道尚未启用")
 
-    username = str((secrets.get("baidu", {}).get(credential_profile) or {}).get("username") or "").strip()
-    token = str((secrets.get("baidu_api", {}).get(api_profile) or {}).get("access_token") or "").strip()
+    browser_username = str(
+        (secrets.get("baidu", {}).get(credential_profile) or {}).get("username") or ""
+    ).strip()
+    api_record = secrets.get("baidu_api", {}).get(api_profile) or {}
+    username = str(api_record.get("master_name") or browser_username).strip()
     if not username:
-        raise BaiduReportApiError(f"百度凭据 profile 缺少 username：{credential_profile}")
+        raise BaiduReportApiError(
+            f"百度 API profile 缺少 master_name，且百度凭据 profile 缺少 username：{api_profile}"
+        )
+    return username, api_profile, secrets
+
+
+def _load_api_auth(root: Path, config: dict[str, Any]) -> tuple[str, str, str]:
+    username, api_profile, secrets = _load_api_identity(root, config)
+    token = str((secrets.get("baidu_api", {}).get(api_profile) or {}).get("access_token") or "").strip()
     if not token:
         raise BaiduReportApiError(f"百度 API profile 缺少 access_token：{api_profile}")
     if token.count(".") != 2:
@@ -107,13 +154,19 @@ def _post_json(url: str, payload: dict[str, Any], timeout_seconds: int) -> dict[
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
-        raise BaiduReportApiError(f"百度 API HTTP 请求失败：{exc.code}") from exc
+        if 500 <= int(exc.code) <= 599:
+            category = "network_error"
+        elif int(exc.code) in {401, 403}:
+            category = "authorization_error"
+        else:
+            category = "api_error"
+        raise BaiduReportApiError("百度 API HTTP 请求失败", category=category) from exc
     except urllib.error.URLError as exc:
-        raise BaiduReportApiError("百度 API 网络连接失败") from exc
+        raise BaiduReportApiError("百度 API 网络连接失败", category="network_error") from exc
     except TimeoutError as exc:
-        raise BaiduReportApiError("百度 API 请求超时") from exc
+        raise BaiduReportApiError("百度 API 请求超时", category="network_error") from exc
     except json.JSONDecodeError as exc:
-        raise BaiduReportApiError("百度 API 返回内容不是合法 JSON") from exc
+        raise BaiduReportApiError("百度 API 返回内容不是合法 JSON", category="api_error") from exc
 
 
 def _build_payload(username: str, token: str, user_ids: list[int], target_date: str) -> dict[str, Any]:
@@ -140,6 +193,7 @@ def _parse_api_response(
     *,
     config: dict[str, Any],
     account_by_id: dict[int, str],
+    expected_date: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], list[str]]:
     errors: list[str] = []
     header = response.get("header") or {}
@@ -155,8 +209,15 @@ def _parse_api_response(
     summary = wrapper.get("summary") or {}
     accounts: dict[str, Any] = {}
     unknown_rows: list[dict[str, Any]] = []
+    returned_totals = {"impression": 0, "click": 0, "cost": 0.0}
 
     for row in rows:
+        row_date = str(row.get("date") or "").strip()
+        if expected_date:
+            if not row_date:
+                errors.append("百度 API 返回账户行缺少日期")
+            elif row_date != expected_date:
+                errors.append(f"百度 API 返回日期不一致：{row_date} != {expected_date}")
         raw_id = row.get("userId")
         try:
             user_id = int(raw_id)
@@ -169,8 +230,18 @@ def _parse_api_response(
             "点击": _number(row.get("click"), integer=True),
             "消费": _number(row.get("cost")),
         }
+        for field, value in metrics.items():
+            if value is None:
+                errors.append(f"百度 API 账户 {standard_name or user_id} 字段 {field} 不是有限数字")
+            elif value < 0:
+                errors.append(f"百度 API 账户 {standard_name or user_id} 字段 {field} 不能为负数")
+        if all(value is not None and value >= 0 for value in metrics.values()):
+            returned_totals["impression"] += int(metrics["展现"])
+            returned_totals["click"] += int(metrics["点击"])
+            returned_totals["cost"] = round(returned_totals["cost"] + float(metrics["消费"]), 2)
         if not standard_name:
             unknown_rows.append({"userId": user_id, "userName": row.get("userName"), **metrics})
+            errors.append(f"百度 API 返回未知推广 ID：{user_id}")
             continue
         if standard_name in accounts:
             errors.append(f"百度 API 返回重复账户：{standard_name}")
@@ -181,26 +252,40 @@ def _parse_api_response(
             **metrics,
         }
 
-    account_report = {"accounts": accounts}
-    errors.extend(error for error in validate_baidu_report(account_report, get_required_accounts(config)) if error not in errors)
-
-    account_totals = {
-        "impression": sum(row.get("展现") or 0 for row in accounts.values()),
-        "click": sum(row.get("点击") or 0 for row in accounts.values()),
-        "cost": round(sum(row.get("消费") or 0 for row in accounts.values()), 2),
-    }
     summary_metrics = {
         "impression": _number(summary.get("impression"), integer=True),
         "click": _number(summary.get("click"), integer=True),
         "cost": _number(summary.get("cost")),
     }
-    if rows and all(value is not None for value in summary_metrics.values()):
+    summary_complete = all(value is not None for value in summary_metrics.values())
+    summary_matches_rows = False
+    if summary_complete:
+        summary_matches_rows = True
         for field, tolerance in (("impression", 0), ("click", 0), ("cost", 0.01)):
-            diff = round(float(summary_metrics[field]) - float(account_totals[field]), 2)
+            diff = round(float(summary_metrics[field]) - float(returned_totals[field]), 2)
             if abs(diff) > tolerance:
+                summary_matches_rows = False
                 errors.append(f"百度 API 汇总校验失败：{field} 差额 {diff}")
-    elif rows:
+    else:
         errors.append("百度 API 未返回完整汇总指标")
+
+    zero_filled_accounts: list[str] = []
+    if not errors and summary_complete and summary_matches_rows:
+        for user_id, standard_name in account_by_id.items():
+            if standard_name in accounts:
+                continue
+            accounts[standard_name] = {
+                "source_account": standard_name,
+                "source_user_id": user_id,
+                "展现": 0,
+                "点击": 0,
+                "消费": 0.0,
+                "synthetic_zero": True,
+            }
+            zero_filled_accounts.append(standard_name)
+
+    account_report = {"accounts": accounts}
+    errors.extend(error for error in validate_baidu_report(account_report, get_required_accounts(config)) if error not in errors)
 
     diagnostics = {
         "api_status": header.get("status"),
@@ -210,10 +295,317 @@ def _parse_api_response(
         "total_row_count": wrapper.get("totalRowCount"),
         "requested_account_count": len(account_by_id),
         "summary": summary_metrics,
-        "account_totals": account_totals,
+        "account_totals": returned_totals,
         "unknown_rows": unknown_rows,
+        "zero_filled_accounts": zero_filled_accounts,
+        "zero_filled_count": len(zero_filled_accounts),
     }
     return accounts, diagnostics, errors
+
+
+def _failure_codes(response: dict[str, Any]) -> set[str]:
+    header = response.get("header") if isinstance(response, dict) else None
+    failures = header.get("failures") if isinstance(header, dict) else None
+    return {
+        str(item.get("code"))
+        for item in (failures or [])
+        if isinstance(item, dict) and item.get("code") is not None
+    }
+
+
+def _response_succeeded(response: dict[str, Any]) -> bool:
+    header = response.get("header") if isinstance(response, dict) else None
+    return bool(
+        isinstance(header, dict)
+        and str(header.get("status")) == "0"
+        and str(header.get("desc") or "").lower() == "success"
+        and not (header.get("failures") or [])
+    )
+
+
+def _raise_api_failure(response: dict[str, Any]) -> None:
+    codes = _failure_codes(response)
+    if codes & {"894062", "894063", "894064"}:
+        raise BaiduReportApiError(
+            "百度 API 授权已失效，需要重新授权",
+            category="reauthorization_required",
+            reauthorization_required=True,
+        )
+    if codes & {"89405", "89406", "89407", "894061"}:
+        raise BaiduReportApiError("百度 API 授权校验失败", category="authorization_error")
+    raise BaiduReportApiError("百度 API 服务返回失败", category="api_error")
+
+
+def _safe_token_metadata(metadata: Any, api_profile: str) -> dict[str, Any]:
+    source = metadata if isinstance(metadata, dict) else {}
+    return {
+        "api_profile": str(source.get("api_profile") or api_profile),
+        "token_refresh": str(source.get("token_refresh") or "unknown"),
+        "expires_time": source.get("expires_time"),
+    }
+
+
+def _write_attempt_report(
+    root: Path,
+    *,
+    config: dict[str, Any],
+    selected_date: str,
+    period: str | None,
+    category: str,
+    message: str,
+) -> None:
+    del message
+    safe_category = str(category or "api_error")
+    if safe_category not in ATTEMPT_ERROR_SUMMARIES:
+        safe_category = "api_error"
+    _write_json_atomic(
+        root / "reports" / "baidu_api_attempt_report.json",
+        {
+            "passed": False,
+            "project_id": config.get("project_id"),
+            "project_name": config.get("project_name"),
+            "date": selected_date,
+            "period": period,
+            "source": "baidu_open_api",
+            "error_category": safe_category,
+            "errors": [ATTEMPT_ERROR_SUMMARIES[safe_category]],
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+        },
+    )
+
+
+def _remaining_timeout(
+    configured_timeout: float,
+    deadline: float | None,
+    clock: Callable[[], float],
+) -> float:
+    timeout = float(configured_timeout)
+    if deadline is not None:
+        remaining = float(deadline) - float(clock())
+        if remaining <= 0:
+            raise BaiduReportApiError("百度 API 自修复预算已用尽", category="network_error")
+        timeout = min(timeout, remaining)
+    if timeout <= 0:
+        raise BaiduReportApiError("百度 API 请求超时配置无效", category="configuration_error")
+    return timeout
+
+
+def _fetch_baidu_api_production(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    *,
+    selected_date: str,
+    period: str | None,
+    output_path: Path,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]],
+    commit_standard_report: bool,
+    commit_attempt_report: bool,
+    transport: Callable[[str, dict[str, Any], int], dict[str, Any]],
+    daily: bool,
+    task_context: dict[str, Any] | None,
+    deadline: float | None,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    started_at = datetime.now().isoformat(timespec="seconds")
+    context = task_context if isinstance(task_context, dict) else {}
+    context.setdefault("refresh_attempted", False)
+    context.setdefault("report_request_count", 0)
+    actions = context.setdefault("self_heal_actions", [])
+    if not isinstance(actions, list):
+        actions = []
+        context["self_heal_actions"] = actions
+
+    def add_action(action: str) -> None:
+        if action not in actions:
+            actions.append(action)
+
+    def provide_token(api_profile: str, *, force_refresh: bool) -> tuple[str, dict[str, Any]]:
+        if force_refresh:
+            if context.get("refresh_attempted"):
+                raise BaiduReportApiError(
+                    "本次任务已刷新过百度授权令牌，授权仍不可用",
+                    category="authorization_error",
+                )
+            context["refresh_attempted"] = True
+            add_action("token_refresh")
+        timeout = _remaining_timeout(
+            float(config.get("baidu", {}).get("api_timeout_seconds", 30)),
+            deadline,
+            clock,
+        )
+        try:
+            token_value, metadata = token_provider(
+                config,
+                root,
+                api_profile,
+                force_refresh=force_refresh,
+                timeout_seconds=timeout,
+                clock=clock,
+            )
+        except BaiduTokenError as exc:
+            raise BaiduReportApiError(
+                str(exc),
+                category=exc.category,
+                reauthorization_required=exc.reauthorization_required,
+            ) from exc
+        if str((metadata or {}).get("token_refresh") or "") == "refreshed":
+            context["refresh_attempted"] = True
+            add_action("token_refresh")
+        return token_value, metadata
+
+    def request_report(payload: dict[str, Any]) -> dict[str, Any]:
+        timeout = _remaining_timeout(
+            float(config.get("baidu", {}).get("api_timeout_seconds", 30)),
+            deadline,
+            clock,
+        )
+        context["report_request_count"] = int(context.get("report_request_count") or 0) + 1
+        return transport(REPORT_API_URL, payload, timeout)
+
+    try:
+        date.fromisoformat(selected_date)
+        username, api_profile, _secrets = _load_api_identity(root, config)
+        user_ids, account_by_id = _account_user_ids(config)
+        token, token_metadata = provide_token(api_profile, force_refresh=False)
+
+        payload = _build_payload(username, token, user_ids, selected_date)
+        response = request_report(payload)
+        if "894061" in _failure_codes(response):
+            token, token_metadata = provide_token(api_profile, force_refresh=True)
+            payload = _build_payload(username, token, user_ids, selected_date)
+            response = request_report(payload)
+        if not _response_succeeded(response):
+            _raise_api_failure(response)
+
+        accounts, diagnostics, errors = _parse_api_response(
+            response,
+            config=config,
+            account_by_id=account_by_id,
+            expected_date=selected_date,
+        )
+        if errors:
+            raise BaiduReportApiError("；".join(errors), category="integrity_error")
+        report: dict[str, Any] = {
+            "project_id": config.get("project_id"),
+            "project_name": config.get("project_name"),
+            "date": selected_date,
+            "source": "baidu_open_api",
+            "accounts": accounts,
+            "unknown_accounts": [],
+            "exceptions": [],
+            "errors": [],
+            "diagnostics": {
+                **diagnostics,
+                "token": _safe_token_metadata(token_metadata, api_profile),
+                "api_request_count": int(context.get("report_request_count") or 0),
+                "self_heal_actions": list(actions),
+            },
+            "self_check": {
+                "passed": True,
+                "wrote_excel": False,
+                "production_output_replaced": bool(commit_standard_report),
+            },
+            "started_at": started_at,
+            "finished_at": datetime.now().isoformat(timespec="seconds"),
+        }
+        if daily:
+            report["target_date"] = selected_date
+        else:
+            report["period"] = period or "15点"
+        if commit_standard_report:
+            _write_json_atomic(output_path, report)
+        logger.info("百度 API 数据读取完成：%s；账户数：%s", selected_date, len(accounts))
+        return report
+    except BaiduReportApiError as exc:
+        if commit_attempt_report:
+            _write_attempt_report(
+                root,
+                config=config,
+                selected_date=selected_date,
+                period=period,
+                category=exc.category,
+                message=str(exc),
+            )
+        raise
+    except Exception as exc:
+        error = BaiduReportApiError("百度 API 数据读取异常", category="api_error")
+        if commit_attempt_report:
+            _write_attempt_report(
+                root,
+                config=config,
+                selected_date=selected_date,
+                period=period,
+                category=error.category,
+                message=str(error),
+            )
+        raise error from exc
+
+
+def fetch_baidu_api_hourly(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    period: str | None = None,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token,
+    commit_standard_report: bool = True,
+    transport: Callable[[str, dict[str, Any], int], dict[str, Any]] = _post_json,
+    task_context: dict[str, Any] | None = None,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    target_date: str | None = None,
+    commit_attempt_report: bool = True,
+) -> dict[str, Any]:
+    output_path = _resolve_path(root, config.get("baidu", {}).get("output_path", "reports/baidu_account_data.json"))
+    return _fetch_baidu_api_production(
+        config,
+        root,
+        logger,
+        selected_date=target_date or date.today().isoformat(),
+        period=period,
+        output_path=output_path,
+        token_provider=token_provider,
+        commit_standard_report=commit_standard_report,
+        commit_attempt_report=commit_attempt_report,
+        transport=transport,
+        daily=False,
+        task_context=task_context,
+        deadline=deadline,
+        clock=clock,
+    )
+
+
+def fetch_baidu_api_daily(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token,
+    commit_standard_report: bool = True,
+    transport: Callable[[str, dict[str, Any], int], dict[str, Any]] = _post_json,
+    task_context: dict[str, Any] | None = None,
+    deadline: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    commit_attempt_report: bool = True,
+) -> dict[str, Any]:
+    selected_date = target_date or (date.today().fromordinal(date.today().toordinal() - 1).isoformat())
+    output_path = _resolve_path(root, config.get("baidu", {}).get("daily_output_path", "reports/baidu_daily_data.json"))
+    return _fetch_baidu_api_production(
+        config,
+        root,
+        logger,
+        selected_date=selected_date,
+        period=None,
+        output_path=output_path,
+        token_provider=token_provider,
+        commit_standard_report=commit_standard_report,
+        commit_attempt_report=commit_attempt_report,
+        transport=transport,
+        daily=True,
+        task_context=task_context,
+        deadline=deadline,
+        clock=clock,
+    )
 
 
 def fetch_baidu_api_probe(

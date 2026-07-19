@@ -153,6 +153,55 @@ def test_restore_sheet_filter_protection_metadata_restores_original_auto_filter(
     assert load_workbook(excel_path)["时段数据"].auto_filter.ref == "A3:XDP1464"
 
 
+def test_restore_sheet_filter_protection_metadata_restores_all_sheets_when_unspecified(tmp_path):
+    from openpyxl import Workbook, load_workbook
+
+    class Logger:
+        def info(self, *args, **kwargs):
+            pass
+
+        def warning(self, *args, **kwargs):
+            pass
+
+    excel_path = tmp_path / "current.xlsx"
+    backup_path = tmp_path / "backup.xlsx"
+
+    wb = Workbook()
+    sheet_filters = {
+        "时段数据": "A3:XDP1464",
+        "百度": "A2:A370",
+        "大夜数据": "A2:A370",
+    }
+    wb.active.title = "时段数据"
+    wb.create_sheet("百度")
+    wb.create_sheet("大夜数据")
+    for sheet_name, auto_filter_ref in sheet_filters.items():
+        ws = wb[sheet_name]
+        ws["A1"] = sheet_name
+        ws.auto_filter.ref = auto_filter_ref
+    wb.save(backup_path)
+
+    for ws in wb.worksheets:
+        ws.auto_filter.ref = None
+    wb.save(excel_path)
+    wb.close()
+
+    restored = _restore_sheet_filter_protection_metadata(
+        excel_path,
+        backup_path,
+        None,
+        Logger(),
+    )
+
+    assert restored is True
+    restored_wb = load_workbook(excel_path)
+    assert {
+        sheet_name: restored_wb[sheet_name].auto_filter.ref
+        for sheet_name in sheet_filters
+    } == sheet_filters
+    restored_wb.close()
+
+
 def test_read_back_values_uses_read_only_workbook(tmp_path, monkeypatch):
     from openpyxl import Workbook
 
@@ -405,6 +454,177 @@ def test_runtime_config_uses_current_project_accounts_not_kunming_defaults(tmp_p
     assert runtime["kst"]["promotion_id_accounts"] == {"9001": "项目账户1", "9002": "项目账户2", "9003": "项目账户3"}
     assert set(runtime["accounts"]) == {"项目账户1", "项目账户2", "项目账户3"}
     assert "银康01" not in runtime["accounts"]
+
+
+def test_global_data_source_preference_defaults_to_api_and_persists(tmp_path):
+    from modules.project_config import get_data_source_preference, set_data_source_preference
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "app_config.json").write_text(
+        json.dumps({
+            "default_project_id": "demo",
+            "projects_dir": "configs/projects",
+            "secrets_file": "secrets/secrets.json",
+        }),
+        encoding="utf-8",
+    )
+
+    assert get_data_source_preference(tmp_path) == "api"
+    assert set_data_source_preference(tmp_path, "browser") == "browser"
+    saved = json.loads((config_dir / "app_config.json").read_text("utf-8"))
+    assert saved["baidu_data_source_preference"] == "browser"
+    assert saved["default_project_id"] == "demo"
+
+
+def test_runtime_config_uses_global_preference_without_destroying_project_mode():
+    from modules.project_config import build_runtime_config_from_project
+
+    project = {
+        "project_id": "demo",
+        "project_name": "demo",
+        "excel": {"path": "target.xlsx", "hourly_sheet": "hourly", "daily_sheet": "daily", "engine": "openpyxl"},
+        "kst": {"export_dir": "exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+        "baidu": {"credential_profile": "demo", "data_source_mode": "api_shadow"},
+        "accounts": [],
+        "hourly": {"periods": []},
+        "daily": {},
+        "_app_config": {
+            "secrets_file": "secrets/secrets.json",
+            "baidu_data_source_preference": "browser",
+        },
+    }
+
+    runtime = build_runtime_config_from_project(project, {})
+
+    assert runtime["baidu"]["data_source_preference"] == "browser"
+    assert runtime["baidu"]["configured_data_source_mode"] == "api_shadow"
+    assert runtime["baidu"]["data_source_mode"] == "browser"
+
+
+@pytest.mark.parametrize(
+    ("configured_mode", "preference", "expected_mode"),
+    [
+        ("browser", "api", "api_preferred"),
+        ("browser", "browser", "browser"),
+        ("api_shadow", "api", "api_preferred"),
+        ("api_shadow", "browser", "browser"),
+        ("api_preferred", "api", "api_preferred"),
+        ("api_preferred", "browser", "browser"),
+    ],
+)
+def test_runtime_config_global_preference_overrides_project_mode(
+    configured_mode, preference, expected_mode
+):
+    from modules.project_config import build_runtime_config_from_project
+
+    project = {
+        "project_id": "demo",
+        "project_name": "demo",
+        "excel": {"path": "target.xlsx", "hourly_sheet": "hourly", "daily_sheet": "daily", "engine": "openpyxl"},
+        "kst": {"export_dir": "exports", "auto_pick_latest": True, "max_file_age_hours": 2},
+        "baidu": {"credential_profile": "demo", "data_source_mode": configured_mode},
+        "accounts": [],
+        "hourly": {"periods": []},
+        "daily": {},
+        "_app_config": {"baidu_data_source_preference": preference},
+    }
+
+    runtime = build_runtime_config_from_project(project, {})
+
+    assert runtime["baidu"]["configured_data_source_mode"] == configured_mode
+    assert runtime["baidu"]["data_source_preference"] == preference
+    assert runtime["baidu"]["data_source_mode"] == expected_mode
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("api", "api"),
+        ("browser", "browser"),
+        (" API ", "api"),
+        ("BROWSER", "browser"),
+        (None, "api"),
+        ("", "api"),
+        ("   ", "api"),
+        ("unsupported", "api"),
+    ],
+)
+def test_normalize_data_source_preference_handles_valid_and_invalid_values(value, expected):
+    from modules.project_config import normalize_data_source_preference
+
+    assert normalize_data_source_preference(value) == expected
+
+
+def test_load_app_config_warns_and_defaults_for_invalid_data_source_preference(tmp_path):
+    from modules.project_config import load_app_config
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "app_config.json").write_text(
+        json.dumps({
+            "default_project_id": "demo",
+            "projects_dir": "configs/projects",
+            "secrets_file": "secrets/secrets.json",
+            "baidu_data_source_preference": "unsupported",
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.warns(RuntimeWarning, match="baidu_data_source_preference"):
+        config = load_app_config(tmp_path)
+
+    assert config["baidu_data_source_preference"] == "api"
+
+
+def test_load_app_config_defaults_missing_data_source_preference_without_warning(tmp_path):
+    import warnings
+    from modules.project_config import load_app_config
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "app_config.json").write_text(
+        json.dumps({
+            "default_project_id": "demo",
+            "projects_dir": "configs/projects",
+            "secrets_file": "secrets/secrets.json",
+        }),
+        encoding="utf-8",
+    )
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        config = load_app_config(tmp_path)
+
+    assert caught == []
+    assert config["baidu_data_source_preference"] == "api"
+
+
+def test_set_data_source_preference_preserves_original_config_when_atomic_replace_fails(tmp_path, monkeypatch):
+    import os
+    import modules.project_config as project_config
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    config_path = config_dir / "app_config.json"
+    original = {
+        "default_project_id": "demo",
+        "projects_dir": "configs/projects",
+        "secrets_file": "secrets/secrets.json",
+        "desktop_pet": "hidden",
+    }
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+
+    def fail_replace(*_args):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        project_config.set_data_source_preference(tmp_path, "browser")
+
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+    assert not list(config_dir.glob(".app_config.json.*.tmp"))
 
 
 def test_menu_runtime_config_converts_project_accounts():
@@ -2937,14 +3157,101 @@ def test_run_pipeline_stops_on_failed_baidu_step(tmp_path):
     assert (tmp_path / "reports" / "final_run_report.json").exists()
 
 
-def test_run_pipeline_defaults_to_baidu_auto_fetcher():
-    signature = inspect.signature(run_half_auto_pipeline)
+def test_pipeline_defaults_to_resilient_baidu_fetchers():
+    from modules.baidu_data_source import fetch_baidu_resilient_daily, fetch_baidu_resilient_hourly
 
-    assert signature.parameters["fetch_baidu_func"].default is fetch_baidu_auto
+    hourly_signature = inspect.signature(run_half_auto_pipeline)
+    daily_signature = inspect.signature(run_daily_pipeline)
+
+    assert hourly_signature.parameters["fetch_baidu_func"].default is fetch_baidu_resilient_hourly
+    assert daily_signature.parameters["fetch_baidu_func"].default is fetch_baidu_resilient_daily
+
+
+def test_task_stop_gate_keeps_the_first_atomic_decision(tmp_path):
+    from modules.task_stop_gate import (
+        claim_excel_write,
+        pipeline_exit_code,
+        read_task_stop_decision,
+        request_task_stop,
+    )
+
+    stop_first = tmp_path / "stop-first.gate"
+    assert request_task_stop(stop_first) is True
+    assert claim_excel_write(stop_first) is False
+    assert read_task_stop_decision(stop_first) == "cancel"
+
+    excel_first = tmp_path / "excel-first.gate"
+    assert claim_excel_write(excel_first) is True
+    assert request_task_stop(excel_first) is False
+    assert read_task_stop_decision(excel_first) == "excel"
+    assert pipeline_exit_code({"passed": False, "cancelled": True}) == 130
+    assert pipeline_exit_code({"passed": False, "cancelled": False}) == 1
+    assert pipeline_exit_code({"passed": True, "cancelled": False}) == 0
+
+
+@pytest.mark.parametrize("task", ["hourly", "daily"])
+def test_run_pipeline_honors_stop_request_before_excel(tmp_path, monkeypatch, task):
+    import logging
+
+    from modules.task_stop_gate import STOP_GATE_ENV, request_task_stop
+
+    gate_path = tmp_path / "reports" / ".test-stop.gate"
+    monkeypatch.setenv(STOP_GATE_ENV, str(gate_path))
+    export_file = tmp_path / "kst.xlsx"
+    export_file.write_text("placeholder", encoding="utf-8")
+    write_calls = []
+
+    def ok_baidu(**_kwargs):
+        return {"date": "2026-07-19", "period": "15点", "accounts": {}, "errors": []}
+
+    def ok_parse(*_args, **_kwargs):
+        return {"parse_report": {"passed": True, "errors": []}, "outputs": {}}
+
+    def request_stop_during_merge(**_kwargs):
+        assert request_task_stop(gate_path) is True
+        return {
+            "merged": {"date": "2026-07-19", "period": "15点"},
+            "validate_report": {"passed": True, "errors": []},
+            "outputs": {},
+        }
+
+    def forbidden_write(**_kwargs):
+        write_calls.append(True)
+        raise AssertionError("停止请求生效后不应进入 Excel 写入")
+
+    common = {
+        "config": {"project_id": "demo", "project_name": "演示项目", "excel_path": "target.xlsx"},
+        "root": tmp_path,
+        "logger": logging.getLogger(f"safe-stop-{task}"),
+        "kst_file": export_file,
+        "fetch_baidu_func": ok_baidu,
+        "parse_kst_func": ok_parse,
+        "merge_func": request_stop_during_merge,
+        "write_func": forbidden_write,
+    }
+    if task == "hourly":
+        report = run_half_auto_pipeline(period="15点", assume_yes=True, **common)
+    else:
+        report = run_daily_pipeline(target_date="2026-07-19", **common)
+
+    assert report["passed"] is False
+    assert report["cancelled"] is True
+    assert report["failed_step"] == "cancelled-before-excel"
+    assert write_calls == []
 
 
 def test_run_pipeline_reports_success_summary(tmp_path):
-    import logging
+    class Logger:
+        def __init__(self):
+            self.messages = []
+
+        def info(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+        def error(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+    logger = Logger()
 
     kst_file = tmp_path / "kst.xlsx"
     kst_file.write_text("placeholder", encoding="utf-8")
@@ -2960,6 +3267,10 @@ def test_run_pipeline_reports_success_summary(tmp_path):
                 "银康银屑02": {"展现": 2, "点击": 2, "消费": 2.0},
                 "银康03": {"展现": 3, "点击": 3, "消费": 3.0},
             },
+            "data_source": "browser_fallback",
+            "api_attempts": 2,
+            "fallback_reason": "network_error",
+            "self_heal_actions": ["network_retry"],
             "errors": [],
         }
 
@@ -2997,7 +3308,7 @@ def test_run_pipeline_reports_success_summary(tmp_path):
     report = run_half_auto_pipeline(
         config={"project_id": "demo", "project_name": "演示项目", "excel_path": str(excel_file)},
         root=tmp_path,
-        logger=logging.getLogger("test"),
+        logger=logger,
         period="15点",
         kst_file=kst_file,
         assume_yes=True,
@@ -3015,6 +3326,11 @@ def test_run_pipeline_reports_success_summary(tmp_path):
     assert report["excel_path"] == str(excel_file)
     assert report["kst_export_file"] == str(kst_file)
     assert report["baidu_source_ok"] is True
+    assert report["data_source"] == "browser_fallback"
+    assert report["api_attempts"] == 2
+    assert report["fallback_reason"] == "network_error"
+    assert report["self_heal_actions"] == ["network_retry"]
+    assert "[实际来源] 百度数据：浏览器降级" in logger.messages
     assert "成功" in report["summary_text"]
     assert report["target_sheet"] == "时段数据"
     assert report["kst_export"]["file_name"] == "kst.xlsx"
@@ -3494,6 +3810,206 @@ def _prepare_daily_preflight_files(tmp_path, credentials: dict) -> dict:
     return config
 
 
+def test_preflight_api_preference_skips_chrome_start(tmp_path, monkeypatch):
+    import modules.preflight as preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {"profile_a": {"username": "test-user", "password": "test-password"}},
+    )
+    config["baidu"]["data_source_preference"] = "api"
+    called = []
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+
+    def forbidden(*args, **kwargs):
+        called.append(True)
+        raise AssertionError("A 模式不应提前启动 Chrome")
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        quick=True,
+        chrome_ready_func=forbidden,
+    )
+
+    assert called == []
+    assert report["passed"] is True
+    assert any(item.get("skipped") and "API" in item["message"] for item in report["checks"])
+    assert any(item["passed"] and "浏览器降级" in item["message"] for item in report["checks"])
+    assert report["api_profiles"]["passed"] is False
+
+
+def test_preflight_browser_preference_checks_chrome(tmp_path):
+    from modules.preflight import run_preflight
+
+    config = _prepare_daily_preflight_files(
+        tmp_path,
+        {"profile_a": {"username": "test-user", "password": "test-password"}},
+    )
+    config["baidu"]["data_source_preference"] = "browser"
+    called = []
+
+    def ready(*args, **kwargs):
+        called.append(True)
+        return {"ready": True, "started_new_chrome": False}
+
+    run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        quick=True,
+        chrome_ready_func=ready,
+    )
+
+    assert called == [True]
+
+
+def _write_api_profile_test_secrets(tmp_path, api_profiles: dict, browser_profiles: dict | None = None) -> None:
+    secrets_dir = tmp_path / "secrets"
+    secrets_dir.mkdir()
+    (secrets_dir / "secrets.json").write_text(
+        json.dumps({"baidu": browser_profiles or {}, "baidu_api": api_profiles}),
+        encoding="utf-8",
+    )
+
+
+def test_check_baidu_api_profiles_supports_single_source(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {"source_a": {"access_token": "test-token-a", "refresh_token": "test-refresh-a"}},
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {"api_profile": "source_a"},
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is True
+    assert report["required_profiles"] == ["source_a"]
+    assert report["missing_source_mappings"] == []
+    assert "test-token-a" not in json.dumps(report)
+    assert "test-refresh-a" not in json.dumps(report)
+
+
+def test_check_baidu_api_profiles_supports_multi_source(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {
+            "source_a": {"access_token": "test-token-a", "refresh_token": "test-refresh-a"},
+            "source_b": {"access_token": "test-token-b", "refresh_token": "test-refresh-b"},
+        },
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu_sources": [
+            {"source_id": "a", "api_profile": "source_a"},
+            {"source_id": "b", "api_profile": "source_b"},
+        ],
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is True
+    assert report["required_profiles"] == ["source_a", "source_b"]
+    assert report["missing_source_mappings"] == []
+    assert "test-token-a" not in json.dumps(report)
+    assert "test-refresh-b" not in json.dumps(report)
+
+
+def test_check_baidu_api_profiles_fails_for_multi_source_missing_mapping(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {"source_b": {"access_token": "test-token-b", "refresh_token": "test-refresh-b"}},
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu_sources": [
+            {"source_id": "a", "source_name": "来源 A"},
+            {"source_id": "b", "source_name": "来源 B", "api_profile": "source_b"},
+        ],
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is False
+    assert report["missing_source_mappings"] == [{"source_id": "a", "source_name": "来源 A"}]
+    assert report["required_profiles"] == ["source_b"]
+    assert "test-token-b" not in json.dumps(report)
+
+
+def test_check_baidu_api_profiles_fails_for_missing_or_empty_tokens(tmp_path):
+    from modules.preflight import check_baidu_api_profiles
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {
+            "empty_access": {"access_token": "", "refresh_token": "test-refresh"},
+            "empty_refresh": {"access_token": "test-token", "refresh_token": ""},
+        },
+    )
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu_sources": [
+            {"source_id": "missing", "api_profile": "missing_profile"},
+            {"source_id": "access", "api_profile": "empty_access"},
+            {"source_id": "refresh", "api_profile": "empty_refresh"},
+        ],
+    }
+
+    report = check_baidu_api_profiles(tmp_path, config)
+
+    assert report["passed"] is False
+    assert [item["exists"] for item in report["profiles"]] == [False, True, True]
+    assert report["profiles"][1]["access_token_nonempty"] is False
+    assert report["profiles"][2]["refresh_token_nonempty"] is False
+    assert "test-token" not in json.dumps(report)
+    assert "test-refresh" not in json.dumps(report)
+
+
+@pytest.mark.parametrize(
+    "browser_profiles",
+    [{}, {"profile_a": {"username": "", "password": "test-password"}}],
+)
+def test_preflight_api_preference_requires_browser_credentials_for_fallback(tmp_path, monkeypatch, browser_profiles):
+    import modules.preflight as preflight
+
+    _write_api_profile_test_secrets(
+        tmp_path,
+        {"source_a": {"access_token": "test-token", "refresh_token": "test-refresh"}},
+        browser_profiles,
+    )
+    (tmp_path / "main.py").write_text("", encoding="utf-8")
+    (tmp_path / "kst_exports").mkdir()
+    excel_path = tmp_path / "daily.xlsx"
+    excel_path.write_text("", encoding="utf-8")
+    config = _baidu_credential_test_config("profile_a")
+    config["excel_path"] = str(excel_path)
+    config["kst"] = {"export_dir": "kst_exports"}
+    config["baidu"]["data_source_preference"] = "api"
+    config["baidu"]["api_profile"] = "source_a"
+    monkeypatch.setattr(preflight, "validate_project_config", lambda project: [])
+
+    report = preflight.run_preflight(
+        tmp_path,
+        {"project_id": "demo", "project_name": "演示项目"},
+        config,
+        quick=True,
+        chrome_ready_func=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("不应检查 Chrome")),
+    )
+
+    assert report["api_profiles"]["passed"] is True
+    assert report["credentials"]["passed"] is False
+    assert report["passed"] is False
+
+
 def test_daily_preflight_selects_daily_sheet_check_and_hides_credentials(tmp_path, monkeypatch):
     import modules.preflight as preflight
 
@@ -3722,6 +4238,27 @@ def test_cli_run_daily_fails_before_baidu_pipeline_when_credential_precheck_fail
 
     assert result == 1
     assert called == []
+
+
+@pytest.mark.parametrize("mode", ["run", "run-daily"])
+def test_cli_report_run_returns_dedicated_cancelled_exit_code(tmp_path, monkeypatch, mode):
+    import main as cli_main
+
+    monkeypatch.setattr(cli_main, "ROOT", tmp_path)
+    monkeypatch.setattr(cli_main, "setup_logger", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(cli_main, "load_config", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli_main, "get_current_project", lambda _root: {"project_id": "demo"})
+    monkeypatch.setattr(cli_main, "build_runtime_config_from_project", lambda *_args: {})
+    monkeypatch.setattr(cli_main, "check_baidu_credentials", lambda *_args: {"passed": True})
+    cancelled_report = {"passed": False, "cancelled": True, "failed_step": "cancelled-before-excel"}
+    monkeypatch.setattr(cli_main, "run_half_auto_pipeline", lambda **_kwargs: cancelled_report)
+    monkeypatch.setattr(cli_main, "run_daily_pipeline", lambda **_kwargs: cancelled_report)
+    argv = ["main.py", "--mode", mode, "--yes"]
+    if mode == "run":
+        argv.extend(["--period", "15点"])
+    monkeypatch.setattr("sys.argv", argv)
+
+    assert cli_main.main() == 130
 
 
 # ── Chrome 调试端口自动启动 ──
@@ -4059,6 +4596,89 @@ def test_hermes_daily_sop_documents_preflight_password_and_write_boundaries():
     assert "不索要或输出密码" in content
     assert "不改无关 sheet、公式区、汇总区或截图区" in content
     assert "networkidle" in content
+
+
+def test_documentation_api_mode_uses_global_preference_and_current_product_name():
+    root = Path(__file__).resolve().parents[1]
+    documents = {
+        "AGENTS.md": (root / "AGENTS.md").read_text(encoding="utf-8"),
+        "README.md": (root / "README.md").read_text(encoding="utf-8"),
+        "xia_sidao使用说明.md": (root / "xia_sidao使用说明.md").read_text(encoding="utf-8"),
+        "hermes_hourly_sop.md": (root / "docs" / "hermes_hourly_sop.md").read_text(encoding="utf-8"),
+        "hermes_daily_sop.md": (root / "docs" / "hermes_daily_sop.md").read_text(encoding="utf-8"),
+    }
+
+    for name, content in documents.items():
+        assert "蚁之力 · 竞价数据自动化" in content, f"{name} 缺少当前产品名"
+        assert "baidu_data_source_preference" in content, f"{name} 缺少应用级偏好键"
+        assert "A" in content and "API 优先" in content, f"{name} 缺少 A 模式说明"
+        assert "B" in content and "强制浏览器" in content, f"{name} 缺少 B 模式说明"
+
+
+def test_hermes_documentation_shares_global_api_mode_and_delays_chrome_fallback():
+    root = Path(__file__).resolve().parents[1]
+    hourly = (root / "docs" / "hermes_hourly_sop.md").read_text(encoding="utf-8")
+    daily = (root / "docs" / "hermes_daily_sop.md").read_text(encoding="utf-8")
+    xia = (root / "xia_sidao使用说明.md").read_text(encoding="utf-8")
+
+    assert "run_hermes_hourly.bat 11点" in hourly
+    assert "HERMES Hourly - fixed entry - 20260710" in hourly
+    assert "run_hermes_daily.bat" in daily
+    assert "HERMES Daily - fixed entry - 20260710" in daily
+    for content in (hourly, daily, xia):
+        assert "共享同一应用级偏好" in content
+        assert "API 模式的 preflight 不提前启动 Chrome" in content
+        assert "实际降级" in content and "延迟启动" in content
+        assert "普通 GUI" in content and "不得自动调用" in content
+
+
+def test_documentation_api_mode_requires_readiness_and_atomic_dual_source_fallback():
+    root = Path(__file__).resolve().parents[1]
+    paths = [
+        root / "AGENTS.md",
+        root / "README.md",
+        root / "xia_sidao使用说明.md",
+        root / "docs" / "hermes_hourly_sop.md",
+        root / "docs" / "hermes_daily_sop.md",
+    ]
+    documents = [path.read_text(encoding="utf-8") for path in paths]
+    combined = "\n".join(documents)
+
+    for content in documents:
+        assert "九个项目、十一个授权" in content
+        assert "test-baidu-api-readiness" in content
+        assert "不读写 Excel" in content
+        assert "Token" in content and "原子更新" in content
+        assert "备份" in content and "敏感文件" in content
+    assert "两路 API 全部成功后才合并" in combined
+    assert "任一路失败" in combined and "整项目降级" in combined
+    assert "禁止混合 API 与浏览器的部分数据" in combined
+    assert "多项目并行尚未投入生产" in combined
+
+    stale_phrases = [
+        "其余十个超管仍需逐个授权",
+        "昆明牛当前为 `api_shadow`",
+        "当前九个项目均保持 `browser`",
+        "双来源 API 合并及多项目并行尚未投入生产",
+        "双来源 API 尚未投入生产",
+    ]
+    for phrase in stale_phrases:
+        assert phrase not in combined
+
+
+def test_hermes_documentation_never_skips_dual_source_browser_fallback():
+    root = Path(__file__).resolve().parents[1]
+    documents = [
+        (root / "xia_sidao使用说明.md").read_text(encoding="utf-8"),
+        (root / "docs" / "hermes_hourly_sop.md").read_text(encoding="utf-8"),
+        (root / "docs" / "hermes_daily_sop.md").read_text(encoding="utf-8"),
+    ]
+
+    for content in documents:
+        assert "API 任一路失败先丢弃临时结果并整项目降级浏览器" in content
+        assert "仅 API 与浏览器均失败时停止，禁止写 Excel" in content
+        assert "任一来源失败时停止" not in content
+        assert "任一来源或稳定性校验失败时，不继续写 Excel" not in content
 
 
 # ── console_ui 新增测试 ──────────────────────────────────
@@ -5259,6 +5879,72 @@ def test_kunming_niu_accounts():
     assert runtime["baidu"]["api_profile"] == "kunming_niu_baidu"
 
 
+def test_data_source_mode_defaults_to_browser_and_validates_allowed_values():
+    from copy import deepcopy
+    from modules.project_config import build_runtime_config_from_project, load_project_config, validate_project_config
+
+    root = Path(__file__).resolve().parents[1]
+    project = load_project_config(root, "kunming_niu")
+    without_mode = deepcopy(project)
+    without_mode["baidu"].pop("data_source_mode", None)
+    runtime = build_runtime_config_from_project(without_mode, {})
+    assert runtime["baidu"]["configured_data_source_mode"] == "browser"
+    assert runtime["baidu"]["data_source_preference"] == "api"
+    assert runtime["baidu"]["data_source_mode"] == "api_preferred"
+
+    shadow = deepcopy(project)
+    shadow["baidu"]["data_source_mode"] = "api_shadow"
+    assert validate_project_config(shadow) == []
+    shadow_runtime = build_runtime_config_from_project(shadow, {})["baidu"]
+    assert shadow_runtime["configured_data_source_mode"] == "api_shadow"
+    assert shadow_runtime["data_source_mode"] == "api_preferred"
+
+    invalid = deepcopy(project)
+    invalid["baidu"]["data_source_mode"] = "fastest"
+    assert any("data_source_mode" in error for error in validate_project_config(invalid))
+
+
+def test_multi_source_project_allows_api_preferred_mode():
+    from copy import deepcopy
+    from modules.project_config import load_project_config, validate_project_config
+
+    root = Path(__file__).resolve().parents[1]
+    project = load_project_config(root, "shenyang_niu")
+    api_project = deepcopy(project)
+    api_project["baidu"]["data_source_mode"] = "api_preferred"
+
+    errors = validate_project_config(api_project)
+
+    assert not any("双来源项目" in error and "browser" in error for error in errors)
+
+
+def test_multi_source_project_requires_api_profile_per_source():
+    from copy import deepcopy
+    from modules.project_config import load_project_config, validate_project_config
+
+    root = Path(__file__).resolve().parents[1]
+    project = deepcopy(load_project_config(root, "shenyang_niu"))
+    project["baidu_sources"][1].pop("api_profile")
+
+    errors = validate_project_config(project)
+
+    assert any("baidu_sources[2].api_profile" in error for error in errors)
+
+
+def test_project_template_remains_browser_and_only_kunming_uses_api_shadow():
+    root = Path(__file__).resolve().parents[1]
+    template = json.loads((root / "configs" / "projects" / "project_template.json").read_text(encoding="utf-8"))
+    kunming = json.loads((root / "configs" / "projects" / "kunming_niu.json").read_text(encoding="utf-8"))
+
+    assert template["baidu"]["data_source_mode"] == "browser"
+    assert kunming["baidu"]["data_source_mode"] == "api_shadow"
+    for path in (root / "configs" / "projects").glob("*.json"):
+        if path.name in {"project_template.json", "kunming_niu.json"}:
+            continue
+        project = json.loads(path.read_text(encoding="utf-8"))
+        assert project["baidu"].get("data_source_mode", "browser") == "browser"
+
+
 def test_secrets_example_has_six_profiles():
     """secrets.example.json 包含含沈阳双来源在内的六个 profile，密码为空。"""
     root = Path(__file__).resolve().parents[1]
@@ -5276,6 +5962,95 @@ def test_secrets_example_has_six_profiles():
         assert baidu[profile]["username"] == ""
         assert baidu[profile]["password"] == ""
     assert data["baidu_api"]["daily_automation"]["access_token"] == ""
+
+
+def test_shenzhen_bai_has_real_account_mapping_and_example_credentials_profile():
+    root = Path(__file__).resolve().parents[1]
+    project = json.loads(
+        (root / "configs" / "projects" / "shenzhen_bai.json").read_text(encoding="utf-8")
+    )
+    accounts = project["accounts"]
+
+    assert project["excel"]["path"] == (
+        "D:\\Seafile\\【竞价】\\【❤深圳组】\\【2026】【深圳】竞价数据\\【深圳】2026竞价数据.xlsx"
+    )
+    assert [account["standard_name"] for account in accounts] == ["益尚8", "益尚66", "益尚888"]
+    assert [account["excel_name"] for account in accounts] == ["益尚8", "益尚66", "益尚888"]
+    assert [account["kst_ids"] for account in accounts] == [["5289605"], ["5401012"], ["28492104"]]
+    assert all("TODO_" not in json.dumps(account, ensure_ascii=False) for account in accounts)
+
+    example = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
+    assert example["baidu"]["shenzhen_bai_baidu"] == {"username": "", "password": ""}
+
+
+def test_nanjing_bai_has_real_account_mapping_and_example_credentials_profile():
+    root = Path(__file__).resolve().parents[1]
+    project = json.loads(
+        (root / "configs" / "projects" / "nanjing_bai.json").read_text(encoding="utf-8")
+    )
+    accounts = project["accounts"]
+
+    assert project["excel"]["path"] == (
+        "D:\\Seafile\\【竞价】\\【❤南京白】\\【2026年】【南京白】竞价数据\\【南京华厦bdf】2026竞价数据.xlsx"
+    )
+    expected_names = ["华厦04", "华厦05"]
+    assert [account["standard_name"] for account in accounts] == expected_names
+    assert [account["excel_name"] for account in accounts] == expected_names
+    assert [account["kst_ids"] for account in accounts] == [
+        ["65700427"],
+        ["65742504"],
+    ]
+    assert [account["baidu_names"] for account in accounts] == [["华厦B04"], ["华厦B05"]]
+    assert all("TODO_" not in json.dumps(account, ensure_ascii=False) for account in accounts)
+
+    example = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
+    assert example["baidu"]["nanjing_bai_baidu"] == {"username": "", "password": ""}
+
+
+def test_baidu_api_identity_prefers_oauth_master_name(tmp_path):
+    from modules.baidu_report_api import _load_api_identity
+
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {
+            "credential_profile": "nanjing_niu_baidu",
+            "api_profile": "nanjing_niu_baidu",
+        },
+    }
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu": {"nanjing_niu_baidu": {"username": "browser-login"}},
+        "baidu_api": {"nanjing_niu_baidu": {"master_name": "oauth-master"}},
+    }), encoding="utf-8")
+
+    username, api_profile, _secrets = _load_api_identity(tmp_path, config)
+
+    assert username == "oauth-master"
+    assert api_profile == "nanjing_niu_baidu"
+
+
+def test_baidu_api_identity_falls_back_to_browser_username_for_legacy_oauth_record(tmp_path):
+    from modules.baidu_report_api import _load_api_identity
+
+    config = {
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {
+            "credential_profile": "legacy_baidu",
+            "api_profile": "legacy_baidu",
+        },
+    }
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu": {"legacy_baidu": {"username": "legacy-manager"}},
+        "baidu_api": {"legacy_baidu": {}},
+    }), encoding="utf-8")
+
+    username, api_profile, _secrets = _load_api_identity(tmp_path, config)
+
+    assert username == "legacy-manager"
+    assert api_profile == "legacy_baidu"
 
 
 def test_baidu_api_probe_maps_ids_and_validates_summary(tmp_path):
@@ -5366,6 +6141,1221 @@ def test_baidu_api_probe_rejects_summary_mismatch(tmp_path):
     assert report["self_check"]["passed"] is False
 
 
+def _api_production_config(tmp_path):
+    config = _kunming_niu_runtime_config()
+    config.update({
+        "project_id": "kunming_niu",
+        "project_name": "昆明牛",
+        "credentials_path": "secrets/secrets.json",
+        "baidu": {
+            "credential_profile": "kunming_niu_baidu",
+            "api_profile": "kunming_niu_baidu",
+            "api_timeout_seconds": 30,
+        },
+    })
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu": {"kunming_niu_baidu": {"username": "manager", "password": "unused"}},
+        "baidu_api": {"kunming_niu_baidu": {"access_token": "unused.by.provider"}},
+    }, ensure_ascii=False), encoding="utf-8")
+    return config
+
+
+def _api_success_response(target_date, *, rows=None, summary=None):
+    rows = rows if rows is not None else [
+        {"date": target_date, "userId": 72828178, "userName": "银康01", "impression": 100, "click": 10, "cost": 50},
+        {"date": target_date, "userId": 72828179, "userName": "银康银屑02", "impression": 20, "click": 4, "cost": 8.25},
+        {"date": target_date, "userId": 81509165, "userName": "baidu-银康03", "impression": 12, "click": 2, "cost": 3.5},
+    ]
+    summary = summary if summary is not None else {"impression": 132, "click": 16, "cost": 61.75}
+    return {
+        "header": {"status": 0, "desc": "success", "failures": []},
+        "body": {"data": [{"rowCount": len(rows), "totalRowCount": len(rows), "rows": rows, "summary": summary}]},
+    }
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_category"),
+    [(400, "api_error"), (401, "authorization_error"), (403, "authorization_error"), (500, "network_error"), (503, "network_error")],
+)
+def test_baidu_report_http_status_retry_categories(monkeypatch, status_code, expected_category):
+    import io
+    import urllib.error
+    import modules.baidu_report_api as report_api
+
+    def raise_http_error(_request, timeout):
+        assert timeout == 5
+        raise urllib.error.HTTPError(
+            report_api.REPORT_API_URL,
+            status_code,
+            "failure",
+            {},
+            io.BytesIO(b'{"message":"header.payload.signature"}'),
+        )
+
+    monkeypatch.setattr(report_api.urllib.request, "urlopen", raise_http_error)
+    with pytest.raises(report_api.BaiduReportApiError) as exc_info:
+        report_api._post_json(report_api.REPORT_API_URL, {}, 5)
+
+    assert exc_info.value.category == expected_category
+    assert "header.payload.signature" not in str(exc_info.value)
+
+
+def test_baidu_api_hourly_and_daily_write_compatible_standard_reports(tmp_path):
+    import logging
+    from datetime import date
+    from modules.baidu_report_api import fetch_baidu_api_daily, fetch_baidu_api_hourly
+
+    config = _api_production_config(tmp_path)
+    today = date.today().isoformat()
+    token_calls = []
+
+    def token_provider(_config, _root, profile, **kwargs):
+        token_calls.append((profile, kwargs.get("force_refresh", False)))
+        return "header.payload.signature", {
+            "api_profile": profile,
+            "token_refresh": "not_needed",
+            "expires_time": "2026-07-18 09:00:00",
+        }
+
+    def transport(_url, payload, _timeout):
+        target_date = payload["body"]["startDate"]
+        assert payload["body"]["timeUnit"] == "DAY"
+        return _api_success_response(target_date)
+
+    hourly = fetch_baidu_api_hourly(
+        config, tmp_path, logging.getLogger("api-hourly"), "15点",
+        token_provider=token_provider, transport=transport,
+    )
+    daily = fetch_baidu_api_daily(
+        config, tmp_path, logging.getLogger("api-daily"), "2026-07-16",
+        token_provider=token_provider, transport=transport,
+    )
+
+    assert hourly["source"] == "baidu_open_api"
+    assert hourly["date"] == today
+    assert hourly["period"] == "15点"
+    assert hourly["accounts"]["银康01"]["消费"] == 50.0
+    assert daily["source"] == "baidu_open_api"
+    assert daily["date"] == "2026-07-16"
+    assert daily["target_date"] == "2026-07-16"
+    assert json.loads((tmp_path / "reports" / "baidu_account_data.json").read_text("utf-8"))["accounts"] == hourly["accounts"]
+    assert json.loads((tmp_path / "reports" / "baidu_daily_data.json").read_text("utf-8"))["accounts"] == daily["accounts"]
+    assert token_calls == [("kunming_niu_baidu", False), ("kunming_niu_baidu", False)]
+
+
+def test_baidu_api_expired_access_token_forces_one_refresh_and_retries(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    token_calls = []
+    responses = [
+        {"header": {"status": 1, "desc": "failure", "failures": [{"code": 894061}]}},
+        _api_success_response("2026-07-16"),
+    ]
+
+    def token_provider(_config, _root, _profile, **kwargs):
+        forced = kwargs.get("force_refresh", False)
+        token_calls.append(forced)
+        return ("new.token.value" if forced else "old.token.value"), {
+            "api_profile": "kunming_niu_baidu", "token_refresh": "refreshed" if forced else "not_needed", "expires_time": "x"
+        }
+
+    report = fetch_baidu_api_daily(
+        config, tmp_path, logging.getLogger("api-refresh"), "2026-07-16",
+        token_provider=token_provider, transport=lambda *_args: responses.pop(0),
+    )
+
+    assert report["errors"] == []
+    assert token_calls == [False, True]
+
+
+@pytest.mark.parametrize("failure_code", [894062, 894063, 894064])
+def test_baidu_api_marks_revoked_authorization_for_reauthorization(tmp_path, failure_code):
+    import logging
+    from modules.baidu_report_api import BaiduReportApiError, fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    with pytest.raises(BaiduReportApiError) as exc_info:
+        fetch_baidu_api_daily(
+            config, tmp_path, logging.getLogger("api-reauth"), "2026-07-16",
+            token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+            transport=lambda *_args: {"header": {"status": 1, "desc": "failure", "failures": [{"code": failure_code}]}},
+        )
+    assert exc_info.value.category == "reauthorization_required"
+    assert exc_info.value.reauthorization_required is True
+
+
+@pytest.mark.parametrize("failure_code", [89405, 89406, 89407])
+def test_baidu_api_classifies_other_authorization_errors_without_token_leak(tmp_path, failure_code):
+    import logging
+    from modules.baidu_report_api import BaiduReportApiError, fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    with pytest.raises(BaiduReportApiError) as exc_info:
+        fetch_baidu_api_daily(
+            config, tmp_path, logging.getLogger("api-auth-error"), "2026-07-16",
+            token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+            transport=lambda *_args: {
+                "header": {
+                    "status": 1,
+                    "desc": "header.payload.signature",
+                    "failures": [{"code": failure_code}],
+                }
+            },
+        )
+    assert exc_info.value.category == "authorization_error"
+    assert exc_info.value.reauthorization_required is False
+    assert "header.payload.signature" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("case", ["date", "missing_date", "unknown", "duplicate", "negative", "nonfinite", "summary"])
+def test_baidu_api_integrity_failure_preserves_previous_standard_report(tmp_path, case):
+    import logging
+    from modules.baidu_report_api import BaiduReportApiError, fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    standard_path = tmp_path / "reports" / "baidu_daily_data.json"
+    standard_path.parent.mkdir(parents=True)
+    standard_path.write_bytes(b'{"previous":true}')
+    response = _api_success_response("2026-07-16")
+    rows = response["body"]["data"][0]["rows"]
+    if case == "date":
+        rows[0]["date"] = "2026-07-15"
+    elif case == "missing_date":
+        rows[0].pop("date")
+    elif case == "unknown":
+        rows[0]["userId"] = 99999999
+    elif case == "duplicate":
+        rows[1]["userId"] = rows[0]["userId"]
+    elif case == "negative":
+        rows[0]["cost"] = -50
+        response["body"]["data"][0]["summary"]["cost"] = -38.25
+    elif case == "nonfinite":
+        rows[0]["cost"] = float("nan")
+    elif case == "summary":
+        response["body"]["data"][0]["summary"]["cost"] = 99
+
+    with pytest.raises(BaiduReportApiError) as exc_info:
+        fetch_baidu_api_daily(
+            config, tmp_path, logging.getLogger("api-integrity"), "2026-07-16",
+            token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+            transport=lambda *_args: response,
+        )
+
+    assert exc_info.value.category == "integrity_error"
+    assert standard_path.read_bytes() == b'{"previous":true}'
+    attempt = json.loads((tmp_path / "reports" / "baidu_api_attempt_report.json").read_text("utf-8"))
+    assert attempt["passed"] is False
+    assert "header.payload.signature" not in json.dumps(attempt)
+
+
+def test_baidu_api_accepts_complete_all_zero_accounts(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    rows = [
+        {"date": "2026-07-16", "userId": user_id, "userName": name, "impression": 0, "click": 0, "cost": 0}
+        for user_id, name in ((72828178, "银康01"), (72828179, "银康银屑02"), (81509165, "银康03"))
+    ]
+    report = fetch_baidu_api_daily(
+        config, tmp_path, logging.getLogger("api-zero"), "2026-07-16",
+        token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+        transport=lambda *_args: _api_success_response(
+            "2026-07-16", rows=rows, summary={"impression": 0, "click": 0, "cost": 0}
+        ),
+    )
+    assert report["errors"] == []
+    assert all(account["消费"] == 0 for account in report["accounts"].values())
+
+
+def test_baidu_api_zero_fills_omitted_requested_account_after_summary_reconciliation(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    rows = [
+        {"date": "2026-07-16", "userId": 72828178, "userName": "银康01", "impression": 100, "click": 10, "cost": 50},
+        {"date": "2026-07-16", "userId": 72828179, "userName": "银康银屑02", "impression": 20, "click": 4, "cost": 8.25},
+    ]
+    report = fetch_baidu_api_daily(
+        config,
+        tmp_path,
+        logging.getLogger("api-zero-fill-partial"),
+        "2026-07-16",
+        token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+        transport=lambda *_args: _api_success_response(
+            "2026-07-16",
+            rows=rows,
+            summary={"impression": 120, "click": 14, "cost": 58.25},
+        ),
+        commit_standard_report=False,
+    )
+
+    assert set(report["accounts"]) == {"银康01", "银康银屑02", "银康03"}
+    assert report["accounts"]["银康03"] == {
+        "source_account": "银康03",
+        "source_user_id": 81509165,
+        "展现": 0,
+        "点击": 0,
+        "消费": 0.0,
+        "synthetic_zero": True,
+    }
+    assert report["diagnostics"]["zero_filled_accounts"] == ["银康03"]
+    assert report["diagnostics"]["zero_filled_count"] == 1
+    assert report["diagnostics"]["account_totals"] == {
+        "impression": 120,
+        "click": 14,
+        "cost": 58.25,
+    }
+
+
+def test_baidu_api_zero_fills_all_requested_accounts_when_rows_empty_and_summary_is_zero(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    report = fetch_baidu_api_daily(
+        config,
+        tmp_path,
+        logging.getLogger("api-zero-fill-empty"),
+        "2026-07-16",
+        token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+        transport=lambda *_args: _api_success_response(
+            "2026-07-16",
+            rows=[],
+            summary={"impression": 0, "click": 0, "cost": 0},
+        ),
+        commit_standard_report=False,
+    )
+
+    assert list(report["accounts"]) == ["银康01", "银康银屑02", "银康03"]
+    assert all(row["synthetic_zero"] is True for row in report["accounts"].values())
+    assert all(row["source_user_id"] in {72828178, 72828179, 81509165} for row in report["accounts"].values())
+    assert report["diagnostics"]["zero_filled_accounts"] == ["银康01", "银康银屑02", "银康03"]
+    assert report["diagnostics"]["zero_filled_count"] == 3
+
+
+@pytest.mark.parametrize(
+    ("summary", "expected_error"),
+    [
+        ({}, "未返回完整汇总指标"),
+        ({"impression": 121, "click": 14, "cost": 58.25}, "汇总校验失败"),
+    ],
+)
+def test_baidu_api_does_not_zero_fill_when_summary_is_missing_or_mismatched(tmp_path, summary, expected_error):
+    from modules.baidu_report_api import _account_user_ids, _parse_api_response
+
+    config = _api_production_config(tmp_path)
+    _user_ids, account_by_id = _account_user_ids(config)
+    rows = [
+        {"date": "2026-07-16", "userId": 72828178, "userName": "银康01", "impression": 100, "click": 10, "cost": 50},
+        {"date": "2026-07-16", "userId": 72828179, "userName": "银康银屑02", "impression": 20, "click": 4, "cost": 8.25},
+    ]
+
+    accounts, diagnostics, errors = _parse_api_response(
+        _api_success_response("2026-07-16", rows=rows, summary=summary),
+        config=config,
+        account_by_id=account_by_id,
+        expected_date="2026-07-16",
+    )
+
+    assert set(accounts) == {"银康01", "银康银屑02"}
+    assert not any(row.get("synthetic_zero") for row in accounts.values())
+    assert diagnostics["zero_filled_accounts"] == []
+    assert diagnostics["zero_filled_count"] == 0
+    assert any(expected_error in error for error in errors)
+
+
+@pytest.mark.parametrize("invalid_case", ["unknown", "duplicate", "number", "date"])
+def test_baidu_api_invalid_rows_never_trigger_zero_fill(tmp_path, invalid_case):
+    from modules.baidu_report_api import _account_user_ids, _parse_api_response
+
+    config = _api_production_config(tmp_path)
+    _user_ids, account_by_id = _account_user_ids(config)
+    rows = [
+        {"date": "2026-07-16", "userId": 72828178, "userName": "银康01", "impression": 100, "click": 10, "cost": 50},
+        {"date": "2026-07-16", "userId": 72828179, "userName": "银康银屑02", "impression": 20, "click": 4, "cost": 8.25},
+    ]
+    if invalid_case == "unknown":
+        rows[0]["userId"] = 99999999
+    elif invalid_case == "duplicate":
+        rows[1]["userId"] = rows[0]["userId"]
+    elif invalid_case == "number":
+        rows[0]["cost"] = "not-a-number"
+    else:
+        rows[0]["date"] = "2026-07-15"
+
+    accounts, diagnostics, errors = _parse_api_response(
+        _api_success_response(
+            "2026-07-16",
+            rows=rows,
+            summary={"impression": 120, "click": 14, "cost": 58.25},
+        ),
+        config=config,
+        account_by_id=account_by_id,
+        expected_date="2026-07-16",
+    )
+
+    assert errors
+    assert diagnostics["zero_filled_accounts"] == []
+    assert diagnostics["zero_filled_count"] == 0
+    assert not any(row.get("synthetic_zero") for row in accounts.values())
+
+
+def test_baidu_api_shadow_read_does_not_commit_standard_report(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    report = fetch_baidu_api_daily(
+        config, tmp_path, logging.getLogger("api-shadow"), "2026-07-16",
+        token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+        transport=lambda *_args: _api_success_response("2026-07-16"),
+        commit_standard_report=False,
+    )
+
+    assert report["errors"] == []
+    assert report["self_check"]["production_output_replaced"] is False
+    assert not (tmp_path / "reports" / "baidu_daily_data.json").exists()
+
+
+def _route_report(source="baidu_open_api", cost=10.0, errors=None):
+    return {
+        "date": "2026-07-16",
+        "period": "15点",
+        "source": source,
+        "accounts": {
+            "银康01": {"source_user_id": 72828178, "展现": 100, "点击": 10, "消费": cost},
+        },
+        "errors": list(errors or []),
+    }
+
+
+def _two_source_route_config():
+    def account(name, promotion_id):
+        return {
+            "standard_name": name,
+            "baidu_names": [name],
+            "excel_name": name,
+            "kst_ids": [promotion_id],
+            "kst_names": [name],
+        }
+
+    return {
+        "project_id": "two_source_demo",
+        "project_name": "双来源演示",
+        "baidu": {"data_source_mode": "api_preferred"},
+        "accounts": {"账户A": {}, "账户B": {}},
+        "baidu_sources": [
+            {
+                "source_id": "a",
+                "source_name": "来源A",
+                "credential_profile": "browser_a",
+                "api_profile": "api_a",
+                "accounts": [account("账户A", "1")],
+            },
+            {
+                "source_id": "b",
+                "source_name": "来源B",
+                "credential_profile": "browser_b",
+                "api_profile": "api_b",
+                "accounts": [account("账户B", "2")],
+            },
+        ],
+    }
+
+
+def _two_source_browser_report(errors=None):
+    return {
+        "date": "2026-07-17",
+        "period": "18点",
+        "source": "baidu_multi_source",
+        "accounts": {
+            "账户A": {"展现": 2, "点击": 2, "消费": 2.0},
+            "账户B": {"展现": 3, "点击": 3, "消费": 3.0},
+        },
+        "errors": list(errors or []),
+    }
+
+
+def test_source_runtime_config_copies_api_profile():
+    from modules.baidu_multi_source import build_source_runtime_config
+
+    runtime = build_source_runtime_config(
+        {"baidu": {}, "accounts": {}},
+        {
+            "source_id": "a",
+            "credential_profile": "browser_a",
+            "api_profile": "api_a",
+            "accounts": [{
+                "standard_name": "账户A",
+                "baidu_names": ["账户A"],
+                "excel_name": "账户A",
+                "kst_ids": ["1"],
+                "kst_names": ["账户A"],
+            }],
+        },
+    )
+
+    assert runtime["baidu"]["credential_profile"] == "browser_a"
+    assert runtime["baidu"]["api_profile"] == "api_a"
+
+
+def test_api_preferred_multi_source_commits_only_after_all_sources_pass(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    calls = []
+
+    def api_fetcher(*, config, commit_standard_report, deadline, **_kwargs):
+        source_id = config["baidu_source"]["source_id"]
+        calls.append((source_id, config["baidu"]["api_profile"], commit_standard_report, deadline))
+        account = next(iter(config["accounts"]))
+        return {
+            "date": "2026-07-17",
+            "period": "18点",
+            "accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}},
+            "errors": [],
+        }
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: pytest.fail("API 成功不应调用浏览器"),
+        clock=lambda: 10.0,
+        sleep=lambda _seconds: None,
+    )
+
+    assert calls == [
+        ("a", "api_a", False, 30.0),
+        ("b", "api_b", False, 30.0),
+    ]
+    assert result["data_source"] == "api"
+    standard = json.loads((tmp_path / "reports" / "baidu_account_data.json").read_text("utf-8"))
+    assert standard["data_source"] == "api"
+    assert standard["accounts"] == result["accounts"]
+
+
+def test_multi_source_api_uses_independent_refresh_contexts(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    contexts = {"a": [], "b": []}
+    refresh_counts = {"a": 0, "b": 0}
+
+    def api_fetcher(*, config, task_context, **_kwargs):
+        source_id = config["baidu_source"]["source_id"]
+        contexts[source_id].append(task_context)
+        if not task_context["refresh_attempted"]:
+            task_context["refresh_attempted"] = True
+            task_context["self_heal_actions"].append("token_refresh")
+            refresh_counts[source_id] += 1
+            raise BaiduReportApiError("retry after refresh", category="network_error")
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: pytest.fail("不应调用浏览器"),
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+    )
+
+    assert refresh_counts == {"a": 1, "b": 1}
+    assert len(contexts["a"]) == len(contexts["b"]) == 2
+    assert contexts["a"][0] is contexts["a"][1]
+    assert contexts["b"][0] is contexts["b"][1]
+    assert contexts["a"][0] is not contexts["b"][0]
+    assert result["api_attempts"] == 4
+    assert result["self_heal_actions"] == ["token_refresh", "network_retry"]
+
+
+def test_multi_source_api_shares_one_project_deadline(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    now = [0.0]
+    api_calls = []
+    browser_calls = []
+
+    def api_fetcher(*, config, deadline, **_kwargs):
+        api_calls.append((config["baidu_source"]["source_id"], deadline))
+        now[0] = 20.0
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: browser_calls.append(True) or _two_source_browser_report(),
+        clock=lambda: now[0],
+        sleep=lambda _seconds: None,
+    )
+
+    assert api_calls == [("a", 20.0)]
+    assert browser_calls == [True]
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "api_budget_exhausted"
+
+
+def test_multi_source_api_discards_last_source_success_after_deadline(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    now = [0.0]
+    api_calls = []
+    browser_calls = []
+
+    def api_fetcher(*, config, **_kwargs):
+        source_id = config["baidu_source"]["source_id"]
+        api_calls.append(source_id)
+        if source_id == "b":
+            now[0] = 20.1
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: browser_calls.append(True) or _two_source_browser_report(),
+        clock=lambda: now[0],
+        sleep=lambda _seconds: None,
+    )
+
+    assert api_calls == ["a", "b"]
+    assert browser_calls == [True]
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "api_budget_exhausted"
+
+
+def test_multi_source_api_rechecks_deadline_before_atomic_commit(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    clock_values = iter([0.0, 0.0, 0.0, 19.0, 21.0])
+    browser_calls = []
+
+    def api_fetcher(*, config, **_kwargs):
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: browser_calls.append(True) or _two_source_browser_report(),
+        clock=lambda: next(clock_values),
+        sleep=lambda _seconds: None,
+    )
+
+    assert browser_calls == [True]
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "api_budget_exhausted"
+
+
+def test_api_preferred_multi_source_failure_discards_partial_and_falls_back(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    standard = tmp_path / "reports" / "baidu_account_data.json"
+    standard.parent.mkdir()
+    standard.write_text('{"sentinel": true}', encoding="utf-8")
+    api_calls = []
+    browser_calls = []
+
+    def api_fetcher(*, config, commit_standard_report, **_kwargs):
+        source_id = config["baidu_source"]["source_id"]
+        api_calls.append((source_id, commit_standard_report))
+        if source_id == "b":
+            raise RuntimeError("source b failed")
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    def browser_fetcher(*, config, **_kwargs):
+        browser_calls.append([source["source_id"] for source in config["baidu_sources"]])
+        return _two_source_browser_report()
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=browser_fetcher,
+        sleep=lambda _seconds: None,
+    )
+
+    assert api_calls == [("a", False), ("b", False)]
+    assert browser_calls == [["a", "b"]]
+    assert result["data_source"] == "browser_fallback"
+    saved = json.loads(standard.read_text("utf-8"))
+    assert "sentinel" not in saved
+    assert saved["data_source"] == "browser_fallback"
+
+
+def test_multi_source_api_account_conflict_falls_back_without_api_commit(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    browser_calls = []
+
+    def api_fetcher(*, config, **_kwargs):
+        source_id = config["baidu_source"]["source_id"]
+        account = "账户A" if source_id == "b" else next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: browser_calls.append(True) or _two_source_browser_report(),
+        sleep=lambda _seconds: None,
+    )
+
+    assert browser_calls == [True]
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "integrity_error"
+    assert json.loads((tmp_path / "reports" / "baidu_account_data.json").read_text("utf-8"))["data_source"] == "browser_fallback"
+
+
+def test_multi_source_api_cost_total_anomaly_falls_back(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    browser_calls = []
+
+    def api_fetcher(*, config, **_kwargs):
+        source_id = config["baidu_source"]["source_id"]
+        account = next(iter(config["accounts"]))
+        accounts = {account: {"展现": 1, "点击": 1, "消费": 1.0}}
+        if source_id == "b":
+            accounts["未映射消费"] = {"展现": 1, "点击": 1, "消费": 5.0}
+        return {"accounts": accounts, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: browser_calls.append(True) or _two_source_browser_report(),
+        sleep=lambda _seconds: None,
+    )
+
+    assert browser_calls == [True]
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "integrity_error"
+
+
+def test_multi_source_api_and_browser_failure_returns_failed_without_replacing_standard(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    standard = tmp_path / "reports" / "baidu_account_data.json"
+    standard.parent.mkdir()
+    standard.write_text('{"sentinel": true}', encoding="utf-8")
+    browser_calls = []
+
+    def api_fetcher(*, config, **_kwargs):
+        if config["baidu_source"]["source_id"] == "b":
+            raise RuntimeError("source b failed")
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: browser_calls.append(True) or _two_source_browser_report(["browser failed"]),
+        sleep=lambda _seconds: None,
+    )
+
+    assert browser_calls == [True]
+    assert result["data_source"] == "failed"
+    assert result["errors"]
+    assert json.loads(standard.read_text("utf-8")) == {"sentinel": True}
+
+
+def test_api_preferred_multi_source_browser_side_effect_failure_preserves_hourly_canonical(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    canonical = tmp_path / "reports" / "baidu_account_data.json"
+    canonical.parent.mkdir()
+    canonical.write_text('{"sentinel": "hourly"}', encoding="utf-8")
+    staged_paths = []
+
+    def api_fetcher(*, config, **_kwargs):
+        if config["baidu_source"]["source_id"] == "b":
+            raise RuntimeError("source b failed")
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    def browser_fetcher(*, config, **_kwargs):
+        staged = Path(config["baidu"]["output_path"])
+        staged_paths.append(staged)
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text('{"errors": ["browser failed"]}', encoding="utf-8")
+        return _two_source_browser_report(["browser failed"])
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=browser_fetcher,
+        sleep=lambda _seconds: None,
+    )
+
+    assert result["data_source"] == "failed"
+    assert json.loads(canonical.read_text("utf-8")) == {"sentinel": "hourly"}
+    assert len(staged_paths) == 1
+    assert staged_paths[0] != canonical
+    assert staged_paths[0].parent == canonical.parent
+    assert not staged_paths[0].exists()
+
+
+def test_api_preferred_multi_source_daily_success_commits_only_daily_canonical(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_daily
+
+    def api_fetcher(*, config, **_kwargs):
+        account = next(iter(config["accounts"]))
+        return {
+            "date": "2026-07-16",
+            "target_date": "2026-07-16",
+            "accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}},
+            "errors": [],
+        }
+
+    result = fetch_baidu_resilient_daily(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "2026-07-16",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: pytest.fail("API 成功不应调用浏览器"),
+        clock=lambda: 0.0,
+        sleep=lambda _seconds: None,
+    )
+
+    daily_path = tmp_path / "reports" / "baidu_daily_data.json"
+    assert result["data_source"] == "api"
+    assert json.loads(daily_path.read_text("utf-8"))["data_source"] == "api"
+    assert not (tmp_path / "reports" / "baidu_account_data.json").exists()
+
+
+def test_api_preferred_multi_source_daily_double_failure_preserves_daily_canonical(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_daily
+
+    canonical = tmp_path / "reports" / "baidu_daily_data.json"
+    canonical.parent.mkdir()
+    canonical.write_text('{"sentinel": "daily"}', encoding="utf-8")
+    staged_paths = []
+
+    def api_fetcher(*, config, **_kwargs):
+        if config["baidu_source"]["source_id"] == "b":
+            raise RuntimeError("source b failed")
+        account = next(iter(config["accounts"]))
+        return {"accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}}, "errors": []}
+
+    def browser_fetcher(*, config, **_kwargs):
+        staged = Path(config["baidu"]["daily_output_path"])
+        staged_paths.append(staged)
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text('{"errors": ["browser failed"]}', encoding="utf-8")
+        return _two_source_browser_report(["browser failed"])
+
+    result = fetch_baidu_resilient_daily(
+        _two_source_route_config(),
+        tmp_path,
+        None,
+        "2026-07-16",
+        api_fetcher=api_fetcher,
+        browser_fetcher=browser_fetcher,
+        sleep=lambda _seconds: None,
+    )
+
+    assert result["data_source"] == "failed"
+    assert json.loads(canonical.read_text("utf-8")) == {"sentinel": "daily"}
+    assert len(staged_paths) == 1
+    assert staged_paths[0].parent == canonical.parent
+    assert not staged_paths[0].exists()
+    assert not (tmp_path / "reports" / "baidu_account_data.json").exists()
+
+
+def test_baidu_resilient_browser_mode_stages_success_and_cleans_temp(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    configured_output = tmp_path / "custom_reports" / "hourly_canonical.json"
+    config = {
+        "baidu": {
+            "data_source_mode": "browser",
+            "output_path": str(configured_output),
+        }
+    }
+    staged_paths = []
+
+    def browser_fetcher(*, config, **_kwargs):
+        staged = Path(config["baidu"]["output_path"])
+        staged_paths.append(staged)
+        staged.parent.mkdir(parents=True, exist_ok=True)
+        staged.write_text('{"source": "browser-side-effect"}', encoding="utf-8")
+        return _route_report("baidu_auto_overview")
+
+    result = fetch_baidu_resilient_hourly(
+        config,
+        tmp_path,
+        None,
+        "15点",
+        api_fetcher=lambda **_kwargs: pytest.fail("B 模式不应调用 API"),
+        browser_fetcher=browser_fetcher,
+    )
+
+    assert result["data_source"] == "browser"
+    assert json.loads(configured_output.read_text("utf-8"))["data_source"] == "browser"
+    assert len(staged_paths) == 1
+    assert staged_paths[0] != configured_output
+    assert staged_paths[0].parent == configured_output.parent
+    assert not staged_paths[0].exists()
+    assert config["baidu"]["output_path"] == str(configured_output)
+    assert not (tmp_path / "reports" / "baidu_account_data.json").exists()
+
+
+def test_baidu_resilient_browser_mode_failure_preserves_canonical_and_cleans_temp(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    canonical = tmp_path / "reports" / "baidu_account_data.json"
+    canonical.parent.mkdir()
+    canonical.write_text('{"sentinel": "browser"}', encoding="utf-8")
+    staged_paths = []
+
+    def browser_fetcher(*, config, **_kwargs):
+        staged = Path(config["baidu"]["output_path"])
+        staged_paths.append(staged)
+        staged.write_text('{"errors": ["browser failed"]}', encoding="utf-8")
+        return _route_report("baidu_auto_overview", errors=["browser failed"])
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "browser"}},
+        tmp_path,
+        None,
+        "15点",
+        browser_fetcher=browser_fetcher,
+    )
+
+    assert result["data_source"] == "failed"
+    assert json.loads(canonical.read_text("utf-8")) == {"sentinel": "browser"}
+    assert len(staged_paths) == 1
+    assert not staged_paths[0].exists()
+
+
+def test_browser_mode_never_calls_api(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "browser"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API must not run")),
+        browser_fetcher=lambda **_kwargs: _route_report("baidu_auto_overview"),
+        sleep=lambda _seconds: None,
+    )
+    assert result["data_source"] == "browser"
+    assert result["api_attempts"] == 0
+
+
+def test_api_preferred_success_never_calls_browser(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **_kwargs: _route_report(),
+        browser_fetcher=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("browser must not run")),
+        sleep=lambda _seconds: None,
+    )
+    assert result["data_source"] == "api"
+    assert result["api_attempts"] == 1
+
+
+def test_api_network_error_retries_twice_then_falls_back(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    calls = {"api": 0, "browser": 0}
+
+    def api_fetcher(**_kwargs):
+        calls["api"] += 1
+        raise BaiduReportApiError("network unavailable", category="network_error")
+
+    def browser_fetcher(**_kwargs):
+        calls["browser"] += 1
+        return _route_report("baidu_auto_overview")
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}}, tmp_path, None, "15点",
+        api_fetcher=api_fetcher, browser_fetcher=browser_fetcher, sleep=lambda _seconds: None,
+    )
+    assert calls == {"api": 3, "browser": 1}
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "network_error"
+    assert result["self_heal_actions"] == ["network_retry", "network_retry"]
+
+
+def test_api_integrity_error_retries_once_then_falls_back(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    calls = []
+
+    def api_fetcher(**_kwargs):
+        calls.append("api")
+        raise BaiduReportApiError("unstable data", category="integrity_error")
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}}, tmp_path, None, "15点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: calls.append("browser") or _route_report("baidu_auto_overview"),
+        sleep=lambda _seconds: None,
+    )
+    assert calls == ["api", "api", "browser"]
+    assert result["self_heal_actions"] == ["integrity_retry"]
+
+
+def test_refresh_required_falls_back_without_network_retry(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    calls = []
+
+    def api_fetcher(**_kwargs):
+        calls.append("api")
+        raise BaiduReportApiError(
+            "reauthorize", category="reauthorization_required", reauthorization_required=True
+        )
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}}, tmp_path, None, "15点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: calls.append("browser") or _route_report("baidu_auto_overview"),
+        sleep=lambda _seconds: None,
+    )
+    assert calls == ["api", "browser"]
+    assert result["fallback_reason"] == "reauthorization_required"
+
+
+def test_api_and_browser_failure_returns_errors_and_no_success_report(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **_kwargs: (_ for _ in ()).throw(
+            BaiduReportApiError("API failed", category="reauthorization_required", reauthorization_required=True)
+        ),
+        browser_fetcher=lambda **_kwargs: _route_report("baidu_auto_overview", errors=["browser failed"]),
+        sleep=lambda _seconds: None,
+    )
+    assert result["errors"]
+    assert result["data_source"] == "failed"
+    assert result["fallback_reason"] == "reauthorization_required"
+    assert not (tmp_path / "reports" / "baidu_account_data.json").exists()
+
+
+def test_shadow_mode_uses_browser_output_and_writes_comparison(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    browser = _route_report("baidu_auto_overview", cost=11.0)
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_shadow"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **kwargs: (
+            _route_report(cost=10.0)
+            if kwargs.get("commit_standard_report") is False
+            else (_ for _ in ()).throw(AssertionError("shadow API must not commit"))
+        ),
+        browser_fetcher=lambda **_kwargs: browser,
+        sleep=lambda _seconds: None,
+    )
+    comparison = json.loads((tmp_path / "reports" / "baidu_api_shadow_comparison.json").read_text("utf-8"))
+    assert result["accounts"] == browser["accounts"]
+    assert result["data_source"] == "browser_shadow"
+    assert comparison["passed"] is False
+    assert comparison["differences"]
+
+
+def test_shadow_comparison_accepts_browser_report_without_source_user_id(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    browser = _route_report("baidu_auto_overview")
+    browser["accounts"]["银康01"].pop("source_user_id")
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_shadow"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **_kwargs: _route_report(),
+        browser_fetcher=lambda **_kwargs: browser,
+        sleep=lambda _seconds: None,
+    )
+
+    comparison = json.loads((tmp_path / "reports" / "baidu_api_shadow_comparison.json").read_text("utf-8"))
+    assert result["data_source"] == "browser_shadow"
+    assert comparison["passed"] is True
+    assert comparison["differences"] == []
+
+
+def test_shadow_comparison_rejects_source_user_id_when_both_reports_provide_it(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    browser = _route_report("baidu_auto_overview")
+    browser["accounts"]["银康01"]["source_user_id"] = 999
+    fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_shadow"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **_kwargs: _route_report(),
+        browser_fetcher=lambda **_kwargs: browser,
+        sleep=lambda _seconds: None,
+    )
+
+    comparison = json.loads((tmp_path / "reports" / "baidu_api_shadow_comparison.json").read_text("utf-8"))
+    assert comparison["passed"] is False
+    assert comparison["differences"] == [
+        {"account": "银康01", "field": "source_user_id", "api": 72828178, "browser": 999}
+    ]
+
+
+def test_shadow_comparison_normalizes_equivalent_source_user_id_types(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    browser = _route_report("baidu_auto_overview")
+    browser["accounts"]["银康01"]["source_user_id"] = "72828178"
+    fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_shadow"}}, tmp_path, None, "15点",
+        api_fetcher=lambda **_kwargs: _route_report(),
+        browser_fetcher=lambda **_kwargs: browser,
+        sleep=lambda _seconds: None,
+    )
+
+    comparison = json.loads((tmp_path / "reports" / "baidu_api_shadow_comparison.json").read_text("utf-8"))
+    assert comparison["passed"] is True
+    assert comparison["differences"] == []
+
+
+def test_twenty_second_budget_stops_api_retries(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    calls = []
+    clock_values = iter([0.0, 21.0, 21.0])
+
+    def api_fetcher(**_kwargs):
+        calls.append("api")
+        raise BaiduReportApiError("network unavailable", category="network_error")
+
+    result = fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}}, tmp_path, None, "15点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: calls.append("browser") or _route_report("baidu_auto_overview"),
+        clock=lambda: next(clock_values), sleep=lambda _seconds: None,
+    )
+    assert calls == ["api", "browser"]
+    assert result["fallback_reason"] == "network_error"
+
+
+def test_api_budget_caps_each_network_call_and_counts_internal_requests(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_daily
+
+    config = _api_production_config(tmp_path)
+    now = [0.0]
+    token_calls = []
+    report_timeouts = []
+    responses = [
+        {"header": {"status": 1, "desc": "failure", "failures": [{"code": 894061}]}},
+        _api_success_response("2026-07-16"),
+    ]
+
+    def token_provider(_config, _root, _profile, **kwargs):
+        token_calls.append((kwargs.get("force_refresh"), kwargs.get("timeout_seconds")))
+        if kwargs.get("force_refresh"):
+            now[0] = 19.5
+        return "header.payload.signature", {"token_refresh": "refreshed" if kwargs.get("force_refresh") else "not_needed"}
+
+    def transport(_url, _payload, timeout):
+        report_timeouts.append(timeout)
+        if len(report_timeouts) == 1:
+            now[0] = 19.0
+        return responses.pop(0)
+
+    report = fetch_baidu_api_daily(
+        config,
+        tmp_path,
+        logging.getLogger("api-budget"),
+        "2026-07-16",
+        token_provider=token_provider,
+        transport=transport,
+        deadline=20.0,
+        clock=lambda: now[0],
+    )
+
+    assert token_calls == [(False, 20.0), (True, 1.0)]
+    assert report_timeouts == [20.0, 0.5]
+    assert report["diagnostics"]["api_request_count"] == 2
+    assert report["diagnostics"]["self_heal_actions"] == ["token_refresh"]
+
+
+def test_router_allows_only_one_token_refresh_across_api_retries(tmp_path):
+    import logging
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError, fetch_baidu_api_hourly
+
+    config = _api_production_config(tmp_path)
+    config["baidu"]["data_source_mode"] = "api_preferred"
+    token_calls = []
+    report_calls = ["expired", "network", "expired"]
+
+    def token_provider(_config, _root, _profile, **kwargs):
+        token_calls.append(bool(kwargs.get("force_refresh")))
+        return "header.payload.signature", {"token_refresh": "refreshed" if kwargs.get("force_refresh") else "not_needed"}
+
+    def transport(_url, _payload, _timeout):
+        action = report_calls.pop(0)
+        if action == "expired":
+            return {"header": {"status": 1, "desc": "failure", "failures": [{"code": 894061}]}}
+        raise BaiduReportApiError("network", category="network_error")
+
+    def api_fetcher(**kwargs):
+        return fetch_baidu_api_hourly(
+            **kwargs,
+            token_provider=token_provider,
+            transport=transport,
+        )
+
+    result = fetch_baidu_resilient_hourly(
+        config,
+        tmp_path,
+        logging.getLogger("one-refresh"),
+        "18点",
+        api_fetcher=api_fetcher,
+        browser_fetcher=lambda **_kwargs: _route_report("baidu_auto_overview"),
+        sleep=lambda _seconds: None,
+    )
+
+    assert token_calls.count(True) == 1
+    assert result["data_source"] == "browser_fallback"
+    assert result["fallback_reason"] == "authorization_error"
+    assert result["api_attempts"] == 3
+    assert result["self_heal_actions"] == ["token_refresh", "network_retry"]
+
+
 def test_baidu_api_hourly_simulation_keeps_outputs_isolated(tmp_path, monkeypatch):
     import logging
     from datetime import date
@@ -5439,6 +7429,222 @@ def test_baidu_oauth_bundle_import_is_atomic_and_does_not_expose_tokens(tmp_path
     assert saved["baidu_api"]["changsha_niu_baidu"]["access_token"] == "new.access.token"
     assert saved["baidu_api"]["changsha_niu_baidu"]["refresh_token"] == "new.refresh.token"
     assert len(list((tmp_path / "backups").glob("secrets_before_oauth_*.json"))) == 1
+
+
+def test_oauth_import_rereads_secrets_inside_shared_lock(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    import modules.baidu_oauth_bundle as oauth_bundle
+
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu_api_gateway": {"app_id": "app-1"},
+        "baidu_api": {"existing": {"app_id": "app-1", "access_token": "old"}},
+    }), encoding="utf-8")
+    bundle_path = tmp_path / "download.baidu-auth"
+    bundle_path.write_text(json.dumps(_oauth_match_bundle([456])), encoding="utf-8")
+
+    @contextmanager
+    def fake_lock(path):
+        assert path == secrets_path
+        latest = json.loads(secrets_path.read_text(encoding="utf-8"))
+        latest["baidu_api"]["concurrent_refresh"] = {"app_id": "app-1", "access_token": "preserve-me"}
+        secrets_path.write_text(json.dumps(latest), encoding="utf-8")
+        yield
+
+    monkeypatch.setattr(oauth_bundle, "secrets_file_lock", fake_lock)
+    oauth_bundle.import_baidu_oauth_bundle(tmp_path, bundle_path, "changsha_niu_baidu")
+
+    saved = json.loads(secrets_path.read_text(encoding="utf-8"))
+    assert saved["baidu_api"]["concurrent_refresh"]["access_token"] == "preserve-me"
+    assert saved["baidu_api"]["changsha_niu_baidu"]["access_token"] == "secret.access.token"
+
+
+def _oauth_match_bundle(user_ids, app_id="app-1"):
+    return {
+        "format": "baidu-oauth-export-v1",
+        "app_id": app_id,
+        "authorization": {
+            "access_token": "secret.access.token",
+            "refresh_token": "secret.refresh.token",
+            "open_id": "open-1",
+            "user_id": 123,
+            "sub_accounts": [{"user_id": user_id, "user_name": "account"} for user_id in user_ids],
+        },
+    }
+
+
+def _write_oauth_match_root(root, projects):
+    projects_dir = root / "configs" / "projects"
+    projects_dir.mkdir(parents=True)
+    for project in projects:
+        (projects_dir / f"{project['project_id']}.json").write_text(
+            json.dumps(project, ensure_ascii=False), encoding="utf-8"
+        )
+    secrets_path = root / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu_api_gateway": {"app_id": "app-1", "refresh_url": "https://example.invalid", "client_key": "key"},
+        "baidu_api": {},
+    }), encoding="utf-8")
+    return secrets_path
+
+
+def test_oauth_profile_match_finds_unique_single_source_project(tmp_path):
+    from modules.baidu_oauth_bundle import match_baidu_oauth_profile
+
+    _write_oauth_match_root(tmp_path, [{
+        "project_id": "changsha_niu",
+        "project_name": "长沙牛",
+        "baidu": {"api_profile": "changsha_niu_baidu"},
+        "accounts": [
+            {"standard_name": "A", "baidu_user_ids": [111]},
+            {"standard_name": "B", "kst_ids": ["222"]},
+            {"standard_name": "C", "kst_ids": ["333"]},
+        ],
+    }])
+
+    match = match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([333, 111, 222]))
+
+    assert match == {
+        "api_profile": "changsha_niu_baidu",
+        "project_id": "changsha_niu",
+        "source_id": None,
+        "promotion_ids": [111, 222, 333],
+    }
+    assert "secret.access.token" not in json.dumps(match)
+
+
+def test_oauth_profile_match_allows_unique_project_with_extra_inactive_authorized_account(tmp_path):
+    from modules.baidu_oauth_bundle import match_baidu_oauth_profile
+
+    _write_oauth_match_root(tmp_path, [{
+        "project_id": "nanjing_niu",
+        "project_name": "南京牛",
+        "baidu": {"api_profile": "nanjing_niu_baidu"},
+        "accounts": [
+            {"standard_name": "npx1", "kst_ids": ["111"]},
+            {"standard_name": "npx6", "kst_ids": ["666"]},
+        ],
+    }])
+
+    match = match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([111, 222, 666]))
+
+    assert match["api_profile"] == "nanjing_niu_baidu"
+    assert match["promotion_ids"] == [111, 666]
+    assert match["ignored_authorized_promotion_ids"] == [222]
+
+
+def test_oauth_profile_match_rejects_authorized_superset_covering_multiple_projects(tmp_path):
+    from modules.baidu_oauth_bundle import BaiduOAuthImportError, match_baidu_oauth_profile
+
+    _write_oauth_match_root(tmp_path, [
+        {
+            "project_id": "project_a", "project_name": "A",
+            "baidu": {"api_profile": "project_a_baidu"},
+            "accounts": [{"standard_name": "A", "kst_ids": ["111"]}],
+        },
+        {
+            "project_id": "project_b", "project_name": "B",
+            "baidu": {"api_profile": "project_b_baidu"},
+            "accounts": [{"standard_name": "B", "kst_ids": ["222"]}],
+        },
+    ])
+
+    with pytest.raises(BaiduOAuthImportError, match="同时匹配多个项目来源"):
+        match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([111, 222, 999]))
+
+
+def test_oauth_profile_match_finds_exact_dual_source_profile(tmp_path):
+    from modules.baidu_oauth_bundle import match_baidu_oauth_profile
+
+    _write_oauth_match_root(tmp_path, [{
+        "project_id": "shenyang_bai",
+        "project_name": "沈阳白",
+        "baidu": {},
+        "accounts": [],
+        "baidu_sources": [
+            {
+                "source_id": "source_a", "api_profile": "shenyang_bai_source_a_baidu",
+                "accounts": [{"standard_name": "A", "kst_ids": ["101", "ignored-second-id"]}],
+            },
+            {
+                "source_id": "source_b", "api_profile": "shenyang_bai_source_b_baidu",
+                "accounts": [{"standard_name": "B", "baidu_user_ids": [202]}],
+            },
+        ],
+    }])
+
+    match = match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([202]))
+
+    assert match["api_profile"] == "shenyang_bai_source_b_baidu"
+    assert match["project_id"] == "shenyang_bai"
+    assert match["source_id"] == "source_b"
+    assert match["promotion_ids"] == [202]
+
+
+def test_oauth_profile_match_rejects_zero_multiple_and_wrong_app_without_token_leak(tmp_path):
+    from modules.baidu_oauth_bundle import BaiduOAuthImportError, match_baidu_oauth_profile
+
+    project = {
+        "project_id": "project_a", "project_name": "A",
+        "baidu": {"api_profile": "project_a_baidu"},
+        "accounts": [{"standard_name": "A", "kst_ids": ["111"]}],
+    }
+    _write_oauth_match_root(tmp_path, [project])
+    sensitive = ("secret.access.token", "secret.refresh.token")
+
+    with pytest.raises(BaiduOAuthImportError) as no_match:
+        match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([999]))
+    with pytest.raises(BaiduOAuthImportError) as wrong_app:
+        match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([111], app_id="app-2"))
+
+    duplicate = dict(project)
+    duplicate["project_id"] = "project_b"
+    duplicate["baidu"] = {"api_profile": "project_b_baidu"}
+    (tmp_path / "configs" / "projects" / "project_b.json").write_text(
+        json.dumps(duplicate, ensure_ascii=False), encoding="utf-8"
+    )
+    with pytest.raises(BaiduOAuthImportError) as multiple:
+        match_baidu_oauth_profile(tmp_path, _oauth_match_bundle([111]))
+
+    serialized = " ".join(str(item.value) for item in (no_match, wrong_app, multiple))
+    assert all(token not in serialized for token in sensitive)
+
+
+def test_import_baidu_oauth_auto_profile_uses_unique_match(tmp_path):
+    project = {
+        "project_id": "changsha_niu", "project_name": "长沙牛",
+        "baidu": {"api_profile": "changsha_niu_baidu"},
+        "accounts": [{"standard_name": "A", "kst_ids": ["111"]}],
+    }
+    secrets_path = _write_oauth_match_root(tmp_path, [project])
+    bundle_path = tmp_path / "download.baidu-auth"
+    bundle_path.write_text(json.dumps(_oauth_match_bundle([111])), encoding="utf-8")
+
+    report = import_baidu_oauth_bundle(tmp_path, bundle_path, "auto")
+
+    saved = json.loads(secrets_path.read_text(encoding="utf-8"))
+    assert report["api_profile"] == "changsha_niu_baidu"
+    assert report["matched_project_id"] == "changsha_niu"
+    assert saved["baidu_api"]["changsha_niu_baidu"]["access_token"] == "secret.access.token"
+    assert "secret.access.token" not in json.dumps(report)
+
+
+def test_import_baidu_oauth_auto_reports_ignored_inactive_accounts(tmp_path):
+    project = {
+        "project_id": "nanjing_niu", "project_name": "南京牛",
+        "baidu": {"api_profile": "nanjing_niu_baidu"},
+        "accounts": [{"standard_name": "A", "kst_ids": ["111"]}],
+    }
+    _write_oauth_match_root(tmp_path, [project])
+    bundle_path = tmp_path / "download.baidu-auth"
+    bundle_path.write_text(json.dumps(_oauth_match_bundle([111, 222])), encoding="utf-8")
+
+    report = import_baidu_oauth_bundle(tmp_path, bundle_path, "auto")
+
+    assert report["matched_project_id"] == "nanjing_niu"
+    assert report["ignored_authorized_promotion_ids"] == [222]
 
 
 def test_secrets_package_round_trip_fully_replaces_target_and_backs_up(tmp_path):
@@ -5656,6 +7862,466 @@ def test_baidu_oauth_callback_exchanges_code_and_exports_subaccounts(tmp_path, m
     assert calls[1][1]["lastPageMaxUcId"] == 1
 
 
+def _load_baidu_oauth_callback_module(module_name="baidu_oauth_refresh_test"):
+    import importlib.util
+
+    callback_path = Path(__file__).resolve().parents[1] / "cloud" / "baidu_oauth_callback" / "index.py"
+    spec = importlib.util.spec_from_file_location(module_name, callback_path)
+    callback = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(callback)
+    return callback
+
+
+def test_baidu_oauth_refresh_accepts_signed_request_and_hides_server_secrets():
+    callback = _load_baidu_oauth_callback_module()
+    timestamp = "1800000000"
+    payload = {"appId": "app-1", "userId": 123, "refreshToken": "old.refresh.token"}
+    headers = {
+        "X-Baidu-Refresh-Timestamp": timestamp,
+        "X-Baidu-Refresh-Signature": callback._refresh_signature(timestamp, payload, "client-key"),
+    }
+    calls = []
+
+    def fake_transport(url, body, timeout):
+        calls.append((url, body, timeout))
+        return {
+            "code": 0,
+            "message": "success",
+            "data": {
+                "accessToken": "new.access.token",
+                "refreshToken": "new.refresh.token",
+                "openId": "open-1",
+                "expiresTime": "2026-07-18 09:00:00",
+                "refreshExpiresTime": "2026-08-16 09:00:00",
+                "expiresIn": 86400,
+                "refreshExpiresIn": 2592000,
+            },
+        }
+
+    result = callback.process_refresh_request(
+        payload,
+        headers,
+        {
+            "app_id": "app-1",
+            "secret_key": "server-secret-key-123456",
+            "refresh_client_key": "client-key",
+            "refresh_max_timestamp_skew_seconds": 300,
+        },
+        fake_transport,
+        now_timestamp=1800000000,
+    )
+
+    assert calls == [(
+        "https://u.baidu.com/oauth/refreshToken",
+        {
+            "appId": "app-1",
+            "refreshToken": "old.refresh.token",
+            "secretKey": "server-secret-key-123456",
+            "userId": 123,
+        },
+        20,
+    )]
+    assert result == {
+        "access_token": "new.access.token",
+        "refresh_token": "new.refresh.token",
+        "open_id": "open-1",
+        "expires_time": "2026-07-18 09:00:00",
+        "refresh_expires_time": "2026-08-16 09:00:00",
+        "expires_in": 86400,
+        "refresh_expires_in": 2592000,
+    }
+    serialized = json.dumps(result)
+    assert "server-secret-key" not in serialized
+    assert "client-key" not in serialized
+    assert "old.refresh.token" not in serialized
+
+
+def test_baidu_oauth_refresh_rejects_bad_signature_expired_timestamp_and_wrong_app():
+    import pytest
+
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_refresh_rejection_test")
+    payload = {"appId": "app-1", "userId": 123, "refreshToken": "old.refresh.token"}
+    config = {
+        "app_id": "app-1",
+        "secret_key": "server-secret-key-123456",
+        "refresh_client_key": "client-key",
+        "refresh_max_timestamp_skew_seconds": 300,
+    }
+
+    with pytest.raises(callback.OAuthCallbackError, match="签名"):
+        callback.process_refresh_request(
+            payload,
+            {"X-Baidu-Refresh-Timestamp": "1800000000", "X-Baidu-Refresh-Signature": "wrong"},
+            config,
+            now_timestamp=1800000000,
+        )
+
+    valid_signature = callback._refresh_signature("1799999000", payload, "client-key")
+    with pytest.raises(callback.OAuthCallbackError, match="过期"):
+        callback.process_refresh_request(
+            payload,
+            {"X-Baidu-Refresh-Timestamp": "1799999000", "X-Baidu-Refresh-Signature": valid_signature},
+            config,
+            now_timestamp=1800000000,
+        )
+
+    wrong_app = {**payload, "appId": "app-2"}
+    wrong_app_signature = callback._refresh_signature("1800000000", wrong_app, "client-key")
+    with pytest.raises(callback.OAuthCallbackError, match="应用 ID"):
+        callback.process_refresh_request(
+            wrong_app,
+            {"X-Baidu-Refresh-Timestamp": "1800000000", "X-Baidu-Refresh-Signature": wrong_app_signature},
+            config,
+            now_timestamp=1800000000,
+        )
+
+
+def test_baidu_oauth_refresh_rejects_upstream_failure_without_leaking_tokens():
+    import pytest
+
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_refresh_upstream_test")
+    timestamp = "1800000000"
+    payload = {"appId": "app-1", "userId": 123, "refreshToken": "old.refresh.token"}
+    headers = {
+        "X-Baidu-Refresh-Timestamp": timestamp,
+        "X-Baidu-Refresh-Signature": callback._refresh_signature(timestamp, payload, "client-key"),
+    }
+
+    with pytest.raises(callback.OAuthCallbackError, match="更新授权令牌失败") as exc_info:
+        callback.process_refresh_request(
+            payload,
+            headers,
+            {
+                "app_id": "app-1",
+                "secret_key": "server-secret-key-123456",
+                "refresh_client_key": "client-key",
+                "refresh_max_timestamp_skew_seconds": 300,
+            },
+            lambda *_args: {"code": 600001, "message": "bad old.refresh.token"},
+            now_timestamp=1800000000,
+        )
+
+    assert "old.refresh.token" not in str(exc_info.value)
+    assert exc_info.value.code == "reauthorization_required"
+    assert exc_info.value.status_code == 401
+
+
+def test_baidu_oauth_wsgi_routes_refresh_post_and_rejects_refresh_get(monkeypatch):
+    import importlib.util
+    import io
+    import sys
+
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_refresh_wsgi_index")
+    app_path = Path(__file__).resolve().parents[1] / "cloud" / "baidu_oauth_callback" / "app.py"
+    spec = importlib.util.spec_from_file_location("baidu_oauth_refresh_wsgi_app", app_path)
+    app = importlib.util.module_from_spec(spec)
+    previous_index = sys.modules.get("index")
+    sys.modules["index"] = callback
+    try:
+        assert spec.loader is not None
+        spec.loader.exec_module(app)
+    finally:
+        if previous_index is None:
+            sys.modules.pop("index", None)
+        else:
+            sys.modules["index"] = previous_index
+
+    captured = {}
+
+    def fake_refresh_handler(event, _context):
+        captured.update(event)
+        return callback._response(200, {"status": "ok"})
+
+    monkeypatch.setattr(app, "refresh_handler", fake_refresh_handler)
+    body = json.dumps({"appId": "app-1", "userId": 123, "refreshToken": "old.refresh.token"}).encode("utf-8")
+    environ = {
+        "REQUEST_METHOD": "POST",
+        "PATH_INFO": "/baidu/oauth/refresh",
+        "CONTENT_LENGTH": str(len(body)),
+        "CONTENT_TYPE": "application/json",
+        "HTTP_X_BAIDU_REFRESH_TIMESTAMP": "1800000000",
+        "HTTP_X_BAIDU_REFRESH_SIGNATURE": "signed",
+        "wsgi.input": io.BytesIO(body),
+    }
+    statuses = []
+    result = app.application(environ, lambda status, _headers: statuses.append(status))
+
+    assert statuses == ["200 OK"]
+    assert json.loads(b"".join(result).decode("utf-8")) == {"status": "ok"}
+    assert captured["httpMethod"] == "POST"
+    assert captured["path"] == "/baidu/oauth/refresh"
+    assert captured["headers"] == {
+        "X-Baidu-Refresh-Timestamp": "1800000000",
+        "X-Baidu-Refresh-Signature": "signed",
+    }
+    assert json.loads(captured["body"])["userId"] == 123
+
+    statuses.clear()
+    result = app.application(
+        {"REQUEST_METHOD": "GET", "PATH_INFO": "/baidu/oauth/refresh", "wsgi.input": io.BytesIO(b"")},
+        lambda status, _headers: statuses.append(status),
+    )
+    assert statuses == ["405 Method Not Allowed"]
+    assert json.loads(b"".join(result).decode("utf-8"))["code"] == "method_not_allowed"
+
+
+def _write_token_manager_secrets(root, *, expires_time="2026-07-17 09:20:00", other_profile=None):
+    secrets_path = root / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    payload = {
+        "baidu_api_gateway": {
+            "refresh_url": "https://example.invalid/baidu/oauth/refresh",
+            "client_key": "fake-client-key",
+            "app_id": "app-1",
+        },
+        "baidu_api": {
+            "kunming_niu_baidu": {
+                "app_id": "app-1",
+                "user_id": 123,
+                "access_token": "old.access.token",
+                "refresh_token": "old.refresh.token",
+                "expires_time": expires_time,
+                "refresh_expires_time": "2026-08-16 09:00:00",
+            },
+        },
+    }
+    if other_profile is not None:
+        payload["baidu_api"]["other_baidu"] = other_profile
+    secrets_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return secrets_path
+
+
+def _token_refresh_response():
+    return {
+        "status": "ok",
+        "authorization": {
+            "access_token": "new.access.token",
+            "refresh_token": "new.refresh.token",
+            "open_id": "open-1",
+            "expires_time": "2026-07-18 09:00:00",
+            "refresh_expires_time": "2026-08-16 09:00:00",
+            "expires_in": 86400,
+            "refresh_expires_in": 2592000,
+        },
+    }
+
+
+def test_token_manager_keeps_valid_token_without_refresh(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import ensure_valid_access_token
+
+    _write_token_manager_secrets(tmp_path)
+    token, metadata = ensure_valid_access_token(
+        {},
+        tmp_path,
+        "kunming_niu_baidu",
+        now=datetime(2026, 7, 17, 9, 0, 0),
+        transport=lambda *_args: (_ for _ in ()).throw(AssertionError("transport must not run")),
+    )
+
+    assert token == "old.access.token"
+    assert metadata == {
+        "api_profile": "kunming_niu_baidu",
+        "token_refresh": "not_needed",
+        "expires_time": "2026-07-17 09:20:00",
+    }
+
+
+def test_token_manager_refreshes_within_ten_minute_window(tmp_path):
+    import hashlib
+    import hmac
+    from datetime import datetime
+    from modules.baidu_token_manager import ensure_valid_access_token
+
+    _write_token_manager_secrets(tmp_path, expires_time="2026-07-17 09:05:00")
+    calls = []
+
+    def transport(url, payload, headers, timeout):
+        calls.append((url, payload, headers, timeout))
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        expected = hmac.new(
+            b"fake-client-key",
+            (headers["X-Baidu-Refresh-Timestamp"] + "\n" + canonical).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        assert headers["X-Baidu-Refresh-Signature"] == expected
+        return _token_refresh_response()
+
+    token, metadata = ensure_valid_access_token(
+        {}, tmp_path, "kunming_niu_baidu", now=datetime(2026, 7, 17, 9, 0, 0), transport=transport
+    )
+
+    assert token == "new.access.token"
+    assert metadata["token_refresh"] == "refreshed"
+    assert calls[0][0] == "https://example.invalid/baidu/oauth/refresh"
+    assert calls[0][1] == {"appId": "app-1", "userId": 123, "refreshToken": "old.refresh.token"}
+    assert calls[0][3] == 20
+
+
+def test_token_manager_deducts_lock_wait_from_refresh_timeout(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from datetime import datetime
+    import modules.baidu_token_manager as token_manager
+
+    _write_token_manager_secrets(tmp_path, expires_time="2026-07-17 09:05:00")
+    now = [0.0]
+
+    @contextmanager
+    def delayed_lock(_path, **kwargs):
+        assert kwargs["timeout_seconds"] == 7
+        now[0] = 5.0
+        yield
+
+    def transport(_url, _payload, _headers, timeout):
+        assert timeout == 2.0
+        return _token_refresh_response()
+
+    monkeypatch.setattr(token_manager, "secrets_file_lock", delayed_lock)
+    token_manager.ensure_valid_access_token(
+        {},
+        tmp_path,
+        "kunming_niu_baidu",
+        now=datetime(2026, 7, 17, 9, 0, 0),
+        transport=transport,
+        timeout_seconds=7,
+        clock=lambda: now[0],
+    )
+
+
+def test_token_manager_rotates_both_tokens_atomically(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import ensure_valid_access_token
+
+    secrets_path = _write_token_manager_secrets(tmp_path, expires_time="2026-07-17 09:05:00")
+    ensure_valid_access_token(
+        {},
+        tmp_path,
+        "kunming_niu_baidu",
+        now=datetime(2026, 7, 17, 9, 0, 0),
+        transport=lambda *_args: _token_refresh_response(),
+    )
+
+    profile = json.loads(secrets_path.read_text(encoding="utf-8"))["baidu_api"]["kunming_niu_baidu"]
+    assert profile["access_token"] == "new.access.token"
+    assert profile["refresh_token"] == "new.refresh.token"
+    assert len(list((tmp_path / "backups").glob("secrets_before_token_refresh_kunming_niu_baidu_*.json"))) == 1
+    assert not list((tmp_path / "secrets").glob("*.tmp"))
+
+
+def test_token_manager_refresh_failure_preserves_original_secrets(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_token
+
+    secrets_path = _write_token_manager_secrets(tmp_path, expires_time="2026-07-17 09:05:00")
+    original = secrets_path.read_bytes()
+    with pytest.raises(BaiduTokenError) as exc_info:
+        ensure_valid_access_token(
+            {},
+            tmp_path,
+            "kunming_niu_baidu",
+            now=datetime(2026, 7, 17, 9, 0, 0),
+            transport=lambda *_args: (_ for _ in ()).throw(OSError("old.refresh.token network failure")),
+        )
+
+    assert exc_info.value.category == "token_refresh_error"
+    assert "old.refresh.token" not in str(exc_info.value)
+    assert secrets_path.read_bytes() == original
+    assert not list((tmp_path / "secrets").glob("*.tmp"))
+
+
+def test_token_manager_maps_refresh_http_errors_without_exposing_response(monkeypatch):
+    import io
+    import urllib.error
+    import modules.baidu_token_manager as token_manager
+
+    def raise_http_error(_request, timeout):
+        assert timeout == 7
+        raise urllib.error.HTTPError(
+            "https://example.invalid/refresh",
+            502,
+            "bad",
+            {},
+            io.BytesIO(b'{"status":"error","code":"refresh_failed","message":"secret token"}'),
+        )
+
+    monkeypatch.setattr(token_manager.urllib.request, "urlopen", raise_http_error)
+    with pytest.raises(token_manager.BaiduTokenError) as exc_info:
+        token_manager._post_refresh(
+            "https://example.invalid/refresh", {}, {}, 7
+        )
+
+    assert exc_info.value.category == "reauthorization_required"
+    assert exc_info.value.reauthorization_required is True
+    assert "secret token" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "response_code",
+    ["app_id_mismatch", "refresh_signature_mismatch", "expired_refresh_request", "invalid_refresh_request"],
+)
+def test_token_manager_does_not_misclassify_refresh_configuration_errors(monkeypatch, response_code):
+    import io
+    import urllib.error
+    import modules.baidu_token_manager as token_manager
+
+    body = json.dumps({"status": "error", "code": response_code, "message": "not a token problem"}).encode()
+
+    def raise_http_error(_request, timeout):
+        raise urllib.error.HTTPError(
+            "https://example.invalid/refresh", 400, "bad", {}, io.BytesIO(body)
+        )
+
+    monkeypatch.setattr(token_manager.urllib.request, "urlopen", raise_http_error)
+    with pytest.raises(token_manager.BaiduTokenError) as exc_info:
+        token_manager._post_refresh("https://example.invalid/refresh", {}, {}, 7)
+
+    assert exc_info.value.category == "configuration_error"
+    assert exc_info.value.reauthorization_required is False
+
+
+def test_token_manager_merge_update_preserves_other_profiles(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import ensure_valid_access_token
+
+    other = {"access_token": "other.new.value", "refresh_token": "other.refresh.value"}
+    secrets_path = _write_token_manager_secrets(
+        tmp_path, expires_time="2026-07-17 09:05:00", other_profile=other
+    )
+    ensure_valid_access_token(
+        {},
+        tmp_path,
+        "kunming_niu_baidu",
+        now=datetime(2026, 7, 17, 9, 0, 0),
+        transport=lambda *_args: _token_refresh_response(),
+    )
+
+    saved = json.loads(secrets_path.read_text(encoding="utf-8"))
+    assert saved["baidu_api"]["other_baidu"] == other
+    assert saved["baidu_api"]["kunming_niu_baidu"]["access_token"] == "new.access.token"
+
+
+def test_token_manager_report_never_contains_credentials(tmp_path):
+    from datetime import datetime
+    from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_token
+
+    _write_token_manager_secrets(tmp_path)
+    _token, metadata = ensure_valid_access_token(
+        {}, tmp_path, "kunming_niu_baidu", now=datetime(2026, 7, 17, 9, 0, 0)
+    )
+    serialized = json.dumps(metadata, ensure_ascii=False) + repr(metadata)
+    for sensitive in ("old.access.token", "old.refresh.token", "fake-client-key", "fake-password"):
+        assert sensitive not in serialized
+
+    with pytest.raises(BaiduTokenError) as exc_info:
+        ensure_valid_access_token(
+            {}, tmp_path, "kunming_niu_baidu", now=datetime(2026, 7, 17, 9, 0, 0), force_refresh=True,
+            transport=lambda *_args: {"status": "error", "message": "old.refresh.token fake-client-key"},
+        )
+    assert "old.refresh.token" not in str(exc_info.value)
+    assert "fake-client-key" not in str(exc_info.value)
+
+
 def test_regular_build_excludes_secrets_json():
     """普通 build_release 不包含 secrets/secrets.json。"""
     root = Path(__file__).resolve().parents[1]
@@ -5697,6 +8363,58 @@ def test_online_update_build_contains_program_but_excludes_user_data():
     assert not any(name.startswith("browser_profile/") for name in names)
 
 
+def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
+    import zipfile
+
+    from tools.build_release import build_release, release_name
+
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "百度数据自动化控制台.exe").write_bytes(b"exe")
+    (tmp_path / "configs" / "projects").mkdir(parents=True)
+    (tmp_path / "configs" / "app_config.json").write_text(json.dumps({
+        "default_project_id": "demo",
+        "projects_dir": "configs/projects",
+        "secrets_file": "secrets/secrets.json",
+    }), encoding="utf-8")
+    (tmp_path / "configs" / "projects" / "demo.json").write_text('{"project_id":"demo"}', encoding="utf-8")
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "secrets.example.json").write_text('{"baidu":{}}', encoding="utf-8")
+    (tmp_path / "secrets" / "secrets.json").write_text('{"secret":"must-not-ship"}', encoding="utf-8")
+    (tmp_path / "main.py").write_text("print('ok')", encoding="utf-8")
+    (tmp_path / "install_env.bat").write_text("@echo off\r\n", encoding="ascii")
+    (tmp_path / "requirements-runtime.txt").write_text("openpyxl\n", encoding="utf-8")
+
+    release = build_release(tmp_path, version="2026.7.17.103", first_install=True)
+    with zipfile.ZipFile(release) as archive:
+        names = set(archive.namelist())
+
+    assert release.name == "baidu_data_automation_first_install_2026.7.17.103.zip"
+    assert release_name("2026.7.17.103", first_install=True) == release.name
+    assert "百度数据自动化控制台.exe" in names
+    assert "configs/app_config.json" in names
+    assert "configs/projects/demo.json" in names
+    assert "secrets/secrets.example.json" in names
+    assert "secrets/secrets.json" not in names
+    assert "install_env.bat" in names
+    assert "requirements-runtime.txt" in names
+
+
+def test_first_install_build_refuses_incomplete_source_tree(tmp_path):
+    import pytest
+
+    from tools.build_release import build_release
+
+    (tmp_path / "configs" / "projects").mkdir(parents=True)
+    (tmp_path / "configs" / "app_config.json").write_text('{}', encoding="utf-8")
+    (tmp_path / "configs" / "projects" / "demo.json").write_text('{}', encoding="utf-8")
+    (tmp_path / "main.py").write_text("print('ok')", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="首次安装包源文件不完整.*exe"):
+        build_release(tmp_path, version="2026.7.17.103", first_install=True)
+
+    assert not (tmp_path / "dist" / "baidu_data_automation_first_install_2026.7.17.103.zip").exists()
+
+
 def test_online_release_version_counter_never_resets_with_date():
     from datetime import date
 
@@ -5731,6 +8449,8 @@ def test_release_filter_excludes_exported_authorization_packages():
     assert should_include_file(Path("百度授权配置.baidu-secrets"), internal=True) is False
     assert should_include_file(Path("exports") / "team.baidu-secrets", online_update=True) is False
     assert should_include_file(Path("nested") / "team.baidu-secrets") is False
+    assert should_include_file(Path("Downloads") / "baidu_oauth_123.baidu-auth", first_install=True) is False
+    assert should_include_file(Path("baidu_oauth_456.baidu-auth"), online_update=True) is False
 
 
 def test_gitignore_excludes_exported_authorization_packages():
@@ -5741,6 +8461,7 @@ def test_gitignore_excludes_exported_authorization_packages():
         if line.strip() and not line.lstrip().startswith("#")
     }
     assert "*.baidu-secrets" in ignored_patterns
+    assert "secrets/*.lock" in ignored_patterns
 
 
 def test_internal_build_excludes_secrets_json():
@@ -5912,6 +8633,7 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
 
     assert build_hourly_command(root, "15", project_id="qingdao_bai") == [
         str(root / ".venv" / "Scripts" / "pythonw.exe"),
+        "-u",
         str(root / "main.py"),
         "--mode",
         "run",
@@ -5923,6 +8645,7 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
     ]
     assert build_daily_command(root, "2026-06-06", project_id="shenyang_bai") == [
         str(root / ".venv" / "Scripts" / "pythonw.exe"),
+        "-u",
         str(root / "main.py"),
         "--mode",
         "run-daily",
@@ -5934,6 +8657,7 @@ def test_desktop_gui_command_builder_uses_existing_main_entry():
     ]
     assert build_preflight_command(root, "daily", project_id="shenyang_bai") == [
         str(root / ".venv" / "Scripts" / "pythonw.exe"),
+        "-u",
         str(root / "main.py"),
         "--mode",
         "preflight",
@@ -5964,6 +8688,171 @@ def test_desktop_gui_task_runner_forces_utf8_environment():
 
     assert env.value("PYTHONUTF8") == "1"
     assert env.value("PYTHONIOENCODING") == "utf-8"
+    assert env.value("PYTHONUNBUFFERED") == "1"
+
+
+def test_gui_commands_use_unbuffered_python(tmp_path):
+    from gui.command_builder import build_hourly_command
+
+    command = build_hourly_command(tmp_path, "18点", project_id="kunming_niu")
+
+    assert command[1] == "-u"
+
+
+def test_stream_output_buffers_partial_utf8_lines():
+    from gui.task_runner import split_stream_output
+
+    lines, pending = split_stream_output("", "[API] 正在读")
+    assert lines == []
+    assert pending == "[API] 正在读"
+
+    lines, pending = split_stream_output(pending, "取数据\n[通过] 完成\n")
+    assert lines == ["[API] 正在读取数据", "[通过] 完成"]
+    assert pending == ""
+
+    lines, pending = split_stream_output("末行", "", final=True)
+    assert lines == ["末行"]
+    assert pending == ""
+
+
+def test_stream_output_keeps_crlf_split_across_chunks_as_one_newline():
+    from gui.task_runner import split_stream_output
+
+    lines, pending = split_stream_output("", "第一行\r")
+    assert lines == []
+    assert pending == "第一行\r"
+
+    lines, pending = split_stream_output(pending, "\n第二行\r")
+    assert lines == ["第一行"]
+    assert pending == "第二行\r"
+
+    lines, pending = split_stream_output(pending, "", final=True)
+    assert lines == ["第二行"]
+    assert pending == ""
+
+
+def test_task_runner_flushes_pending_output_and_clears_it_for_new_task(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import gui.task_runner as task_runner
+
+    class SignalRecorder:
+        def __init__(self):
+            self.values = []
+
+        def emit(self, value):
+            self.values.append(value)
+
+    class Process:
+        def __init__(self):
+            self.chunks = ["[API] 正在读".encode("utf-8")]
+
+        def readAllStandardOutput(self):
+            return self.chunks.pop(0) if self.chunks else b""
+
+        def setProcessEnvironment(self, value):
+            self.environment = value
+
+        def setWorkingDirectory(self, value):
+            self.cwd = value
+
+        def start(self, program, arguments):
+            self.command = [program, *arguments]
+
+    process = Process()
+    output = SignalRecorder()
+    stages = SignalRecorder()
+    finished = SignalRecorder()
+    runner = SimpleNamespace(
+        _process=process,
+        _pending_output="",
+        output=output,
+        stage_changed=stages,
+        finished=finished,
+    )
+
+    task_runner.QtTaskRunner._read_output(runner)
+    assert output.values == []
+    assert runner._pending_output == "[API] 正在读"
+
+    task_runner.QtTaskRunner._handle_finished(runner, 0, None)
+    assert output.values == ["[API] 正在读"]
+    assert stages.values == ["baidu"]
+    assert finished.values == [0]
+
+    monkeypatch.setattr(task_runner, "build_process_environment", lambda: object())
+    runner._pending_output = "上一任务残留"
+    runner.is_running = lambda: False
+    runner.failed_to_start = SignalRecorder()
+    task_runner.QtTaskRunner.start(runner, ["python", "-u", "main.py"], tmp_path)
+    assert runner._pending_output == ""
+
+
+def test_task_runner_finished_reads_remaining_process_output_before_final_flush():
+    from types import SimpleNamespace
+
+    from gui.task_runner import QtTaskRunner
+
+    class SignalRecorder:
+        def __init__(self):
+            self.values = []
+
+        def emit(self, value):
+            self.values.append(value)
+
+    class Process:
+        def readAllStandardOutput(self):
+            return "[API] 完成时仍未读取的末行\n".encode("utf-8")
+
+    output = SignalRecorder()
+    stages = SignalRecorder()
+    finished = SignalRecorder()
+    runner = SimpleNamespace(
+        _process=Process(),
+        _pending_output="",
+        output=output,
+        stage_changed=stages,
+        finished=finished,
+    )
+
+    QtTaskRunner._handle_finished(runner, 0, None)
+
+    assert output.values == ["[API] 完成时仍未读取的末行"]
+    assert stages.values == ["baidu"]
+    assert finished.values == [0]
+
+
+def test_task_runner_preserves_utf8_characters_split_across_process_chunks():
+    from types import SimpleNamespace
+
+    from gui.task_runner import QtTaskRunner
+
+    class SignalRecorder:
+        def __init__(self):
+            self.values = []
+
+        def emit(self, value):
+            self.values.append(value)
+
+    class Process:
+        def __init__(self):
+            self.chunks = [b"[API] \xe6\xad", b"\xa3\xe5\x9c\xa8\xe8\xaf\xbb\xe5\x8f\x96\n"]
+
+        def readAllStandardOutput(self):
+            return self.chunks.pop(0)
+
+    output = SignalRecorder()
+    runner = SimpleNamespace(
+        _process=Process(),
+        _pending_output="",
+        output=output,
+        stage_changed=SignalRecorder(),
+    )
+
+    QtTaskRunner._read_output(runner)
+    QtTaskRunner._read_output(runner)
+
+    assert output.values == ["[API] 正在读取"]
 
 
 def test_desktop_gui_requirements_include_gui_packaging_deps():
@@ -5987,6 +8876,31 @@ def test_desktop_gui_resolves_project_root_from_workspace():
     assert GUI_SCALE_FACTOR == "1.0"
 
 
+def test_desktop_gui_rejects_standalone_online_update_folder(tmp_path):
+    import pytest
+
+    from gui.app import IncompleteInstallationError, resolve_app_root
+
+    update_root = tmp_path / "baidu_data_automation_update_2026.7.16.102"
+    update_root.mkdir()
+    (update_root / "main.py").write_text("print('update only')\n", encoding="utf-8")
+
+    with pytest.raises(IncompleteInstallationError, match="在线更新包.*首次安装包"):
+        resolve_app_root([update_root])
+
+
+def test_desktop_gui_main_reports_incomplete_install_without_traceback(monkeypatch):
+    import gui.app as gui_app
+
+    messages = []
+    error = gui_app.IncompleteInstallationError("程序文件不完整，请使用首次安装包。")
+    monkeypatch.setattr(gui_app, "resolve_app_root", lambda: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(gui_app, "show_startup_error", lambda message: messages.append(message))
+
+    assert gui_app.main() == 2
+    assert messages == [str(error)]
+
+
 def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
@@ -6007,17 +8921,17 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
 def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QFrame
+    from PySide6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect
     from gui.main_window import MainWindow
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
 
-    assert (window.width(), window.height()) == (960, 694)
-    assert (window.minimumWidth(), window.minimumHeight()) == (960, 694)
-    assert (window.maximumWidth(), window.maximumHeight()) == (960, 694)
+    assert (window.width(), window.height()) == (966, 700)
+    assert (window.minimumWidth(), window.minimumHeight()) == (966, 700)
+    assert (window.maximumWidth(), window.maximumHeight()) == (966, 700)
     window.resize(1200, 900)
-    assert (window.width(), window.height()) == (960, 694)
+    assert (window.width(), window.height()) == (966, 700)
     assert window.left_panel.minimumWidth() == 372
     assert window.left_panel.maximumWidth() == 372
     assert window.status_title.isHidden()
@@ -6029,12 +8943,13 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert 40 <= window.spinner.width() <= 52
     assert window.spinner.height() <= 26
     assert window.spinner.objectName() == "clawdAnimator"
-    assert window.title_label.text() == "百度数据自动化控制台"
+    assert window.windowTitle() == "蚁之力 · 竞价数据自动化"
+    assert window.title_label.text() == "蚁之力 · 竞价数据自动化"
     assert window.title_label.font().pointSize() == 10
     assert window.system_config_button.text().startswith("系统配置")
     assert window.system_config_button.height() == window.title_label.height()
-    assert window.hourly_title.text() == "小时报选择"
-    assert window.daily_title.text() == "日报执行"
+    assert window.hourly_title.text() == "小时报"
+    assert window.daily_title.text() == "日报"
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
         "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
     ]
@@ -6047,7 +8962,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.close_button.toolTip() == "关闭界面"
     assert not window.close_button.icon().isNull()
     assert not window.windowIcon().isNull()
-    assert window.font().family() == "Microsoft YaHei UI"
+    assert window.font().family() == "Microsoft YaHei"
     assert window.font().pointSize() == 9
     assert window.left_layout.spacing() == 14
     assert window.task_control_card.minimumHeight() == window.task_control_card.maximumHeight() == 208
@@ -6058,12 +8973,216 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.log_view.height() >= 300
     assert window.shell_surface.objectName() == "shellSurface"
     assert window.shell_surface.frameShape() == QFrame.Shape.NoFrame
-    assert window.shell_layout.contentsMargins().left() == 11
-    assert window.shell_layout.contentsMargins().top() == 6
-    assert window.shell_layout.contentsMargins().right() == 11
-    assert window.shell_layout.contentsMargins().bottom() == 7
+    assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    assert window.window_surface.objectName() == "windowSurface"
+    window_shadow = window.window_surface.graphicsEffect()
+    assert isinstance(window_shadow, QGraphicsDropShadowEffect)
+    assert window_shadow.blurRadius() == 8
+    assert window_shadow.offset().isNull()
+    assert window_shadow.color().alpha() == 38
+    root_margins = window.centralWidget().layout().contentsMargins()
+    assert (root_margins.left(), root_margins.top(), root_margins.right(), root_margins.bottom()) == (4, 4, 4, 4)
+    shell_margins = window.shell_layout.contentsMargins()
+    assert (shell_margins.left(), shell_margins.top(), shell_margins.right(), shell_margins.bottom()) == (4, 4, 4, 5)
     assert "QFrame#shellSurface" in window.styleSheet()
+    assert "QFrame#windowSurface" in window.styleSheet()
+    assert "border: 1px solid #e6e9ee" in window.styleSheet()
+    assert "#aeb6c1" not in window.styleSheet()
     assert "border-radius: 0" in window.styleSheet()
+    window.close()
+
+
+def test_data_source_control_defaults_to_api_and_emits_browser(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import DataSourceModeControl
+
+    app = QApplication.instance() or QApplication([])
+    control = DataSourceModeControl()
+    changes = []
+    control.preference_changed.connect(changes.append)
+
+    assert (control.width(), control.height()) == (106, 29)
+    assert control.preference() == "api"
+    assert control.api_button.isChecked()
+    assert not control.browser_button.isChecked()
+    assert control.browser_button.text() == "浏览器"
+    assert control.api_button.text() == "API"
+    assert "background: #3f83f8" in control.styleSheet()
+    assert "color: #ffffff" in control.styleSheet()
+
+    control.set_preference("browser", animate=False)
+
+    assert control.preference() == "browser"
+    assert changes == ["browser"]
+    assert control.browser_button.isChecked()
+    assert not control.api_button.isChecked()
+    control.close()
+
+
+def test_desktop_gui_data_mode_menu_is_separate_and_compact(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+
+    assert window.data_mode_button.text() == "数据模式"
+    assert window.data_mode_button.height() == window.system_config_button.height()
+    assert window.data_mode_button.font() == window.system_config_button.font()
+    assert window.data_mode_button.font().pointSize() == 9
+    assert not hasattr(window.inline_config_menu, "data_source_control")
+    control = window.data_mode_menu.data_source_control
+    assert (control.width(), control.height()) == (106, 29)
+    assert control.preference() == "api"
+    assert window.project_combo.popup.search.placeholderText() == "输入 B/N 快速检索对应项目"
+
+    window.inline_config_menu.show()
+    window.show_data_mode_menu()
+    assert window.inline_config_menu.isHidden()
+    window.data_mode_menu.show()
+    window.show_system_config_menu()
+    assert window.data_mode_menu.isHidden()
+
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_data_source_preference_persists_and_locks_during_tasks(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+    from modules.project_config import get_data_source_preference
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    control = window.data_mode_menu.data_source_control
+
+    assert control.preference() == "api"
+    control.set_preference("browser", animate=False)
+    assert get_data_source_preference(tmp_path) == "browser"
+
+    window.runner.start = lambda _command, _root: None
+    window.start_command("测试任务", ["python", "-V"])
+    assert not control.isEnabled()
+    window.show_task_error("测试启动失败")
+    assert control.isEnabled()
+
+    window.on_task_started()
+    assert not control.isEnabled()
+    window.on_task_finished(1)
+    assert control.isEnabled()
+
+    window.on_task_started()
+    assert not control.isEnabled()
+    window.show_task_error("测试启动失败")
+    assert control.isEnabled()
+
+    window._quitting = True
+    window.close()
+
+
+@pytest.mark.parametrize("failure_path", ["exit_code", "start_failure", "recheck_failure"])
+def test_desktop_gui_environment_failures_restore_data_source_control(
+    tmp_path,
+    monkeypatch,
+    failure_path,
+):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    import gui.main_window as main_window
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    control = window.data_mode_menu.data_source_control
+    control.setEnabled(False)
+
+    if failure_path == "exit_code":
+        window.on_environment_install_finished(7)
+    elif failure_path == "start_failure":
+        window.on_environment_install_failed("测试失败")
+    else:
+        monkeypatch.setattr(
+            main_window,
+            "run_environment_check",
+            lambda _root: {"passed": False, "checks": []},
+        )
+        window.on_environment_install_finished(0)
+
+    assert control.isEnabled()
+    assert not window.hourly_button.isEnabled()
+    assert not window.daily_button.isEnabled()
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_data_source_save_failure_rolls_back_without_sensitive_details(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    import gui.main_window as main_window
+    from modules.project_config import get_data_source_preference
+
+    _write_minimal_gui_project(tmp_path)
+    config_path = tmp_path / "configs" / "app_config.json"
+    original_disk = config_path.read_text(encoding="utf-8")
+    logs = []
+    monkeypatch.setattr(
+        main_window,
+        "save_data_source_preference",
+        lambda _root, _preference: (_ for _ in ()).throw(
+            OSError(r"D:\private\secrets.json token=do-not-log")
+        ),
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    window.append_log = logs.append
+    control = window.data_mode_menu.data_source_control
+    control.set_preference("browser", animate=False)
+
+    assert window.data_source_preference == "api"
+    assert control.preference() == "api"
+    assert control.api_button.isChecked()
+    assert get_data_source_preference(tmp_path) == "api"
+    assert config_path.read_text(encoding="utf-8") == original_disk
+    assert logs == ["[失败] 数据源设置未保存，已继续使用原设置。"]
+    assert "private" not in window.progress_text.text().lower()
+    assert "token" not in window.progress_text.text().lower()
+
+    window._quitting = True
+    window.close()
+
+
+def test_gui_visible_name_changes_without_renaming_update_assets(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.desktop_pet import ClawdDesktopPet
+    from gui.main_window import MainWindow
+    from gui.update_manager import APP_EXE_NAME, UPDATE_ASSET_PATTERN
+    from tools.build_desktop_exe import APP_NAME
+    from tools.build_release import DESKTOP_EXE, release_name
+
+    app = QApplication.instance() or QApplication([])
+    root = Path(__file__).resolve().parents[1]
+    window = MainWindow(root)
+    pet = ClawdDesktopPet(root, lambda: None, lambda _x, _y: None)
+
+    assert window.tray_icon.toolTip() == "蚁之力 · 竞价数据自动化"
+    assert "蚁之力 · 竞价数据自动化" in pet.toolTip()
+    assert APP_EXE_NAME == "百度数据自动化控制台.exe"
+    assert APP_NAME == "百度数据自动化控制台"
+    assert DESKTOP_EXE == APP_EXE_NAME
+    assert UPDATE_ASSET_PATTERN.fullmatch("baidu_data_automation_update_2026.7.17.103.zip")
+    assert release_name("2026.7.17.103", internal=True).startswith("hourly_report_bot_internal_")
+    assert release_name("2026.7.17.103") == "hourly_report_bot_release_v2026.7.17.103.zip"
+
+    pet.close_pet()
+    window._quitting = True
+    window.tray_icon.hide()
     window.close()
 
 
@@ -6102,7 +9221,7 @@ def test_desktop_gui_maximize_button_toggles_standard_and_maximized_states(monke
     window.toggle_maximize()
     app.processEvents()
     assert not window.isMaximized()
-    assert (window.width(), window.height()) == (960, 694)
+    assert (window.width(), window.height()) == (966, 700)
     assert window.maximize_button.toolTip() == "最大化"
     window._quitting = True
     window.close()
@@ -6234,6 +9353,7 @@ def test_desktop_gui_flow_uses_clawd_idle_and_dance_modes(monkeypatch):
 
 def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication
     from gui.main_window import MainWindow, MAIN_FONT_PT, SUB_FONT_PT
 
@@ -6244,10 +9364,14 @@ def test_desktop_gui_uses_small_five_global_font_and_smaller_subtext(monkeypatch
     assert SUB_FONT_PT == 8
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
+    assert window.font().family() == "Microsoft YaHei"
     assert window.title_label.font().family() == "Microsoft YaHei UI"
-    assert window.system_config_button.font().family() == "Microsoft YaHei UI"
+    assert window.title_label.font().weight() == QFont.Weight.DemiBold
+    assert window.system_config_button.font().family() == "Microsoft YaHei Light"
+    assert window.data_mode_button.font().family() == "Microsoft YaHei Light"
     assert window.log_view.font().family() in {"Consolas", "Cascadia Mono"}
     assert window.log_view.font().pointSize() == MAIN_FONT_PT
+    assert 'font-family: "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;' in window.styleSheet()
     assert 'font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
     assert "font-weight: 600" in window.styleSheet()
@@ -6266,7 +9390,8 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not hasattr(window, "excel_config_button")
     assert not hasattr(window, "credentials_config_button")
     assert window.system_config_button.text() == "系统配置"
-    assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize()
+    assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize() - 1
+    assert window.data_mode_button.font().pointSize() == window.system_config_button.font().pointSize()
     assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统配置") + 20
     assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
@@ -6663,11 +9788,147 @@ def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
     assert window.period_buttons[1].icon().isNull() is False
     window.show()
     app.processEvents()
-    assert len({button.width() for button in [window.hourly_button, *window.period_buttons]}) == 1
+    assert len({button.width() for button in [window.hourly_action_control, *window.period_buttons]}) == 1
     image = window.period_buttons[1].grab().toImage()
     check_color = image.pixelColor(window.period_buttons[1].width() - 17, 13)
     assert check_color.green() > check_color.red()
     window.close()
+
+
+def test_run_stop_split_control_uses_seventy_thirty_diagonal_geometry(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import RunStopSplitControl
+
+    app = QApplication.instance() or QApplication([])
+    control = RunStopSplitControl("运行小时报")
+    control.setFixedSize(160, 48)
+    control.show()
+    app.processEvents()
+
+    split_x = round(control.width() * 0.70)
+    assert abs(control.run_button.width() / control.width() - 0.70) <= 0.03
+    assert control.stop_button.x() == split_x - 2
+    assert control.stop_button.y() == 2
+    assert control.stop_button.text() == "停止"
+    assert control.stop_button.icon().isNull()
+    assert not control.stop_button.isEnabled()
+    assert control.diagonal_gap_width == 2
+    control.close()
+
+
+def test_desktop_gui_safe_stop_is_available_only_before_excel(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    from modules.task_stop_gate import (
+        STOP_GATE_ENV,
+        TASK_CANCELLED_EXIT_CODE,
+        claim_excel_write,
+        read_task_stop_decision,
+    )
+
+    starts = []
+    window.runner.start = lambda command, root, extra_env=None: starts.append((command, root, extra_env))
+    window.runner.is_running = lambda: True
+
+    assert not window.hourly_stop_button.isEnabled()
+    assert not window.daily_stop_button.isEnabled()
+
+    window.run_hourly()
+    hourly_gate = Path(starts[-1][2][STOP_GATE_ENV])
+    window.on_task_started()
+    assert window.hourly_stop_button.isEnabled()
+    assert not window.daily_stop_button.isEnabled()
+
+    window.stop_current_task()
+    assert read_task_stop_decision(hourly_gate) == "cancel"
+    assert not window.hourly_stop_button.isEnabled()
+    assert window._task_stop_requested is True
+
+    opened = []
+    window.open_current_project_excel = lambda: opened.append(True)
+    window.on_task_finished(TASK_CANCELLED_EXIT_CODE)
+    assert window.current_status_badge.text() == "已停止"
+    assert window.progress_text.text() == "任务已停止，未继续写入 Excel。"
+    assert opened == []
+    assert window.hourly_button.isEnabled()
+    assert not window.hourly_stop_button.isEnabled()
+
+    window.run_daily()
+    daily_gate = Path(starts[-1][2][STOP_GATE_ENV])
+    window.on_task_started()
+    assert window.daily_stop_button.isEnabled()
+    assert claim_excel_write(daily_gate) is True
+    window.mark_stage("excel")
+    assert not window.daily_stop_button.isEnabled()
+    window.stop_current_task()
+    assert read_task_stop_decision(daily_gate) == "excel"
+    window.on_task_finished(0)
+    assert window.current_status_badge.text() == "已完成"
+    assert opened == [True]
+
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_non_report_task_never_enables_stop(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    window.runner.start = lambda _command, _root: None
+
+    window.run_environment_preflight()
+    window.on_task_started()
+
+    assert not window.hourly_stop_button.isEnabled()
+    assert not window.daily_stop_button.isEnabled()
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_defers_application_exit_while_task_is_running(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    running = {"value": True}
+    window.runner.is_running = lambda: running["value"]
+
+    window.exit_application()
+
+    assert window._quitting is False
+    assert window._quit_after_task is True
+    running["value"] = False
+    window.exit_application()
+    assert window._quitting is True
+
+
+def test_qt_task_runner_killed_process_is_not_reported_as_start_failure():
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import QProcess
+    from gui.task_runner import QtTaskRunner
+
+    messages = []
+    runner = SimpleNamespace(failed_to_start=SimpleNamespace(emit=messages.append))
+
+    QtTaskRunner._handle_error(runner, QProcess.ProcessError.Crashed)
+    assert messages == []
+
+    QtTaskRunner._handle_error(runner, QProcess.ProcessError.FailedToStart)
+    assert len(messages) == 1
 
 
 def test_desktop_gui_current_flow_updates_for_hourly_and_daily(monkeypatch):
@@ -6677,7 +9938,7 @@ def test_desktop_gui_current_flow_updates_for_hourly_and_daily(monkeypatch):
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
-    window.runner.start = lambda command, root: None
+    window.runner.start = lambda command, root, extra_env=None: None
 
     window.period_buttons[0].setChecked(True)
     window.update_period_button_texts()
@@ -6706,7 +9967,7 @@ def test_desktop_gui_opens_project_excel_after_success(monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
     window.open_path = lambda path: opened.append(path)
-    window.runner.start = lambda command, root: None
+    window.runner.start = lambda command, root, extra_env=None: None
 
     window.run_hourly()
     window.on_task_finished(0)
@@ -6860,14 +10121,14 @@ def test_desktop_window_entry_runs_first_startup_directory_initialization(tmp_pa
 def test_online_update_selects_newer_github_release_asset():
     from gui.update_manager import CURRENT_VERSION, parse_version, select_release_update
 
-    assert CURRENT_VERSION == "2026.7.15.101"
-    assert parse_version("v2026.7.15.101") == (2026, 7, 15, 101)
+    assert CURRENT_VERSION == "2026.7.19.104"
+    assert parse_version("v2026.7.19.104") == (2026, 7, 19, 104)
     payload = {
-        "tag_name": "v2026.7.15.102",
+        "tag_name": "v2026.7.19.105",
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "baidu_data_automation_update_2026.7.15.102.zip",
+                "name": "baidu_data_automation_update_2026.7.19.105.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -6878,10 +10139,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.15.102"
+    assert update.version == "2026.7.19.105"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.15.102") is None
+    assert select_release_update(payload, "2026.7.19.105") is None
 
 
 def test_online_update_archive_rejects_path_traversal(tmp_path):
@@ -6991,15 +10252,157 @@ def test_desktop_gui_task_runner_infers_progress_stages():
     assert infer_stage("parse-kst-export completed") == "kst"
     assert infer_stage("Excel 写入完成") == "excel"
     assert infer_stage("[ERROR] Preflight failed") == "error"
+    assert infer_stage("[API] 正在读取百度数据") == "baidu"
+    assert infer_stage("[降级] API 读取仍未完成，准备切换浏览器") == "baidu"
+    assert infer_stage("[浏览器] 正在启动浏览器降级流程") == "login"
+    assert infer_stage("[实际来源] API") == "baidu"
     assert infer_pet_event("已填写百度登录字段：username") == "login"
     assert infer_pet_event("顶部用户名已匹配项目账号") == "login_ready"
     assert infer_pet_event("[1/4] 读取百度搜索推广数据") == "baidu"
     assert infer_pet_event("百度日报表格数据已稳定") == "baidu_ready"
+    assert infer_pet_event("[API] 正在读取项目账户数据") == "baidu"
+    assert infer_pet_event("[API] 百度数据读取完成") == "baidu_ready"
+    assert infer_pet_event("[浏览器] 正在启动浏览器降级流程") == "login"
+    assert infer_pet_event("[实际来源] API") == "baidu_ready"
     assert infer_pet_event("[2/4] 解析快商通导出文件") == "kst"
     assert infer_pet_event("[3/4] 合并百度与快商通数据") == "merge"
     assert infer_pet_event("[4/4] 写入 Excel 并复核") == "excel"
     assert infer_pet_event("[失败] 百度数据读取异常") == "failed"
     assert infer_pet_event("百度数据读取未通过") == "failed"
+
+
+def test_api_routing_log_safe_api_fallback_transitions(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    class Logger:
+        def __init__(self):
+            self.messages = []
+
+        def _record(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+        info = _record
+        warning = _record
+
+    logger = Logger()
+    result = fetch_baidu_resilient_hourly(
+        {
+            "project_id": "demo",
+            "project_name": "示例项目",
+            "baidu": {"data_source_mode": "api_preferred"},
+        },
+        tmp_path,
+        logger,
+        "15点",
+        api_fetcher=lambda **_kwargs: (_ for _ in ()).throw(
+            BaiduReportApiError(
+                "https://api.example.invalid/?accessToken=do-not-log",
+                category="network_error",
+            )
+        ),
+        browser_fetcher=lambda **_kwargs: _route_report("baidu_auto_overview"),
+        sleep=lambda _seconds: None,
+    )
+
+    text = "\n".join(logger.messages)
+    assert result["data_source"] == "browser_fallback"
+    assert "[数据源] 当前模式：API 优先" in text
+    assert "[API] 正在读取示例项目百度数据" in text
+    assert "[降级] API 读取仍未完成，准备切换浏览器：network_error" in text
+    assert "[浏览器] 正在启动浏览器降级流程" in text
+    assert "[实际来源] 浏览器降级" in text
+    assert "accessToken" not in text
+    assert "https://" not in text
+
+
+def test_api_routing_log_sanitizes_unrecognized_api_failure_category(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+    from modules.baidu_report_api import BaiduReportApiError
+
+    class Logger:
+        def __init__(self):
+            self.messages = []
+
+        def warning(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+        def info(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+    logger = Logger()
+    fetch_baidu_resilient_hourly(
+        {"baidu": {"data_source_mode": "api_preferred"}},
+        tmp_path,
+        logger,
+        "15点",
+        api_fetcher=lambda **_kwargs: (_ for _ in ()).throw(
+            BaiduReportApiError("请求失败", category="https://api.example.invalid/?token=do-not-log")
+        ),
+        browser_fetcher=lambda **_kwargs: _route_report("baidu_auto_overview"),
+    )
+
+    text = "\n".join(logger.messages)
+    assert "[降级] API 读取仍未完成，准备切换浏览器：api_error" in text
+    assert "https://" not in text
+    assert "token=" not in text
+
+
+def test_task4_attempt_report_redacts_sensitive_exception_message(tmp_path):
+    from modules.baidu_report_api import _write_attempt_report
+
+    _write_attempt_report(
+        tmp_path,
+        config={"project_id": "demo", "project_name": "示例项目"},
+        selected_date="2026-07-17",
+        period="15点",
+        category="network_error",
+        message=(
+            "https://api.example.invalid/?accessToken=secret-token&refreshToken=refresh-token"
+            "&token=token-value&secret=secret-value&password=password-value&header=X-Api-Key"
+        ),
+    )
+
+    attempt = json.loads((tmp_path / "reports" / "baidu_api_attempt_report.json").read_text("utf-8"))
+    serialized = json.dumps(attempt, ensure_ascii=False)
+    assert attempt["error_category"] == "network_error"
+    assert attempt["errors"] == ["百度 API 网络请求失败，请稍后重试"]
+    for sensitive in ("https://", "accessToken", "refreshToken", "token=", "secret", "password", "header", "X-Api-Key"):
+        assert sensitive not in serialized
+
+
+def test_api_routing_log_multi_source_api_success_logs_each_source_and_actual_source(tmp_path):
+    from modules.baidu_data_source import fetch_baidu_resilient_hourly
+
+    class Logger:
+        def __init__(self):
+            self.messages = []
+
+        def info(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+    logger = Logger()
+
+    result = fetch_baidu_resilient_hourly(
+        _two_source_route_config(),
+        tmp_path,
+        logger,
+        "15点",
+        api_fetcher=lambda *, config, **_kwargs: {
+            "accounts": {
+                next(iter(config["accounts"])): {"展现": 1, "点击": 1, "消费": 1.0}
+            },
+            "errors": [],
+        },
+        browser_fetcher=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("不应降级浏览器")),
+        sleep=lambda _seconds: None,
+    )
+
+    text = "\n".join(logger.messages)
+    assert result["data_source"] == "api"
+    assert "[API 1/2]" in text
+    assert "[API 2/2]" in text
+    assert "[实际来源] API" in text
 
 
 def test_desktop_pet_settings_default_to_clawd_and_persist_hidden(tmp_path):
@@ -7389,6 +10792,32 @@ def test_desktop_gui_app_icon_assets_and_build_icon_are_configured():
     assert "app_icon.ico" in build_script
     assert "--onefile" in build_script
     assert "--windowed" in build_script
+
+    from PySide6.QtGui import QImage
+
+    image = QImage(str(source))
+    assert not image.isNull()
+    corner = image.pixelColor(max(1, image.width() // 32), max(1, image.height() // 32))
+    assert corner.alpha() == 255
+    assert min(corner.red(), corner.green(), corner.blue()) >= 225
+
+
+def test_desktop_gui_windows_app_id_changes_when_icon_changes(tmp_path):
+    from gui.app import windows_app_user_model_id
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    icon = assets / "app_icon.ico"
+    icon.write_bytes(b"first-icon")
+    first_id = windows_app_user_model_id(tmp_path)
+
+    icon.write_bytes(b"second-icon")
+    second_id = windows_app_user_model_id(tmp_path)
+
+    assert first_id.startswith("BaiduDataAutomation.Console.")
+    assert first_id != second_id
+    source = (Path(__file__).resolve().parents[1] / "gui" / "app.py").read_text(encoding="utf-8")
+    assert source.index("configure_windows_app_identity(root)") < source.index("QApplication(sys.argv)")
 
 
 def test_clawd_animator_uses_reference_geometry_and_six_phase_loop():
@@ -9604,6 +13033,35 @@ def test_shenyang_niu_config_resolves_two_baidu_sources():
     assert sources[1]["accounts"][2]["baidu_names"] == ["沈阳银康银屑病3"]
 
 
+def test_shenyang_bai_config_has_verified_dual_source_mappings_and_example_profiles():
+    from modules.project_config import load_project_config
+
+    root = Path(__file__).resolve().parents[1]
+    project = load_project_config(root, "shenyang_bai")
+    sources = project["baidu_sources"]
+
+    assert [source["source_id"] for source in sources] == [
+        "shenyang_bai_source_a",
+        "shenyang_bai_source_b",
+    ]
+    assert [account["standard_name"] for account in project["accounts"]] == [
+        "沈阳中亚白癜风1",
+        "中亚白癜风3",
+        "中亚白癜风5",
+        "沈阳银康银屑病6",
+    ]
+    assert [account["kst_ids"] for account in sources[0]["accounts"]] == [
+        ["36607542"],
+        ["51639657"],
+        ["54566968"],
+    ]
+    assert [account["kst_ids"] for account in sources[1]["accounts"]] == [["69976114"]]
+
+    example = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
+    for profile in ["shenyang_bai_source_a_baidu", "shenyang_bai_source_b_baidu"]:
+        assert example["baidu"][profile] == {"username": "", "password": ""}
+
+
 def test_retired_hefei_bai_project_and_example_profiles_are_absent():
     root = Path(__file__).resolve().parents[1]
     data = json.loads((root / "secrets" / "secrets.example.json").read_text(encoding="utf-8"))
@@ -9816,6 +13274,50 @@ def test_doctor_baidu_source_detail_marks_candidate_only_accounts_for_shenyang()
     assert report["passed"] is True
     assert report["detail"]["excel_accounts"] == ["沈阳中亚02", "沈阳银康01", "沈阳中亚01"]
     assert report["detail"]["candidate_only_accounts"] == ["沈阳中亚03", "沈阳银康02", "沈阳银康03"]
+
+
+@pytest.mark.parametrize(
+    ("task", "config_key", "filename", "output_key"),
+    [
+        ("hourly", "output_path", "staged_hourly.json", "account_data"),
+        ("daily", "daily_output_path", "staged_daily.json", "daily_data"),
+    ],
+)
+def test_baidu_multi_source_respects_configured_unified_output_path(
+    tmp_path, task, config_key, filename, output_key
+):
+    import logging
+    from copy import deepcopy
+
+    from modules.baidu_multi_source import fetch_baidu_multi_source
+
+    config = deepcopy(_two_source_route_config())
+    config["baidu"][config_key] = f"reports/{filename}"
+
+    def fake_fetch(*, config, **_kwargs):
+        account = next(iter(config["accounts"]))
+        return {
+            "date": "2026-07-16",
+            "accounts": {account: {"展现": 1, "点击": 1, "消费": 1.0}},
+            "errors": [],
+        }
+
+    report = fetch_baidu_multi_source(
+        config,
+        tmp_path,
+        logging.getLogger("configured-multi-output"),
+        period="18点",
+        fetch_source_func=fake_fetch,
+        task=task,
+        target_date="2026-07-16" if task == "daily" else None,
+    )
+
+    expected = tmp_path / "reports" / filename
+    canonical_name = "baidu_daily_data.json" if task == "daily" else "baidu_account_data.json"
+    assert report["errors"] == []
+    assert expected.exists()
+    assert report["outputs"][output_key] == str(expected)
+    assert not (tmp_path / "reports" / canonical_name).exists()
 
 
 def test_baidu_multi_source_writes_human_readable_markdown_report(tmp_path):
@@ -10487,3 +13989,460 @@ def test_inspector_and_writer_share_global_date_period_field_locations(tmp_path)
     assert verify_ws["F8"].value == 101
     assert verify_ws["M8"].value == 202
     assert verify_ws["T8"].value == 303
+
+
+_API_READINESS_SINGLE_PROFILES = {
+    "changsha_niu": "changsha_niu_baidu",
+    "kunming_niu": "kunming_niu_baidu",
+    "nanjing_bai": "nanjing_bai_baidu",
+    "nanjing_niu": "nanjing_niu_baidu",
+    "ningbo_niu": "ningbo_niu_baidu",
+    "qingdao_bai": "qingdao_bai_baidu",
+    "shenzhen_bai": "shenzhen_bai_baidu",
+}
+_API_READINESS_MULTI_PROFILES = {
+    "shenyang_bai": [
+        ("source_a", "沈阳白来源A", "shenyang_bai_source_a_baidu"),
+        ("source_b", "沈阳白来源B", "shenyang_bai_source_b_baidu"),
+    ],
+    "shenyang_niu": [
+        ("zhongya", "沈阳牛中亚来源", "shenyang_niu_zhongya_baidu"),
+        ("yinkang", "沈阳牛银康来源", "shenyang_niu_yinkang_baidu"),
+    ],
+}
+
+
+def _api_readiness_inventory():
+    from copy import deepcopy
+
+    projects = {}
+    for project_id, profile_id in _API_READINESS_SINGLE_PROFILES.items():
+        account_name = f"{project_id}_account"
+        projects[project_id] = {
+            "project_id": project_id,
+            "project_name": project_id,
+            "baidu": {
+                "api_profile": profile_id,
+                "credential_profile": f"{project_id}_credential",
+            },
+            "accounts": {
+                account_name: {
+                    "baidu_name": account_name,
+                    "baidu_names": [account_name],
+                    "excel_name": account_name,
+                }
+            },
+        }
+    for project_id, sources in _API_READINESS_MULTI_PROFILES.items():
+        source_configs = []
+        for index, (source_id, source_name, profile_id) in enumerate(sources, start=1):
+            account_name = f"{project_id}_account_{index}"
+            source_configs.append(
+                {
+                    "source_id": source_id,
+                    "source_name": source_name,
+                    "credential_profile": f"{project_id}_credential_{index}",
+                    "api_profile": profile_id,
+                    "accounts": [
+                        {
+                            "standard_name": account_name,
+                            "baidu_names": [account_name],
+                            "excel_name": account_name,
+                        }
+                    ],
+                }
+            )
+        projects[project_id] = {
+            "project_id": project_id,
+            "project_name": project_id,
+            "baidu": {},
+            "accounts": {},
+            "baidu_sources": source_configs,
+        }
+    return deepcopy(projects)
+
+
+def _install_api_readiness_inventory(monkeypatch, readiness, projects):
+    from copy import deepcopy
+
+    monkeypatch.setattr(
+        readiness,
+        "list_projects",
+        lambda _root: [
+            {
+                "project_id": project_id,
+                "project_name": str(project.get("project_name") or project_id),
+                "path": f"configs/projects/{project_id}.json",
+            }
+            for project_id, project in sorted(projects.items())
+        ],
+    )
+    monkeypatch.setattr(
+        readiness,
+        "load_project_config",
+        lambda _root, project_id: deepcopy(projects[project_id]),
+    )
+    monkeypatch.setattr(
+        readiness,
+        "build_runtime_config_from_project",
+        lambda project, _base: deepcopy(project),
+    )
+    monkeypatch.setattr(readiness, "load_config", lambda *_args, **_kwargs: {})
+
+
+def test_api_readiness_checks_nine_projects_and_eleven_independent_profiles(tmp_path, monkeypatch):
+    import logging
+    from modules import baidu_api_readiness as readiness
+
+    projects = _api_readiness_inventory()
+    _install_api_readiness_inventory(monkeypatch, readiness, projects)
+    calls = []
+
+    def fetch_func(**kwargs):
+        config = kwargs["config"]
+        calls.append(kwargs)
+        assert kwargs["root"] == tmp_path
+        assert kwargs["commit_standard_report"] is False
+        assert kwargs["commit_attempt_report"] is False
+        assert kwargs["target_date"] == "2026-07-16"
+        assert kwargs["period"] == "15点"
+        return {"accounts": dict(config["accounts"]), "errors": []}
+
+    report = readiness.run_baidu_api_readiness(
+        tmp_path,
+        logging.getLogger("api-readiness"),
+        fetch_func=fetch_func,
+        target_date="2026-07-16",
+        period="15点",
+    )
+
+    expected_profiles = set(_API_READINESS_SINGLE_PROFILES.values()) | {
+        profile_id
+        for sources in _API_READINESS_MULTI_PROFILES.values()
+        for _source_id, _source_name, profile_id in sources
+    }
+    assert report["passed"] is True
+    assert report["project_count"] == 9
+    assert report["profile_count"] == 11
+    assert report["unique_profile_count"] == 11
+    assert {item["api_profile"] for item in report["results"]} == expected_profiles
+    assert len(calls) == 11
+    assert len({id(call["task_context"]) for call in calls}) == 11
+    assert all(item["passed"] for item in report["results"])
+    assert all(item["account_count"] == 1 for item in report["results"])
+    output = tmp_path / "reports" / "baidu_api_readiness_report.json"
+    assert json.loads(output.read_text(encoding="utf-8")) == report
+    assert not output.with_suffix(output.suffix + ".tmp").exists()
+
+
+def test_api_readiness_continues_after_failures_and_never_serializes_raw_errors(tmp_path, monkeypatch):
+    from modules import baidu_api_readiness as readiness
+    from modules.baidu_report_api import BaiduReportApiError
+
+    class CapturingLogger:
+        def __init__(self):
+            self.messages = []
+
+        def info(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+        def warning(self, message, *args):
+            self.messages.append(message % args if args else message)
+
+    projects = _api_readiness_inventory()
+    _install_api_readiness_inventory(monkeypatch, readiness, projects)
+    seen = []
+
+    def fetch_func(**kwargs):
+        profile_id = kwargs["config"]["baidu"]["api_profile"]
+        seen.append(profile_id)
+        if profile_id == "changsha_niu_baidu":
+            raise BaiduReportApiError(
+                "https://private.example/?token=header.payload.signature&secretKey=do-not-write"
+                "&password=do-not-write&header=X-Api-Key",
+                category="authorization_error",
+            )
+        if profile_id == "kunming_niu_baidu":
+            raise RuntimeError("https://private.example/callback?access_token=do-not-write")
+        return {"accounts": dict(kwargs["config"]["accounts"]), "errors": []}
+
+    logger = CapturingLogger()
+    report = readiness.run_baidu_api_readiness(
+        tmp_path,
+        logger,
+        fetch_func=fetch_func,
+        target_date="2026-07-16",
+        period="18点",
+    )
+
+    assert len(seen) == 11
+    assert report["passed"] is False
+    failed = {item["api_profile"]: item for item in report["results"] if not item["passed"]}
+    assert failed["changsha_niu_baidu"]["error_category"] == "authorization_error"
+    assert failed["kunming_niu_baidu"]["error_category"] == "api_error"
+    serialized = json.dumps(report, ensure_ascii=False)
+    logged = "\n".join(logger.messages)
+    for forbidden in [
+        "https://",
+        "header.payload.signature",
+        "do-not-write",
+        "private.example",
+        "access_token",
+        "secretKey",
+        "password=",
+        "X-Api-Key",
+    ]:
+        assert forbidden not in serialized
+        assert forbidden not in logged
+
+
+@pytest.mark.parametrize(
+    "invalid_shape",
+    ["not_dict", "empty_accounts", "missing_errors", "errors_not_list", "missing_account", "extra_account", "wrong_account_name"],
+)
+def test_api_readiness_rejects_incomplete_or_mismatched_fetch_reports(tmp_path, monkeypatch, invalid_shape):
+    import logging
+    from modules import baidu_api_readiness as readiness
+
+    projects = _api_readiness_inventory()
+    projects["changsha_niu"]["accounts"]["changsha_niu_account_2"] = {
+        "baidu_name": "changsha_niu_account_2",
+        "baidu_names": ["changsha_niu_account_2"],
+        "excel_name": "changsha_niu_account_2",
+    }
+    _install_api_readiness_inventory(monkeypatch, readiness, projects)
+
+    def fetch_func(**kwargs):
+        expected = dict(kwargs["config"]["accounts"])
+        if kwargs["config"]["baidu"]["api_profile"] != "changsha_niu_baidu":
+            return {"accounts": expected, "errors": []}
+        if invalid_shape == "not_dict":
+            return []
+        if invalid_shape == "empty_accounts":
+            return {"accounts": {}, "errors": []}
+        if invalid_shape == "missing_errors":
+            return {"accounts": expected}
+        if invalid_shape == "errors_not_list":
+            return {"accounts": expected, "errors": None}
+        if invalid_shape == "missing_account":
+            expected.pop(next(iter(expected)))
+        elif invalid_shape == "extra_account":
+            expected["unexpected_account"] = {}
+        else:
+            expected.pop(next(iter(expected)))
+            expected["wrong_account_name"] = {}
+        return {"accounts": expected, "errors": []}
+
+    report = readiness.run_baidu_api_readiness(
+        tmp_path,
+        logging.getLogger("api-readiness-shape"),
+        fetch_func=fetch_func,
+        target_date="2026-07-16",
+    )
+
+    target = next(
+        item for item in report["results"] if item["api_profile"] == "changsha_niu_baidu"
+    )
+    assert report["passed"] is False
+    assert target["passed"] is False
+    assert target["error_category"] == "integrity_error"
+    assert target["account_count"] == 0
+
+
+@pytest.mark.parametrize("fetcher_name", ["hourly", "daily"])
+def test_api_readiness_production_fetcher_can_suppress_attempt_report(tmp_path, fetcher_name):
+    import logging
+    from modules.baidu_report_api import (
+        BaiduReportApiError,
+        fetch_baidu_api_daily,
+        fetch_baidu_api_hourly,
+    )
+
+    config = _api_production_config(tmp_path)
+    fetcher = fetch_baidu_api_hourly if fetcher_name == "hourly" else fetch_baidu_api_daily
+    kwargs = {
+        "config": config,
+        "root": tmp_path,
+        "logger": logging.getLogger(f"api-readiness-no-attempt-{fetcher_name}"),
+        "target_date": "2026-07-16",
+        "token_provider": lambda *_args, **_kwargs: ("header.payload.signature", {}),
+        "transport": lambda *_args: (_ for _ in ()).throw(
+            BaiduReportApiError("token=do-not-write", category="network_error")
+        ),
+        "commit_standard_report": False,
+        "commit_attempt_report": False,
+    }
+    if fetcher_name == "hourly":
+        kwargs["period"] = "15点"
+
+    with pytest.raises(BaiduReportApiError):
+        fetcher(**kwargs)
+
+    assert not (tmp_path / "reports" / "baidu_api_attempt_report.json").exists()
+
+
+def test_api_readiness_real_production_failure_does_not_create_attempt_report(tmp_path, monkeypatch):
+    import logging
+    import modules.baidu_report_api as report_api
+    from modules import baidu_api_readiness as readiness
+
+    projects = _api_readiness_inventory()
+    _install_api_readiness_inventory(monkeypatch, readiness, projects)
+    monkeypatch.setattr(
+        report_api,
+        "_load_api_identity",
+        lambda _root, config: ("manager", config["baidu"]["api_profile"], {}),
+    )
+    monkeypatch.setattr(
+        report_api,
+        "_account_user_ids",
+        lambda config: ([1], {1: next(iter(config["accounts"]))}),
+    )
+    attempt_flags = []
+
+    def production_fetcher(**kwargs):
+        attempt_flags.append(kwargs.get("commit_attempt_report", "missing"))
+        return report_api.fetch_baidu_api_hourly(
+            **kwargs,
+            token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+            transport=lambda *_args: (_ for _ in ()).throw(
+                report_api.BaiduReportApiError(
+                    "https://private.example/?token=do-not-write",
+                    category="network_error",
+                )
+            ),
+        )
+
+    report = readiness.run_baidu_api_readiness(
+        tmp_path,
+        logging.getLogger("api-readiness-real-production"),
+        fetch_func=production_fetcher,
+        target_date="2026-07-16",
+    )
+
+    assert report["passed"] is False
+    assert attempt_flags == [False] * 11
+    assert not (tmp_path / "reports" / "baidu_api_attempt_report.json").exists()
+
+
+def test_api_readiness_production_fetcher_keeps_attempt_report_enabled_by_default(tmp_path):
+    import logging
+    from modules.baidu_report_api import BaiduReportApiError, fetch_baidu_api_hourly
+
+    config = _api_production_config(tmp_path)
+    with pytest.raises(BaiduReportApiError):
+        fetch_baidu_api_hourly(
+            config,
+            tmp_path,
+            logging.getLogger("api-readiness-default-attempt"),
+            "15点",
+            target_date="2026-07-16",
+            token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+            transport=lambda *_args: (_ for _ in ()).throw(
+                BaiduReportApiError("token=do-not-write", category="network_error")
+            ),
+            commit_standard_report=False,
+        )
+
+    attempt_path = tmp_path / "reports" / "baidu_api_attempt_report.json"
+    assert attempt_path.exists()
+    attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+    assert attempt["error_category"] == "network_error"
+    assert "do-not-write" not in json.dumps(attempt, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("inventory_case", ["missing_project", "extra_project", "missing_profile", "duplicate_profile", "extra_profile"])
+def test_api_readiness_rejects_invalid_production_inventory_before_network_calls(tmp_path, monkeypatch, inventory_case):
+    import logging
+    from copy import deepcopy
+    from modules import baidu_api_readiness as readiness
+
+    projects = _api_readiness_inventory()
+    if inventory_case == "missing_project":
+        projects.pop("nanjing_bai")
+    elif inventory_case == "extra_project":
+        extra = deepcopy(projects["nanjing_bai"])
+        extra["project_id"] = "unexpected_project"
+        extra["project_name"] = "unexpected_project"
+        extra["baidu"]["api_profile"] = "unexpected_project_baidu"
+        projects["unexpected_project"] = extra
+    elif inventory_case == "missing_profile":
+        projects["nanjing_bai"]["baidu"]["api_profile"] = ""
+    elif inventory_case == "duplicate_profile":
+        projects["nanjing_bai"]["baidu"]["api_profile"] = projects["nanjing_niu"]["baidu"]["api_profile"]
+    else:
+        projects["shenyang_bai"]["baidu_sources"].append(
+            {
+                "source_id": "unexpected",
+                "source_name": "unexpected",
+                "credential_profile": "unexpected",
+                "api_profile": "unexpected_profile",
+                "accounts": [{"standard_name": "unexpected", "baidu_names": ["unexpected"], "excel_name": "unexpected"}],
+            }
+        )
+    _install_api_readiness_inventory(monkeypatch, readiness, projects)
+    calls = []
+
+    report = readiness.run_baidu_api_readiness(
+        tmp_path,
+        logging.getLogger("api-readiness-inventory"),
+        fetch_func=lambda **kwargs: calls.append(kwargs) or {"accounts": {}, "errors": []},
+        target_date="2026-07-16",
+    )
+
+    assert report["passed"] is False
+    assert calls == []
+    assert report["inventory_errors"]
+    assert all(item["error_category"] == "configuration_error" for item in report["inventory_errors"])
+
+
+@pytest.mark.parametrize("passed, expected_code", [(True, 0), (False, 1)])
+def test_api_readiness_cli_bypasses_current_project_and_returns_report_status(tmp_path, monkeypatch, passed, expected_code):
+    import main as cli_main
+
+    calls = []
+    monkeypatch.setattr(cli_main, "ROOT", tmp_path)
+    monkeypatch.setattr(cli_main, "load_config", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应加载默认运行配置")))
+    monkeypatch.setattr(cli_main, "get_current_project", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应加载当前项目")))
+    monkeypatch.setattr(
+        cli_main,
+        "run_baidu_api_readiness",
+        lambda root, logger, **kwargs: calls.append((root, kwargs)) or {"passed": passed},
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["main.py", "--mode", "test-baidu-api-readiness", "--date", "2026-07-16", "--period", "18点"],
+    )
+
+    result = cli_main.main()
+
+    assert result == expected_code
+    assert calls == [(tmp_path, {"target_date": "2026-07-16", "period": "18点"})]
+
+
+def test_api_readiness_hourly_reader_accepts_explicit_safe_target_date(tmp_path):
+    import logging
+    from modules.baidu_report_api import fetch_baidu_api_hourly
+
+    config = _api_production_config(tmp_path)
+    seen_dates = []
+
+    def transport(_url, payload, _timeout):
+        selected_date = payload["body"]["startDate"]
+        seen_dates.append(selected_date)
+        return _api_success_response(selected_date)
+
+    report = fetch_baidu_api_hourly(
+        config,
+        tmp_path,
+        logging.getLogger("api-readiness-explicit-date"),
+        "15点",
+        token_provider=lambda *_args, **_kwargs: ("header.payload.signature", {}),
+        transport=transport,
+        commit_standard_report=False,
+        target_date="2026-07-16",
+    )
+
+    assert seen_dates == ["2026-07-16"]
+    assert report["date"] == "2026-07-16"
+    assert report["self_check"]["production_output_replaced"] is False

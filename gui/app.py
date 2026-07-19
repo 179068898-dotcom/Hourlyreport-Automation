@@ -1,40 +1,97 @@
 from __future__ import annotations
 
+import ctypes
+import hashlib
 import os
 import sys
 from pathlib import Path
 
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QMessageBox
 
+from gui.branding import PRODUCT_DISPLAY_NAME
 from gui.main_window import create_window
 from gui.single_instance import SingleInstanceGuard
 
 
 GUI_SCALE_FACTOR = "1.0"
+WINDOWS_APP_ID_PREFIX = "BaiduDataAutomation.Console"
 
 
-def resolve_app_root() -> Path:
-    candidates: list[Path] = []
-    candidates.append(Path.cwd())
+class IncompleteInstallationError(RuntimeError):
+    """Raised when the GUI is launched without its required companion files."""
+
+
+def _app_root_candidates() -> list[Path]:
+    candidates = [Path.cwd()]
     if getattr(sys, "frozen", False):
-        candidates.append(Path(sys.executable).resolve().parent)
-        candidates.append(Path(sys.executable).resolve().parent.parent)
+        executable_dir = Path(sys.executable).resolve().parent
+        candidates.extend([executable_dir, executable_dir.parent])
     candidates.append(Path(__file__).resolve().parents[1])
+    return candidates
 
-    for base in candidates:
+
+def resolve_app_root(candidates: list[Path] | None = None) -> Path:
+    search_candidates = list(candidates) if candidates is not None else _app_root_candidates()
+
+    for base in search_candidates:
         for path in [base, *base.parents]:
-            if (path / "main.py").exists() and (path / "configs").exists():
+            if (
+                (path / "main.py").is_file()
+                and (path / "configs" / "app_config.json").is_file()
+                and (path / "configs" / "projects").is_dir()
+            ):
                 return path
-    return candidates[0]
+
+    if any("baidu_data_automation_update_" in path.name.lower() for path in search_candidates):
+        raise IncompleteInstallationError(
+            "当前目录是在线更新包，不能单独用于新电脑首次安装。请改用首次安装包完整解压后再运行。"
+        )
+    raise IncompleteInstallationError(
+        "程序文件不完整，缺少应用或项目配置。请重新完整解压首次安装包后再运行。"
+    )
+
+
+def show_startup_error(message: str) -> None:
+    os.environ["QT_SCALE_FACTOR"] = GUI_SCALE_FACTOR
+    app = QApplication.instance() or QApplication(list(sys.argv))
+    QMessageBox.critical(None, f"无法启动{PRODUCT_DISPLAY_NAME}", message)
+    app.quit()
+
+
+def windows_app_user_model_id(root: str | Path) -> str:
+    root_path = Path(root)
+    icon = root_path / "assets" / "app_icon.ico"
+    if not icon.exists():
+        icon = root_path / "assets" / "app_icon.png"
+    icon_bytes = icon.read_bytes() if icon.exists() else b"default-icon"
+    digest = hashlib.sha256(icon_bytes).hexdigest()[:12]
+    return f"{WINDOWS_APP_ID_PREFIX}.{digest}"
+
+
+def configure_windows_app_identity(root: str | Path) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        setter = ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID
+        setter.argtypes = [ctypes.c_wchar_p]
+        setter.restype = ctypes.c_long
+        return setter(windows_app_user_model_id(root)) == 0
+    except (AttributeError, OSError):
+        return False
 
 
 def main() -> int:
-    root = resolve_app_root()
+    try:
+        root = resolve_app_root()
+    except IncompleteInstallationError as exc:
+        show_startup_error(str(exc))
+        return 2
     os.environ["QT_SCALE_FACTOR"] = GUI_SCALE_FACTOR
+    configure_windows_app_identity(root)
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
-    app.setApplicationName("百度数据自动化控制台")
+    app.setApplicationName(PRODUCT_DISPLAY_NAME)
     instance_guard = SingleInstanceGuard()
     if not instance_guard.acquire():
         instance_guard.notify_existing()

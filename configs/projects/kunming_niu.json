@@ -15,6 +15,7 @@
   "baidu": {
     "credential_profile": "kunming_niu_baidu",
     "api_profile": "kunming_niu_baidu",
+    "data_source_mode": "api_shadow",
     "data_path": [
       "首页",
       "数据报告",

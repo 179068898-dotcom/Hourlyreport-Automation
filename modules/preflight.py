@@ -28,6 +28,83 @@ def _profiles_for_config(config: dict[str, Any]) -> list[str]:
     return profiles
 
 
+def _api_profiles_for_config(config: dict[str, Any]) -> list[str]:
+    sources = config.get("baidu_sources") or []
+    if sources:
+        return list(dict.fromkeys(
+            str(source.get("api_profile") or "").strip()
+            for source in sources
+            if isinstance(source, dict) and str(source.get("api_profile") or "").strip()
+        ))
+    profile = str(config.get("baidu", {}).get("api_profile") or "").strip()
+    return [profile] if profile else []
+
+
+def _missing_source_api_mappings(config: dict[str, Any]) -> list[dict[str, str]]:
+    sources = config.get("baidu_sources") or []
+    if not sources:
+        return []
+    missing: list[dict[str, str]] = []
+    for source in sources:
+        if not isinstance(source, dict):
+            missing.append({"source_id": "", "source_name": ""})
+        elif not str(source.get("api_profile") or "").strip():
+            missing.append({
+                "source_id": str(source.get("source_id") or "").strip(),
+                "source_name": str(source.get("source_name") or "").strip(),
+            })
+    return missing
+
+
+def check_baidu_api_profiles(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
+    root_path = Path(root)
+    credentials_path = _resolve(root_path, config.get("credentials_path", "secrets/secrets.json"))
+    required_profiles = _api_profiles_for_config(config)
+    missing_source_mappings = _missing_source_api_mappings(config)
+    report: dict[str, Any] = {
+        "passed": False,
+        "required_profiles": required_profiles,
+        "missing_source_mappings": missing_source_mappings,
+        "profiles": [],
+        "json_valid": False,
+        "errors": [],
+    }
+    if not credentials_path or not credentials_path.exists():
+        report["errors"].append("API 授权文件不可用")
+        return report
+    try:
+        data = json.loads(credentials_path.read_text(encoding="utf-8-sig"))
+    except (json.JSONDecodeError, OSError):
+        report["errors"].append("API 授权文件无法读取")
+        return report
+
+    report["json_valid"] = True
+    api_profiles = data.get("baidu_api") if isinstance(data, dict) else {}
+    api_profiles = api_profiles if isinstance(api_profiles, dict) else {}
+    if missing_source_mappings:
+        report["errors"].append("存在未配置 api_profile 的百度来源")
+    if not required_profiles:
+        report["errors"].append("未配置 api_profile")
+        return report
+    for profile in required_profiles:
+        item = api_profiles.get(profile)
+        exists = isinstance(item, dict)
+        access_token_nonempty = bool(exists and str(item.get("access_token") or "").strip())
+        refresh_token_nonempty = bool(exists and str(item.get("refresh_token") or "").strip())
+        report["profiles"].append({
+            "api_profile": profile,
+            "exists": exists,
+            "access_token_nonempty": access_token_nonempty,
+            "refresh_token_nonempty": refresh_token_nonempty,
+        })
+        if not exists:
+            report["errors"].append(f"缺少 api_profile：{profile}")
+        elif not access_token_nonempty or not refresh_token_nonempty:
+            report["errors"].append(f"api_profile 不完整：{profile}")
+    report["passed"] = not report["errors"]
+    return report
+
+
 def check_baidu_credentials(root: str | Path, config: dict[str, Any]) -> dict[str, Any]:
     root_path = Path(root)
     credentials_path = _resolve(root_path, config.get("credentials_path", "secrets/secrets.json"))
@@ -131,7 +208,11 @@ def run_preflight(
     settings = get_browser_settings(config)
     host = settings.get("remote_debugging_host", "127.0.0.1")
     port = int(settings.get("remote_debugging_port", 9222))
-    if chrome_ready_func is None and chrome_check_func is is_chrome_debug_port_alive:
+    data_source_preference = str(config.get("baidu", {}).get("data_source_preference") or "browser").strip().lower()
+    api_preferred = data_source_preference == "api"
+    if api_preferred:
+        add(True, "API 模式预检跳过 Chrome 就绪检查", skipped=True)
+    elif chrome_ready_func is None and chrome_check_func is is_chrome_debug_port_alive:
         browser_config = config.get("browser") if isinstance(config.get("browser"), dict) else {}
         chrome_ready = ensure_chrome_debug_ready(
             root_path,
@@ -164,7 +245,8 @@ def run_preflight(
     else:
         chrome_ok = chrome_check_func(host=host, port=port)
         chrome_message = "Chrome 9222 已连接" if chrome_ok else f"Chrome 9222 无法连接：http://{host}:{port}"
-    add(chrome_ok, chrome_message)
+    if not api_preferred:
+        add(chrome_ok, chrome_message)
 
     project_errors = validate_project_config(project)
     add(
@@ -196,6 +278,13 @@ def run_preflight(
     add(credentials.get("json_valid", False), "secrets JSON 合法" if credentials.get("json_valid") else (json_error or "secrets/secrets.json 无法读取"))
     add(credentials.get("passed", False), "credential_profile 检查通过" if credentials.get("passed") else "凭据预检未通过，请检查 secrets/secrets.json")
 
+    api_profiles = check_baidu_api_profiles(root_path, config)
+    if api_preferred:
+        add(
+            True,
+            "API 授权检查通过" if api_profiles.get("passed") else "API 授权不可用，本次将使用浏览器降级",
+        )
+
     return {
         "passed": all(item["passed"] for item in checks),
         "mode": "preflight",
@@ -205,6 +294,7 @@ def run_preflight(
         "project_name": config.get("project_name"),
         "checks": checks,
         "credentials": credentials,
+        "api_profiles": api_profiles,
     }
 
 

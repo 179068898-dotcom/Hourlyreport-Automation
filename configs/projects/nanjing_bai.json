@@ -2,7 +2,7 @@
   "project_id": "nanjing_bai",
   "project_name": "南京白",
   "excel": {
-    "path": "D:\\Seafile\\【竞价】\\【❤南京白】\\【2026年】【南京白】竞价数据\\【南京白】2026竞价数据.xlsx",
+    "path": "D:\\Seafile\\【竞价】\\【❤南京白】\\【2026年】【南京白】竞价数据\\【南京华厦bdf】2026竞价数据.xlsx",
     "hourly_sheet": "时段数据",
     "daily_sheet": "百度",
     "engine": "openpyxl"
@@ -14,6 +14,8 @@
   },
   "baidu": {
     "credential_profile": "nanjing_bai_baidu",
+    "api_profile": "nanjing_bai_baidu",
+    "data_source_mode": "browser",
     "data_path": [
       "首页",
       "数据报告",
@@ -23,42 +25,31 @@
   },
   "accounts": [
     {
-      "standard_name": "南京白账户01",
+      "standard_name": "华厦04",
       "baidu_names": [
-        "南京白账户01"
+        "华厦B04"
       ],
-      "excel_name": "南京白账户01",
+      "excel_name": "华厦04",
       "kst_ids": [
-        "TODO_NANJING_BAI_KST_ID_01"
+        "65700427"
       ],
       "kst_names": [
-        "南京白账户01"
+        "华厦04",
+        "华厦B04"
       ]
     },
     {
-      "standard_name": "南京白账户02",
+      "standard_name": "华厦05",
       "baidu_names": [
-        "南京白账户02"
+        "华厦B05"
       ],
-      "excel_name": "南京白账户02",
+      "excel_name": "华厦05",
       "kst_ids": [
-        "TODO_NANJING_BAI_KST_ID_02"
+        "65742504"
       ],
       "kst_names": [
-        "南京白账户02"
-      ]
-    },
-    {
-      "standard_name": "南京白账户03",
-      "baidu_names": [
-        "南京白账户03"
-      ],
-      "excel_name": "南京白账户03",
-      "kst_ids": [
-        "TODO_NANJING_BAI_KST_ID_03"
-      ],
-      "kst_names": [
-        "南京白账户03"
+        "华厦05",
+        "华厦B05"
       ]
     }
   ],

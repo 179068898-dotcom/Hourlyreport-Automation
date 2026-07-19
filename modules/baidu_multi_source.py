@@ -17,6 +17,11 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _resolve_path(root: Path, value: str | Path) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root / path
+
+
 def resolve_baidu_sources(config: dict[str, Any]) -> list[dict[str, Any]]:
     sources = config.get("baidu_sources")
     if isinstance(sources, list) and sources:
@@ -81,6 +86,7 @@ def build_source_runtime_config(config: dict[str, Any], source: dict[str, Any], 
     baidu = dict(source_config.get("baidu") or {})
     baidu["credential_profile"] = profile
     baidu["credential_project"] = profile
+    baidu["api_profile"] = str(source.get("api_profile") or "")
     baidu["output_path"] = f"reports/baidu_account_data_{source_id}.json"
     baidu["allow_missing_candidate_accounts"] = True
     if task == "daily":
@@ -375,7 +381,10 @@ def fetch_baidu_multi_source(
     )
     multi_path = root / "reports" / "baidu_multi_source_report.json"
     markdown_path = root / "reports" / "baidu_multi_source_report.md"
-    account_path = root / "reports" / ("baidu_daily_data.json" if task == "daily" else "baidu_account_data.json")
+    baidu = config.get("baidu") if isinstance(config.get("baidu"), dict) else {}
+    output_key = "daily_output_path" if task == "daily" else "output_path"
+    default_output = "reports/baidu_daily_data.json" if task == "daily" else "reports/baidu_account_data.json"
+    account_path = _resolve_path(root, baidu.get(output_key, default_output))
     report["outputs"] = {
         "multi_source_report": str(multi_path),
         "multi_source_markdown": str(markdown_path),

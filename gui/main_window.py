@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from gui.branding import PRODUCT_DISPLAY_NAME
 from gui.clawd import ClawdAnimator
 from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
 from gui.desktop_pet import ClawdDesktopPet
@@ -67,8 +69,19 @@ from gui.pet_settings import (
 )
 from gui.project_store import ProjectSummary, load_project_summaries
 from gui.task_runner import QtTaskRunner, infer_pet_event
+from modules.task_stop_gate import (
+    STOP_GATE_ENV,
+    TASK_CANCELLED_EXIT_CODE,
+    clear_task_stop_gate,
+    request_task_stop,
+)
 from gui.update_manager import APP_EXE_NAME, GitHubUpdateManager, launch_update_helper
-from modules.project_config import get_excel_path, load_project_config
+from modules.project_config import (
+    get_data_source_preference,
+    get_excel_path,
+    load_project_config,
+    set_data_source_preference as save_data_source_preference,
+)
 from modules.secrets_package import (
     SecretsPackageError,
     export_secrets_package,
@@ -89,9 +102,15 @@ STAGES = [
 TITLE_FONT_PT = 10
 MAIN_FONT_PT = 9
 SUB_FONT_PT = 8
-FONT_FAMILY = "Microsoft YaHei UI"
-FONT_STACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
-BASE_WINDOW_SIZE = QSize(960, 694)
+FONT_LIGHT_FAMILY = "Microsoft YaHei Light"
+FONT_REGULAR_FAMILY = "Microsoft YaHei"
+FONT_TITLE_FAMILY = "Microsoft YaHei UI"
+FONT_FAMILY = FONT_REGULAR_FAMILY
+FONT_STACK = '"Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+FONT_MENU_STACK = '"Microsoft YaHei Light", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
+FONT_REGULAR_STACK = '"Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+FONT_TITLE_STACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
+BASE_WINDOW_SIZE = QSize(966, 700)
 
 
 def app_icon_path(root: str | Path) -> Path:
@@ -186,6 +205,18 @@ def make_line_icon(kind: str, color: str = "#087a46", size: int = 24) -> QIcon:
             QPoint(round(s * 0.78), round(s * 0.50)),
         ]
         painter.drawPolygon(points)
+    elif kind == "stop":
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        side = round(s * 0.38)
+        painter.drawRoundedRect(
+            round((s - side) / 2),
+            round((s - side) / 2),
+            side,
+            side,
+            max(1, round(s * 0.05)),
+            max(1, round(s * 0.05)),
+        )
     elif kind == "check":
         painter.drawLine(round(s * 0.28), round(s * 0.52), round(s * 0.43), round(s * 0.67))
         painter.drawLine(round(s * 0.43), round(s * 0.67), round(s * 0.74), round(s * 0.34))
@@ -305,6 +336,246 @@ class InlineMenuRow(QPushButton):
         painter.end()
 
 
+class DataSourceModeControl(QFrame):
+    preference_changed = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("dataSourceModeControl")
+        self.setFixedSize(106, 29)
+        self._preference = "api"
+
+        self.indicator = QFrame(self)
+        self.indicator.setObjectName("dataSourceModeIndicator")
+        self.browser_button = QPushButton("浏览器", self)
+        self.api_button = QPushButton("API", self)
+        self.browser_button.setToolTip("强制使用浏览器")
+        self.api_button.setToolTip("API 优先，失败自动切换浏览器")
+        for button in (self.browser_button, self.api_button):
+            button.setObjectName("dataSourceModeButton")
+            button.setCheckable(True)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.api_button.setChecked(True)
+        self.browser_button.clicked.connect(lambda: self.set_preference("browser"))
+        self.api_button.clicked.connect(lambda: self.set_preference("api"))
+
+        self.animation = QPropertyAnimation(self.indicator, b"geometry", self)
+        self.animation.setDuration(150)
+        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setStyleSheet(f"""
+            QFrame#dataSourceModeControl {{
+                background: #f1f4f8;
+                border: 1px solid #e1e7ef;
+                border-radius: 8px;
+                font-family: {FONT_STACK};
+            }}
+            QFrame#dataSourceModeIndicator {{
+                background: #3f83f8;
+                border: 1px solid #2f6fed;
+                border-radius: 7px;
+            }}
+            QPushButton#dataSourceModeButton {{
+                color: #69788f;
+                background: transparent;
+                border: 0;
+                border-radius: 7px;
+                padding: 0;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 7pt;
+            }}
+            QPushButton#dataSourceModeButton:checked {{ color: #ffffff; }}
+            QPushButton#dataSourceModeButton:disabled {{ color: #a8b2c1; }}
+        """)
+        self._layout_children()
+
+    def preference(self) -> str:
+        return self._preference
+
+    def set_preference(self, preference: str, animate: bool = True, emit: bool = True) -> None:
+        normalized = "browser" if str(preference).strip().lower() == "browser" else "api"
+        changed = normalized != self._preference
+        self._preference = normalized
+        self.browser_button.setChecked(normalized == "browser")
+        self.api_button.setChecked(normalized == "api")
+        self.animation.stop()
+        target = self._target_geometry(normalized)
+        if animate and self.isVisible():
+            self.animation.setStartValue(self.indicator.geometry())
+            self.animation.setEndValue(target)
+            self.animation.start()
+        else:
+            self.indicator.setGeometry(target)
+        if emit and changed:
+            self.preference_changed.emit(normalized)
+
+    def _target_geometry(self, preference: str) -> QRect:
+        inner_width = self.width() - 2
+        half = inner_width // 2
+        return QRect(1 + (0 if preference == "browser" else half), 1, half, self.height() - 2)
+
+    def _layout_children(self) -> None:
+        half = self.width() // 2
+        self.browser_button.setGeometry(0, 0, half, self.height())
+        self.api_button.setGeometry(half, 0, self.width() - half, self.height())
+        if self.animation.state() != QPropertyAnimation.State.Running:
+            self.indicator.setGeometry(self._target_geometry(self._preference))
+        self.indicator.lower()
+        self.browser_button.raise_()
+        self.api_button.raise_()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._layout_children()
+
+
+class InlineDataModeMenu(QFrame):
+    preference_requested = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(
+            None,
+            Qt.WindowType.Popup
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint,
+        )
+        self.setObjectName("inlineDataModeMenu")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setFixedSize(124, 47)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(9, 9, 9, 9)
+        layout.setSpacing(0)
+        self.data_source_control = DataSourceModeControl(self)
+        self.data_source_control.preference_changed.connect(self.preference_requested.emit)
+        layout.addWidget(self.data_source_control)
+
+        self.setStyleSheet(f"""
+            QFrame#inlineDataModeMenu {{
+                background: #ffffff;
+                border: 1px solid #cfd8e5;
+                border-radius: 10px;
+                font-family: {FONT_MENU_STACK};
+            }}
+        """)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 10, 10)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def sync(self, preference: str) -> None:
+        self.data_source_control.set_preference(preference, animate=False, emit=False)
+
+    def popup_below(self, anchor: QWidget) -> None:
+        position = anchor.mapToGlobal(QPoint(0, anchor.height() + 2))
+        screen = QApplication.screenAt(position) or QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            x = min(max(position.x(), available.left() + 6), available.right() - self.width() - 6)
+            y = min(position.y(), available.bottom() - self.height() - 6)
+            position = QPoint(x, max(y, available.top() + 6))
+        self.move(position)
+        self.show()
+        self.raise_()
+
+
+class RunStopSplitControl(QFrame):
+    diagonal_gap_width = 2
+
+    def __init__(self, run_text: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("runStopSplitControl")
+        self.setMinimumHeight(42)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self.run_button = QPushButton(run_text, self)
+        self.run_button.setObjectName("runSegmentButton")
+        self.run_button.setIcon(make_line_icon("play", "#ffffff", 18))
+        self.run_button.setIconSize(QSize(16, 16))
+        self.run_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        self.stop_button = QPushButton("停止", self)
+        self.stop_button.setObjectName("stopSegmentButton")
+        self.stop_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.stop_button.setEnabled(False)
+
+        self.setStyleSheet(f"""
+            QPushButton#runSegmentButton, QPushButton#stopSegmentButton {{
+                color: #ffffff;
+                background: transparent;
+                border: 0;
+                padding: 0 5px;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 9pt;
+            }}
+            QPushButton#runSegmentButton:hover, QPushButton#stopSegmentButton:hover {{
+                background: rgba(255, 255, 255, 24);
+            }}
+            QPushButton#runSegmentButton:pressed, QPushButton#stopSegmentButton:pressed {{
+                background: rgba(14, 43, 96, 36);
+            }}
+            QPushButton#runSegmentButton:disabled, QPushButton#stopSegmentButton:disabled {{
+                color: rgba(255, 255, 255, 210);
+            }}
+        """)
+        self._layout_children()
+
+    def set_run_enabled(self, enabled: bool) -> None:
+        self.run_button.setEnabled(bool(enabled))
+        self.update()
+
+    def set_stop_enabled(self, enabled: bool) -> None:
+        self.stop_button.setEnabled(bool(enabled))
+        self.update()
+
+    def _layout_children(self) -> None:
+        split_x = round(self.width() * 0.70)
+        self.run_button.setGeometry(0, 0, split_x, self.height())
+        self.stop_button.setGeometry(
+            split_x - 2,
+            2,
+            self.width() - split_x + 2,
+            max(0, self.height() - 2),
+        )
+        self.stop_button.raise_()
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+        painter.setClipPath(path)
+
+        run_color = QColor("#3f83f8") if self.run_button.isEnabled() else QColor("#aabbd5")
+        painter.fillPath(path, run_color)
+
+        split_x = round(self.width() * 0.70)
+        stop_color = QColor("#2f66d5") if self.stop_button.isEnabled() else QColor("#aeb8c8")
+        stop_area = QPainterPath()
+        stop_area.moveTo(split_x + 5, 0)
+        stop_area.lineTo(self.width(), 0)
+        stop_area.lineTo(self.width(), self.height())
+        stop_area.lineTo(split_x - 5, self.height())
+        stop_area.closeSubpath()
+        painter.fillPath(stop_area, stop_color)
+
+        painter.setPen(
+            QPen(
+                QColor("#ffffff"),
+                self.diagonal_gap_width,
+                Qt.PenStyle.SolidLine,
+                Qt.PenCapStyle.FlatCap,
+            )
+        )
+        painter.drawLine(split_x + 5, 0, split_x - 5, self.height())
+        painter.end()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._layout_children()
+
+
 class InlineConfigMenu(QFrame):
     project_check_requested = Signal()
     update_path_requested = Signal()
@@ -398,7 +669,7 @@ class InlineConfigMenu(QFrame):
                 background: #ffffff;
                 border: 1px solid #cfd8e5;
                 border-radius: 11px;
-                font-family: {FONT_STACK};
+                font-family: {FONT_MENU_STACK};
             }}
             QPushButton#inlineMenuRow, QPushButton#inlineMenuChoice {{
                 min-height: 30px;
@@ -408,7 +679,7 @@ class InlineConfigMenu(QFrame):
                 color: #1d2a40;
                 padding: 0 24px 0 10px;
                 text-align: left;
-                font-family: {FONT_STACK};
+                font-family: {FONT_MENU_STACK};
                 font-size: 9pt;
             }}
             QPushButton#inlineMenuRow:hover, QPushButton#inlineMenuChoice:hover {{
@@ -670,7 +941,7 @@ class ProjectSelectionPopup(QFrame):
         layout.setSpacing(6)
         self.search = QLineEdit()
         self.search.setObjectName("projectSearchInput")
-        self.search.setPlaceholderText("搜索项目")
+        self.search.setPlaceholderText("输入 B/N 快速检索对应项目")
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self._rebuild_rows)
         layout.addWidget(self.search)
@@ -1214,6 +1485,12 @@ class MainWindow(QMainWindow):
         self.pending_update_version = ""
         self.pending_update_archive: Path | None = None
         self.calendar_dialog: ModernCalendarDialog | None = None
+        self.data_source_preference = get_data_source_preference(self.root)
+        self._task_stop_requested = False
+        self._task_stop_locked = False
+        self._task_active = False
+        self._task_stop_gate: Path | None = None
+        self._quit_after_task = False
         self._pet_scale_save_timer = QTimer(self)
         self._pet_scale_save_timer.setSingleShot(True)
         self._pet_scale_save_timer.setInterval(250)
@@ -1236,9 +1513,10 @@ class MainWindow(QMainWindow):
             | Qt.WindowType.Window
             | Qt.WindowType.WindowMinimizeButtonHint
         )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         icon = QIcon(str(app_icon_path(self.root)))
         self.setWindowIcon(icon)
-        self.setWindowTitle("百度数据自动化控制台")
+        self.setWindowTitle(PRODUCT_DISPLAY_NAME)
         self.setFont(QFont(FONT_FAMILY, MAIN_FONT_PT))
         self.setFixedSize(BASE_WINDOW_SIZE)
         self._drag_offset = None
@@ -1275,7 +1553,7 @@ class MainWindow(QMainWindow):
         self._style_menu(self.tray_menu, 156)
 
         self.tray_icon = QSystemTrayIcon(self.windowIcon(), self)
-        self.tray_icon.setToolTip("百度数据自动化控制台")
+        self.tray_icon.setToolTip(PRODUCT_DISPLAY_NAME)
         self.tray_icon.setContextMenu(self.tray_menu)
         self.tray_icon.activated.connect(self.on_tray_activated)
         self.tray_icon.show()
@@ -1325,7 +1603,7 @@ class MainWindow(QMainWindow):
 
     def _style_menu(self, menu: QMenu, width: int = 228) -> None:
         menu.setMinimumWidth(width)
-        menu.setFont(QFont(FONT_FAMILY, MAIN_FONT_PT))
+        menu.setFont(QFont(FONT_LIGHT_FAMILY, MAIN_FONT_PT))
         menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         menu.setWindowFlags(
             menu.windowFlags()
@@ -1370,8 +1648,21 @@ class MainWindow(QMainWindow):
         root_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setCentralWidget(root_widget)
         root_layout = QVBoxLayout(root_widget)
-        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setContentsMargins(4, 4, 4, 4)
         root_layout.setSpacing(0)
+
+        self.window_surface = QFrame()
+        self.window_surface.setObjectName("windowSurface")
+        self.window_surface.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.window_shadow = QGraphicsDropShadowEffect(self.window_surface)
+        self.window_shadow.setBlurRadius(8)
+        self.window_shadow.setOffset(0, 0)
+        self.window_shadow.setColor(QColor(70, 80, 94, 38))
+        self.window_surface.setGraphicsEffect(self.window_shadow)
+        surface_layout = QVBoxLayout(self.window_surface)
+        surface_layout.setContentsMargins(1, 1, 1, 1)
+        surface_layout.setSpacing(0)
+        root_layout.addWidget(self.window_surface)
 
         self.title_bar = QFrame()
         self.title_bar.setObjectName("titleBar")
@@ -1380,11 +1671,11 @@ class MainWindow(QMainWindow):
         title_layout = QHBoxLayout(self.title_bar)
         title_layout.setContentsMargins(14, 0, 10, 0)
         title_layout.setSpacing(10)
-        self.spinner = ClawdAnimator(self.title_bar, width=46, height=24, background="#eef3f8")
+        self.spinner = ClawdAnimator(self.title_bar, width=46, height=24, background="#edf0f4")
         title_layout.addWidget(self.spinner)
-        self.title_label = QLabel("百度数据自动化控制台")
+        self.title_label = QLabel(PRODUCT_DISPLAY_NAME)
         self.title_label.setObjectName("windowTitleLabel")
-        title_font = QFont(FONT_FAMILY, TITLE_FONT_PT)
+        title_font = QFont(FONT_TITLE_FAMILY, TITLE_FONT_PT)
         title_font.setWeight(QFont.Weight.DemiBold)
         self.title_label.setFont(title_font)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -1392,7 +1683,7 @@ class MainWindow(QMainWindow):
 
         self.system_config_button = HoverMenuButton("系统配置")
         self.system_config_button.setObjectName("systemConfigButton")
-        config_font = QFont(FONT_FAMILY, TITLE_FONT_PT)
+        config_font = QFont(FONT_LIGHT_FAMILY, MAIN_FONT_PT)
         config_font.setWeight(QFont.Weight.Normal)
         self.system_config_button.setFont(config_font)
         config_metrics = self.system_config_button.fontMetrics()
@@ -1458,6 +1749,19 @@ class MainWindow(QMainWindow):
         self.system_config_button.clicked.connect(self.show_system_config_menu)
         title_layout.addWidget(self.system_config_button)
 
+        self.data_mode_button = HoverMenuButton("数据模式")
+        self.data_mode_button.setObjectName("dataModeButton")
+        self.data_mode_button.setFont(QFont(config_font))
+        data_mode_metrics = self.data_mode_button.fontMetrics()
+        self.data_mode_button.setFixedSize(
+            data_mode_metrics.horizontalAdvance(self.data_mode_button.text()) + 18,
+            title_text_height,
+        )
+        self.data_mode_menu = InlineDataModeMenu(self)
+        self.data_mode_menu.preference_requested.connect(self.set_global_data_source_preference)
+        self.data_mode_button.clicked.connect(self.show_data_mode_menu)
+        title_layout.addWidget(self.data_mode_button)
+
         self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
         self.update_button.setIcon(make_line_icon("loop", "#536a89", 16))
@@ -1497,17 +1801,17 @@ class MainWindow(QMainWindow):
         self.minimize_button.clicked.connect(self.showMinimized)
         self.maximize_button.clicked.connect(self.toggle_maximize)
         self.close_button.clicked.connect(self.request_console_close)
-        root_layout.addWidget(self.title_bar)
+        surface_layout.addWidget(self.title_bar)
 
         self.shell_surface = QFrame()
         self.shell_surface.setObjectName("shellSurface")
         self.shell_surface.setFrameShape(QFrame.Shape.NoFrame)
         self.shell_surface.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         shell = QHBoxLayout(self.shell_surface)
-        shell.setContentsMargins(11, 6, 11, 7)
+        shell.setContentsMargins(4, 4, 4, 5)
         shell.setSpacing(14)
         self.shell_layout = shell
-        root_layout.addWidget(self.shell_surface, 1)
+        surface_layout.addWidget(self.shell_surface, 1)
 
         self.left_panel = QFrame()
         self.left_panel.setObjectName("leftRail")
@@ -1603,7 +1907,7 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(12)
         header.addWidget(self._make_icon_box("clock"))
-        self.hourly_title = QLabel("小时报选择")
+        self.hourly_title = QLabel("小时报")
         self.hourly_title.setObjectName("cardTitle")
         header.addWidget(self.hourly_title)
         header.addStretch(1)
@@ -1614,9 +1918,11 @@ class MainWindow(QMainWindow):
         action_grid.setVerticalSpacing(10)
         action_grid.setColumnStretch(0, 1)
         action_grid.setColumnStretch(1, 1)
-        self.hourly_button = self._make_primary_button("运行小时报")
-        self.hourly_button.setFixedHeight(48)
-        action_grid.addWidget(self.hourly_button, 0, 0)
+        self.hourly_action_control = RunStopSplitControl("运行小时报")
+        self.hourly_action_control.setFixedHeight(48)
+        self.hourly_button = self.hourly_action_control.run_button
+        self.hourly_stop_button = self.hourly_action_control.stop_button
+        action_grid.addWidget(self.hourly_action_control, 0, 0)
         self.period_group = QButtonGroup(self)
         self.period_group.setExclusive(True)
         self.period_buttons: list[QPushButton] = []
@@ -1641,7 +1947,7 @@ class MainWindow(QMainWindow):
         daily_header = QHBoxLayout()
         daily_header.setSpacing(12)
         daily_header.addWidget(self._make_icon_box("calendar"))
-        self.daily_title = QLabel("日报执行")
+        self.daily_title = QLabel("日报")
         self.daily_title.setObjectName("cardTitle")
         daily_header.addWidget(self.daily_title)
         daily_header.addStretch(1)
@@ -1649,13 +1955,15 @@ class MainWindow(QMainWindow):
 
         daily_button_row = QHBoxLayout()
         daily_button_row.setSpacing(12)
-        self.daily_button = self._make_primary_button("运行日报")
-        self.daily_button.setFixedHeight(44)
+        self.daily_action_control = RunStopSplitControl("运行日报")
+        self.daily_action_control.setFixedHeight(44)
+        self.daily_button = self.daily_action_control.run_button
+        self.daily_stop_button = self.daily_action_control.stop_button
         self.default_yesterday_button = self._make_secondary_button("默认昨天")
         self.default_yesterday_button.setObjectName("dateHintButton")
         self.default_yesterday_button.setFixedHeight(44)
         self.default_yesterday_button.clicked.connect(self.reset_daily_date_to_yesterday)
-        daily_button_row.addWidget(self.daily_button, 3)
+        daily_button_row.addWidget(self.daily_action_control, 3)
         daily_button_row.addWidget(self.default_yesterday_button, 1)
         daily_layout.addLayout(daily_button_row)
 
@@ -1675,6 +1983,8 @@ class MainWindow(QMainWindow):
 
         self.hourly_button.clicked.connect(self.run_hourly)
         self.daily_button.clicked.connect(self.run_daily)
+        self.hourly_stop_button.clicked.connect(self.stop_current_task)
+        self.daily_stop_button.clicked.connect(self.stop_current_task)
 
     def _build_right_panel(self, content_layout: QVBoxLayout) -> None:
         self.status_title = QLabel("准备就绪")
@@ -2049,14 +2359,19 @@ class MainWindow(QMainWindow):
         """)
         self.setStyleSheet(f"""
             QMainWindow {{
-                background: #ffffff;
+                background: transparent;
                 color: #17243b;
                 font-family: {FONT_STACK};
                 font-size: 9pt;
             }}
             QWidget#appSurface {{
-                background: #ffffff;
+                background: transparent;
                 border: none;
+                border-radius: 0;
+            }}
+            QFrame#windowSurface {{
+                background: #f6f8fc;
+                border: 1px solid #e6e9ee;
                 border-radius: 0;
             }}
             QFrame#titleBar {{
@@ -2066,25 +2381,28 @@ class MainWindow(QMainWindow):
             }}
             QLabel#windowTitleLabel {{
                 color: #101b2e;
+                font-family: {FONT_TITLE_STACK};
                 font-size: 10pt;
                 font-weight: 600;
             }}
             QPushButton {{ outline: 0; }}
-            QPushButton#systemConfigButton {{
+            QPushButton#systemConfigButton, QPushButton#dataModeButton {{
                 min-height: 0;
                 background: transparent;
                 border: 1px solid transparent;
                 border-radius: 8px;
                 padding: 0 8px;
                 color: #6f7b8d;
-                font-size: 10pt;
+                font-family: {FONT_MENU_STACK};
+                font-size: 9pt;
                 text-align: center;
             }}
-            QPushButton#systemConfigButton:hover {{
+            QPushButton#systemConfigButton:hover, QPushButton#dataModeButton:hover {{
                 background: #eef1f5;
                 border-color: #e1e6ed;
             }}
-            QPushButton#systemConfigButton::menu-indicator {{ image: none; width: 0; }}
+            QPushButton#systemConfigButton::menu-indicator,
+            QPushButton#dataModeButton::menu-indicator {{ image: none; width: 0; }}
             QPushButton#updateButton {{
                 min-height: 0;
                 background: transparent;
@@ -2138,11 +2456,13 @@ class MainWindow(QMainWindow):
             }}
             QLabel#cardTitle {{
                 color: #101b2e;
+                font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
                 font-weight: 600;
             }}
             QLabel#sectionTitle {{
                 color: #17243b;
+                font-family: {FONT_REGULAR_STACK};
                 font-size: 9pt;
                 font-weight: 400;
             }}
@@ -2170,6 +2490,7 @@ class MainWindow(QMainWindow):
                 padding: 0;
                 background: #ffffff;
                 color: #1e2d45;
+                font-family: {FONT_REGULAR_STACK};
                 font-size: 9pt;
                 text-align: left;
             }}
@@ -2262,6 +2583,7 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 padding: 3px 16px;
                 color: #23344d;
+                font-family: {FONT_REGULAR_STACK};
                 text-align: left;
                 font-size: 9pt;
             }}
@@ -2274,6 +2596,7 @@ class MainWindow(QMainWindow):
             QLabel#flowHeaderIcon, QLabel#logHeaderIcon {{ color: #2f6fed; }}
             QLabel#flowTitle, QLabel#logTitle {{
                 color: #101b2e;
+                font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
                 font-weight: 600;
             }}
@@ -2284,6 +2607,7 @@ class MainWindow(QMainWindow):
             }}
             QLabel#currentTaskTitle {{
                 color: #101b2e;
+                font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
                 font-weight: 600;
             }}
@@ -2311,6 +2635,11 @@ class MainWindow(QMainWindow):
                 color: #9f1239;
                 background: #ffe7eb;
                 border-color: #f4c5ce;
+            }}
+            QLabel#statusBadge[status="stopped"] {{
+                color: #536176;
+                background: #eef1f5;
+                border-color: #cfd7e2;
             }}
             QLabel#startTimeText {{ color: #65758e; font-size: 8pt; }}
             QFrame#logReadyOverlay {{ background: transparent; border: 0; }}
@@ -2349,8 +2678,17 @@ class MainWindow(QMainWindow):
         if self.inline_config_menu.isVisible():
             self.inline_config_menu.hide()
             return
+        self.data_mode_menu.hide()
         self.inline_config_menu.sync(self.pet_mode, self.pet_scale)
         self.inline_config_menu.popup_below(self.system_config_button)
+
+    def show_data_mode_menu(self) -> None:
+        if self.data_mode_menu.isVisible():
+            self.data_mode_menu.hide()
+            return
+        self.inline_config_menu.hide()
+        self.data_mode_menu.sync(self.data_source_preference)
+        self.data_mode_menu.popup_below(self.data_mode_button)
 
     def start_update_check(self) -> None:
         if not (self.root / APP_EXE_NAME).is_file():
@@ -2484,6 +2822,29 @@ class MainWindow(QMainWindow):
         if hasattr(self, "inline_config_menu"):
             self.inline_config_menu.sync(self.pet_mode, self.pet_scale)
 
+    def set_global_data_source_preference(self, preference: str) -> None:
+        previous = self.data_source_preference
+        try:
+            saved = save_data_source_preference(self.root, preference)
+        except Exception:
+            self.data_source_preference = previous
+            self.data_mode_menu.data_source_control.set_preference(
+                previous,
+                animate=True,
+                emit=False,
+            )
+            message = "数据源设置未保存，已继续使用原设置。"
+            self.progress_text.setText(message)
+            self.append_log(f"[失败] {message}")
+            return
+        self.data_source_preference = saved
+        if hasattr(self, "data_mode_menu"):
+            self.data_mode_menu.data_source_control.set_preference(
+                self.data_source_preference,
+                animate=False,
+                emit=False,
+            )
+
     def set_desktop_pet_mode(self, mode: str) -> None:
         self.pet_mode = mode
         save_pet_mode(self.root, mode)
@@ -2531,6 +2892,10 @@ class MainWindow(QMainWindow):
     def exit_application(self) -> None:
         if self._quitting:
             return
+        if self.runner.is_running():
+            self._quit_after_task = True
+            self.request_console_close()
+            return
         if self._pet_scale_save_timer.isActive():
             self._pet_scale_save_timer.stop()
             self._persist_desktop_pet_scale()
@@ -2539,6 +2904,12 @@ class MainWindow(QMainWindow):
         self.tray_icon.setContextMenu(None)
         self.desktop_pet.close_pet()
         QApplication.instance().quit()
+
+    def _schedule_deferred_exit(self) -> None:
+        if not self._quit_after_task:
+            return
+        self._quit_after_task = False
+        QTimer.singleShot(0, self.exit_application)
 
     def closeEvent(self, event) -> None:
         if self._quitting:
@@ -2823,12 +3194,14 @@ class MainWindow(QMainWindow):
             self.progress.setRange(0, len(STAGES))
             self.progress.setValue(0)
             self.set_task_buttons_enabled(True)
+            self.set_data_source_control_locked(False)
             self.progress_text.setText("环境已就绪，请选择项目和任务。")
             self.desktop_pet.set_busy(False)
             self.desktop_pet.announce("运行环境正常，可以开始任务。", "waving", 4200)
             return
 
         self.set_task_buttons_enabled(False)
+        self.set_data_source_control_locked(True)
         self.progress.setRange(0, 0)
         self.progress_text.setText("首次准备运行环境，请不要关闭程序...")
         self.append_log("检测到运行环境缺失，开始自动下载并安装。")
@@ -2870,6 +3243,7 @@ class MainWindow(QMainWindow):
 
     def on_environment_install_finished(self, exit_code: int) -> None:
         self.desktop_pet.set_busy(False)
+        self.set_data_source_control_locked(False)
         self.progress.setRange(0, len(STAGES))
         self.progress.setValue(0)
         if exit_code != 0:
@@ -2895,6 +3269,7 @@ class MainWindow(QMainWindow):
 
     def on_environment_install_failed(self, message: str) -> None:
         self.desktop_pet.set_busy(False)
+        self.set_data_source_control_locked(False)
         self.progress.setRange(0, len(STAGES))
         self.progress.setValue(0)
         self.set_task_buttons_enabled(False)
@@ -2965,17 +3340,48 @@ class MainWindow(QMainWindow):
         self._refresh_widget_style(self.current_status_badge)
 
     def start_command(self, title: str, command: list[str]) -> None:
+        clear_task_stop_gate(self._task_stop_gate)
+        self._task_stop_gate = None
+        self._task_stop_requested = False
+        self._task_stop_locked = False
         self.desktop_pet.set_busy(True)
+        self.set_task_buttons_enabled(False)
+        self.set_stop_controls()
+        self.set_data_source_control_locked(True)
         self.reset_stages()
         self.status_title.setText(title)
         self.status_detail.setText("任务正在运行，请不要关闭窗口。")
         self.progress_text.setText("任务已创建，等待启动...")
         self.log_view.clear()
-        self.runner.start(command, self.root)
+        if self.current_task_type in {"hourly", "daily"}:
+            self._task_stop_gate = self.root / "reports" / f".gui_task_stop_{os.getpid()}.gate"
+            clear_task_stop_gate(self._task_stop_gate)
+            self.runner.start(command, self.root, {STOP_GATE_ENV: str(self._task_stop_gate)})
+        else:
+            self.runner.start(command, self.root)
 
     def on_task_started(self) -> None:
+        self._task_active = True
         self.set_task_buttons_enabled(False)
+        self.set_stop_controls()
+        self.set_data_source_control_locked(True)
         self.mark_stage("config")
+
+    def stop_current_task(self) -> None:
+        if self.current_task_type not in {"hourly", "daily"}:
+            return
+        if self._task_stop_locked or self._task_stop_requested or not self.runner.is_running():
+            return
+        if not request_task_stop(self._task_stop_gate):
+            self._task_stop_locked = True
+            self.set_stop_controls()
+            return
+        self._task_stop_requested = True
+        self._task_stop_locked = True
+        self.set_stop_controls()
+        self.progress_text.setText("已提交停止请求，正在等待安全节点...")
+        self.append_log("[停止] 已收到停止请求，将在 Excel 写入前的安全节点停止。")
+        self.desktop_pet.announce("收到停止请求，我会在写入 Excel 前安全停下。", "review", 4200)
 
     def on_task_output(self, text: str) -> None:
         self.append_log(text)
@@ -2999,8 +3405,32 @@ class MainWindow(QMainWindow):
             self.desktop_pet.announce(message[0], message[1])
 
     def on_task_finished(self, exit_code: int) -> None:
+        stopped_by_user = exit_code == TASK_CANCELLED_EXIT_CODE
+        clear_task_stop_gate(self._task_stop_gate)
+        self._task_stop_gate = None
+        self._task_active = False
         self.desktop_pet.set_busy(False)
         self.set_task_buttons_enabled(True)
+        self.set_data_source_control_locked(False)
+        self._task_stop_locked = True
+        self.set_stop_controls()
+        if stopped_by_user:
+            self.status_title.setText("任务已停止")
+            self.status_detail.setText("任务已在 Excel 写入前停止。")
+            self.progress_text.setText("任务已停止，未继续写入 Excel。")
+            self.current_status_badge.setText("已停止")
+            self.current_status_badge.setProperty("status", "stopped")
+            self.flow_idle_icon.hide()
+            self.flow_crab.set_mode("idle")
+            self.flow_crab.show()
+            self.append_log("[停止] 任务已停止，未执行后续 Excel 写入。")
+            self.desktop_pet.announce("任务已经停下来了。", "idle", 5200)
+            self._task_stop_requested = False
+            self._task_stop_locked = False
+            self.set_stop_controls()
+            self._refresh_widget_style(self.current_status_badge)
+            self._schedule_deferred_exit()
+            return
         if exit_code == 0:
             self.mark_stage("done")
             self.status_title.setText("任务完成")
@@ -3042,11 +3472,22 @@ class MainWindow(QMainWindow):
                 15000,
                 "failed",
             )
+        self._task_stop_requested = False
+        self._task_stop_locked = False
+        self.set_stop_controls()
         self._refresh_widget_style(self.current_status_badge)
+        self._schedule_deferred_exit()
 
     def show_task_error(self, message: str) -> None:
+        clear_task_stop_gate(self._task_stop_gate)
+        self._task_stop_gate = None
+        self._task_active = False
+        self._task_stop_requested = False
+        self._task_stop_locked = False
         self.desktop_pet.set_busy(False)
         self.set_task_buttons_enabled(True)
+        self.set_stop_controls()
+        self.set_data_source_control_locked(False)
         self.status_title.setText("任务无法启动")
         self.status_detail.setText(message)
         self.progress_text.setText("任务没有启动，请查看提示。")
@@ -3058,12 +3499,28 @@ class MainWindow(QMainWindow):
         self._refresh_widget_style(self.current_status_badge)
         self.append_log("任务无法启动：" + message)
         self.desktop_pet.announce("任务没有启动，请点我打开控制台查看。", "failed", 12000, "failed")
+        self._schedule_deferred_exit()
 
     def set_task_buttons_enabled(self, enabled: bool) -> None:
         has_projects = bool(self.projects)
-        for button in [self.hourly_button, self.daily_button]:
-            button.setEnabled(enabled and has_projects)
+        run_enabled = enabled and has_projects
+        self.hourly_action_control.set_run_enabled(run_enabled)
+        self.daily_action_control.set_run_enabled(run_enabled)
         self.project_check_action.setEnabled(enabled and has_projects)
+
+    def set_stop_controls(self) -> None:
+        can_stop = (
+            self._task_active
+            and self.runner.is_running()
+            and not self._task_stop_requested
+            and not self._task_stop_locked
+        )
+        self.hourly_action_control.set_stop_enabled(can_stop and self.current_task_type == "hourly")
+        self.daily_action_control.set_stop_enabled(can_stop and self.current_task_type == "daily")
+
+    def set_data_source_control_locked(self, locked: bool) -> None:
+        self.data_mode_menu.data_source_control.setEnabled(not locked)
+        self.data_mode_button.setEnabled(not locked)
 
     def reset_stages(self) -> None:
         self.progress.setValue(0)
@@ -3077,6 +3534,9 @@ class MainWindow(QMainWindow):
         keys = [item[0] for item in STAGES]
         if stage not in keys:
             return
+        if stage == "excel":
+            self._task_stop_locked = True
+            self.set_stop_controls()
         index = keys.index(stage)
         self.progress.setValue(index + 1)
         self.progress_text.setText(f"当前进度：{STAGES[index][1]}")

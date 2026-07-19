@@ -9,6 +9,8 @@ from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QRec
 from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
+from gui.branding import PRODUCT_DISPLAY_NAME
+
 
 CELL_SIZE = QSize(192, 208)
 ATLAS_SIZE = QSize(1536, 2288)
@@ -316,7 +318,7 @@ class ClawdDesktopPet(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setFixedSize(BASE_WINDOW_SIZE)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setToolTip("单击显示或隐藏百度数据自动化控制台")
+        self.setToolTip(f"单击打开{PRODUCT_DISPLAY_NAME}")
 
         self.sprite = QLabel(self)
         self.sprite.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)

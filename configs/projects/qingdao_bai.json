@@ -14,6 +14,8 @@
   },
   "baidu": {
     "credential_profile": "qingdao_bai_baidu",
+    "api_profile": "qingdao_bai_baidu",
+    "data_source_mode": "browser",
     "data_path": [
       "首页",
       "数据报告",

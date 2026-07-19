@@ -5,8 +5,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from modules.baidu_auto import fetch_baidu_auto
-from modules.baidu_daily import fetch_baidu_daily
+from modules.baidu_data_source import fetch_baidu_resilient_daily, fetch_baidu_resilient_hourly
 from modules.console_ui import (
     print_final_failure,
     print_final_success,
@@ -19,6 +18,7 @@ from modules.data_merger import merge_daily_files, merge_data_files, normalize_p
 from modules.excel_writer import write_merged_daily_data, write_merged_hourly_data
 from modules.kst_daily_parser import parse_kst_daily_file, write_empty_kst_daily_result
 from modules.kst_export_parser import auto_export_max_age_seconds, find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
+from modules.task_stop_gate import claim_excel_write, task_stop_requested
 
 
 StepFunc = Callable[..., dict[str, Any]]
@@ -55,6 +55,15 @@ def _errors_from_report(report: dict[str, Any] | None) -> list[str]:
     if isinstance(errors, list):
         return [str(error) for error in errors]
     return [str(errors)]
+
+
+def _data_source_label(data_source: Any) -> str:
+    return {
+        "api": "API",
+        "browser": "浏览器",
+        "browser_fallback": "浏览器降级",
+        "browser_shadow": "浏览器（影子模式）",
+    }.get(str(data_source or ""), "未知")
 
 
 def _default_yesterday(today: date | None = None) -> str:
@@ -163,7 +172,7 @@ def run_half_auto_pipeline(
     assume_yes: bool = False,
     confirm_before_run: bool = False,
     input_func: Callable[[str], str] = input,
-    fetch_baidu_func: StepFunc = fetch_baidu_auto,
+    fetch_baidu_func: StepFunc = fetch_baidu_resilient_hourly,
     parse_kst_func: Callable[..., dict[str, Any]] = parse_kst_export_file,
     merge_func: StepFunc = merge_data_files,
     write_func: StepFunc = write_merged_hourly_data,
@@ -180,6 +189,7 @@ def run_half_auto_pipeline(
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),
         "passed": False,
+        "cancelled": False,
         "failed_step": None,
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
@@ -191,6 +201,10 @@ def run_half_auto_pipeline(
         "kst_export_file": str(export_file or ""),
         "kst_export": kst_export_info,
         "baidu_source_ok": False,
+        "data_source": None,
+        "api_attempts": 0,
+        "fallback_reason": None,
+        "self_heal_actions": [],
         "preflight_confirmed": False,
         "summary_text": "",
         "steps": [],
@@ -209,6 +223,18 @@ def run_half_auto_pipeline(
         logger.error("一键流在步骤 %s 中断：%s", step_name, errors)
         return _finalize(root, report, logger)
 
+    def stop_if_requested(boundary: str, claim_excel: bool = False) -> dict[str, Any] | None:
+        should_stop = not claim_excel_write(root, resolve_from_environment=True) if claim_excel else task_stop_requested(root)
+        if not should_stop:
+            return None
+        report["cancelled"] = True
+        report["failed_step"] = "cancelled-before-excel"
+        report["cancelled_at"] = boundary
+        report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        logger.info("用户停止任务：boundary=%s；未进入 Excel 写入", boundary)
+        print("[停止] 已在 Excel 写入前安全停止", flush=True)
+        return _finalize(root, report, logger)
+
     logger.info("一键流开始：period=%s，kst_file=%s", period, kst_file)
 
     if confirm_before_run and not assume_yes:
@@ -219,6 +245,10 @@ def run_half_auto_pipeline(
             return fail("preflight-confirm", errors)
     report["preflight_confirmed"] = True
 
+    stopped = stop_if_requested("before-baidu")
+    if stopped:
+        return stopped
+
     print_step(1, 4, "读取百度搜索推广数据")
     try:
         baidu_report = fetch_baidu_func(config=config, root=root, logger=logger, period=period)
@@ -227,6 +257,11 @@ def run_half_auto_pipeline(
         print_step_failure("百度数据读取异常", suggestion=str(exc), log_path=str(root / "logs" / "run.log"))
         return fail("fetch-baidu-auto", [str(exc)])
     baidu_errors = _errors_from_report(baidu_report)
+    report["data_source"] = baidu_report.get("data_source") or "browser"
+    report["api_attempts"] = int(baidu_report.get("api_attempts") or 0)
+    report["fallback_reason"] = baidu_report.get("fallback_reason")
+    report["self_heal_actions"] = list(baidu_report.get("self_heal_actions") or [])
+    logger.info("[实际来源] 百度数据：%s", _data_source_label(report["data_source"]))
     baidu_passed = not baidu_errors
     report["steps"].append(_step_result(
         "fetch-baidu-auto",
@@ -246,6 +281,10 @@ def run_half_auto_pipeline(
     print_unknown_baidu_accounts_notice(baidu_report)
 
     logger.info("一键流步骤完成：fetch-baidu-auto")
+
+    stopped = stop_if_requested("after-baidu")
+    if stopped:
+        return stopped
 
     print_step(2, 4, "解析快商通导出文件")
     if export_file is None:
@@ -285,6 +324,10 @@ def run_half_auto_pipeline(
         print_step_success("快商通导出文件已解析")
         logger.info("一键流步骤完成：parse-kst-export")
 
+    stopped = stop_if_requested("after-kst")
+    if stopped:
+        return stopped
+
     print_step(3, 4, "合并百度与快商通数据")
     try:
         merge_result = merge_func(config=config, root=root, logger=logger, period=period)
@@ -309,6 +352,10 @@ def run_half_auto_pipeline(
         report["period"] = merge_result["merged"].get("period") or report["period"]
     print_step_success("百度和快商通数据已合并")
     logger.info("一键流步骤完成：merge-data")
+
+    stopped = stop_if_requested("before-excel", claim_excel=True)
+    if stopped:
+        return stopped
 
     print_step(4, 4, "写入 Excel 并复核")
     try:
@@ -360,7 +407,7 @@ def run_daily_pipeline(
     target_date: str | None = None,
     kst_file: str | Path | None = None,
     today: date | None = None,
-    fetch_baidu_func: StepFunc = fetch_baidu_daily,
+    fetch_baidu_func: StepFunc = fetch_baidu_resilient_daily,
     parse_kst_func: Callable[..., dict[str, Any]] = parse_kst_daily_file,
     merge_func: StepFunc = merge_daily_files,
     write_func: StepFunc = write_merged_daily_data,
@@ -379,6 +426,7 @@ def run_daily_pipeline(
         "project_id": config.get("project_id"),
         "project_name": config.get("project_name"),
         "passed": False,
+        "cancelled": False,
         "failed_step": None,
         "started_at": datetime.now().isoformat(timespec="seconds"),
         "finished_at": None,
@@ -389,6 +437,10 @@ def run_daily_pipeline(
         "kst_export_file": str(export_file or ""),
         "kst_export": kst_export_info,
         "baidu_source_ok": False,
+        "data_source": None,
+        "api_attempts": 0,
+        "fallback_reason": None,
+        "self_heal_actions": [],
         "steps": [],
         "write_summary": {
             "write_count": 0,
@@ -407,7 +459,23 @@ def run_daily_pipeline(
         logger.error("日报一键流在步骤 %s 中断：%s", step_name, errors)
         return _finalize_daily(root, report, logger)
 
+    def stop_if_requested(boundary: str, claim_excel: bool = False) -> dict[str, Any] | None:
+        should_stop = not claim_excel_write(root, resolve_from_environment=True) if claim_excel else task_stop_requested(root)
+        if not should_stop:
+            return None
+        report["cancelled"] = True
+        report["failed_step"] = "cancelled-before-excel"
+        report["cancelled_at"] = boundary
+        report["finished_at"] = datetime.now().isoformat(timespec="seconds")
+        logger.info("用户停止日报任务：boundary=%s；未进入 Excel 写入", boundary)
+        print("[停止] 已在日报 Excel 写入前安全停止", flush=True)
+        return _finalize_daily(root, report, logger)
+
     logger.info("日报一键流开始：date=%s，kst_file=%s", daily_date, kst_file)
+
+    stopped = stop_if_requested("before-baidu")
+    if stopped:
+        return stopped
 
     print_step(1, 4, "读取百度日报数据")
     try:
@@ -417,6 +485,11 @@ def run_daily_pipeline(
         print_step_failure("百度日报读取异常", suggestion=str(exc), log_path=str(root / "logs" / "run.log"))
         return fail("fetch-baidu-daily", [str(exc)])
     baidu_errors = _errors_from_report(baidu_report)
+    report["data_source"] = baidu_report.get("data_source") or "browser"
+    report["api_attempts"] = int(baidu_report.get("api_attempts") or 0)
+    report["fallback_reason"] = baidu_report.get("fallback_reason")
+    report["self_heal_actions"] = list(baidu_report.get("self_heal_actions") or [])
+    logger.info("[实际来源] 百度数据：%s", _data_source_label(report["data_source"]))
     baidu_passed = not baidu_errors
     report["steps"].append(_step_result(
         "fetch-baidu-daily",
@@ -436,6 +509,10 @@ def run_daily_pipeline(
     print_unknown_baidu_accounts_notice(baidu_report)
 
     logger.info("日报一键流步骤完成：fetch-baidu-daily")
+
+    stopped = stop_if_requested("after-baidu")
+    if stopped:
+        return stopped
 
     print_step(2, 4, "解析商务通日报导出文件")
     if export_file is None:
@@ -475,6 +552,10 @@ def run_daily_pipeline(
         print_step_success("商务通日报导出文件已解析")
         logger.info("日报一键流步骤完成：parse-kst-daily")
 
+    stopped = stop_if_requested("after-kst")
+    if stopped:
+        return stopped
+
     print_step(3, 4, "合并百度日报与商务通日报数据")
     try:
         merge_result = merge_func(config=config, root=root, logger=logger, target_date=daily_date)
@@ -498,6 +579,10 @@ def run_daily_pipeline(
         report["date"] = merge_result["merged"].get("date") or report["date"]
     print_step_success("日报数据已合并")
     logger.info("日报一键流步骤完成：merge-daily")
+
+    stopped = stop_if_requested("before-excel", claim_excel=True)
+    if stopped:
+        return stopped
 
     print_step(4, 4, "写入日报 Excel 并复核")
     try:

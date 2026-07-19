@@ -6,6 +6,7 @@ credentials.local.json
 credentials*.json
 secrets/secrets.json
 secrets/*.local.json
+secrets/*.lock
 logs/*.log
 reports/*.json
 reports/*.csv

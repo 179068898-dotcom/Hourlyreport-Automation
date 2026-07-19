@@ -23,6 +23,7 @@ from modules.baidu_overview import baidu_open_overview, baidu_prepare_overview
 from modules.baidu_validator import print_baidu_validate_summary, validate_baidu_account_data
 from modules.baidu_report_api import fetch_baidu_api_probe
 from modules.baidu_api_simulation import simulate_baidu_api_hourly
+from modules.baidu_api_readiness import run_baidu_api_readiness
 from modules.baidu_oauth_bundle import BaiduOAuthImportError, import_baidu_oauth_bundle
 from modules.browser_manager import test_browser_connect, test_browser_launch
 from modules.data_merger import merge_daily_files, merge_data_files
@@ -37,6 +38,7 @@ from modules.project_config import build_runtime_config_from_project, get_curren
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
+from modules.task_stop_gate import pipeline_exit_code
 
 ROOT = Path(__file__).resolve().parent
 
@@ -61,6 +63,7 @@ def main() -> int | None:
         "fetch-baidu-auto",
         "fetch-baidu-daily",
         "test-baidu-api",
+        "test-baidu-api-readiness",
         "simulate-baidu-api-hourly",
         "import-baidu-oauth",
         "baidu-detect",
@@ -92,13 +95,25 @@ def main() -> int | None:
     parser.add_argument("--quick", action="store_true", help="preflight 快速模式：跳过耗时的 Excel sheet 结构扫描")
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
     parser.add_argument("--verbose", action="store_true", help="启用详细终端输出")
-    parser.add_argument("--api-profile", default=None, help="百度 OAuth 授权导入使用的本地 API profile")
+    parser.add_argument("--api-profile", default=None, help="百度 OAuth 授权导入使用的本地 API profile，推荐填 auto")
     args = parser.parse_args()
 
     if args.verbose:
         set_verbose(True)
 
     logger = setup_logger(ROOT / "logs" / "run.log")
+    if args.mode == "test-baidu-api-readiness":
+        report = run_baidu_api_readiness(
+            ROOT,
+            logger,
+            target_date=args.date,
+            period=args.period,
+        )
+        if report.get("passed"):
+            print_success("百度 API 批量只读检查通过：reports/baidu_api_readiness_report.json")
+            return 0
+        print_error("百度 API 批量只读检查未通过：reports/baidu_api_readiness_report.json")
+        return 1
     base_config = load_config(args.config, fallback_path=ROOT / "config.example.json")
     config_error: Exception | None = None
     try:
@@ -292,6 +307,9 @@ def main() -> int | None:
             print_error(f"百度 OAuth 授权导入失败：{exc}")
             return 1
         print_success(f"百度 OAuth 授权已导入：{report['api_profile']}")
+        if report.get("matched_project_id"):
+            source_name = report.get("matched_source_id") or "单来源"
+            print_quiet_line(f"自动匹配项目：{report['matched_project_id']}；来源：{source_name}")
         print_quiet_line(f"识别子账户 {report['sub_account_count']} 个；授权文件请立即人工删除")
         return 0
     if args.mode == "baidu-detect":
@@ -417,11 +435,13 @@ def main() -> int | None:
             confirm_before_run=True,
         )
         out = ROOT / "reports" / "final_run_report.json"
-        if report.get("passed"):
+        if report.get("cancelled"):
+            print_warning("小时报任务已在 Excel 写入前安全停止")
+        elif report.get("passed"):
             print_final_success(f"半自动一键流完成：reports/final_run_report.json")
         else:
             print_final_failure(f"半自动一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/final_run_report.json")
-        return 0 if report.get("passed") else 1
+        return pipeline_exit_code(report)
     if args.mode == "run-daily":
         credential_report = check_baidu_credentials(ROOT, config)
         if not credential_report.get("passed"):
@@ -436,11 +456,13 @@ def main() -> int | None:
             kst_file=args.file,
         )
         out = ROOT / "reports" / "daily_final_run_report.json"
-        if report.get("passed"):
+        if report.get("cancelled"):
+            print_warning("日报任务已在 Excel 写入前安全停止")
+        elif report.get("passed"):
             print_final_success(f"日报一键流完成：reports/daily_final_run_report.json")
         else:
             print_final_failure(f"日报一键流中断，失败步骤：{report.get('failed_step')}，报告：reports/daily_final_run_report.json")
-        return 0 if report.get("passed") else 1
+        return pipeline_exit_code(report)
 
 
 if __name__ == "__main__":

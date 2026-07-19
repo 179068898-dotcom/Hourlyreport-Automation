@@ -5,7 +5,7 @@
 ## 基本约定
 
 - 全程使用中文回复。
-- 当前项目是 Windows 本地运行的百度竞价日报/小时报自动化工具。
+- 当前产品名为“蚁之力 · 竞价数据自动化”，是 Windows 本地运行的百度竞价日报/小时报自动化工具。
 - 当前版本只做百度数据读取、快商通人工导出文件解析、本地 Excel 写入、日志和报告输出。
 - 当前版本不做 QQ、不做截图、不自动发送任何消息。
 - 不要向用户索要真实百度密码，不要输出、记录或提交 secrets。
@@ -51,10 +51,18 @@
 
 ## 百度 API 开发边界
 
-- 服务商开发资格审核和九项目十一超管验收完成前，正式 `run` / `run-daily` 必须继续使用浏览器抓数。
-- `test-baidu-api`、`simulate-baidu-api-hourly` 和 OAuth 导入属于显式开发入口，不得被普通 GUI 任务自动调用。
-- 项目配置中存在 `api_profile` 只表示预留授权映射，不表示该项目已启用 API。
-- 后续接入应通过现有 pipeline 的 `fetch_baidu_func` 注入点逐项目灰度，不得直接改写 Excel 合并与写入边界。
+- 服务商应用 `openBD` 已审核通过，九个项目、十一个授权已导入。正式发布前必须显式运行只读验收：`.venv\Scripts\python.exe main.py --mode test-baidu-api-readiness`。
+- 生产任务统一读取应用级 `baidu_data_source_preference`。缺失或无效时按 `api`；`A` / `api` 表示 API 优先，`B` / `browser` 表示强制浏览器。
+- `A` 模式默认先走 API；配置、授权、Token、网络或完整性失败时，先执行有限自修复，再自动整项目降级浏览器。`B` 模式不得发起 API 请求，是生产异常时的紧急回退入口。
+- 项目 JSON 中的 `api_profile` 只负责授权映射；旧 `data_source_mode`、`api_shadow`、`api_preferred` 仅保留给兼容测试和显式开发入口，不再决定普通生产任务的有效通道。
+- API 主通道先执行有限自修复：Token 最多刷新一次，网络错误最多额外重试两次，完整性错误最多额外读取一次，总预算 20 秒；仍失败时自动降级现有浏览器抓数。
+- API 与浏览器均失败时必须停止，不得继续解析、合并或写 Excel。
+- 百度应用 secretKey 只允许保存在腾讯云 SCF 环境变量；桌面端只保存独立 HMAC 客户端密钥和 OAuth Token，日志、报告不得包含任何令牌或密钥。
+- `test-baidu-api`、`test-baidu-api-readiness`、`simulate-baidu-api-hourly` 和 OAuth 导入属于显式开发入口，普通 GUI 不得自动调用。
+- `test-baidu-api-readiness` 只读百度数据，不读写 Excel，也不启动 Chrome。Token 过期时允许按生产自修复规则备份并原子更新 `secrets/secrets.json`；原文件及备份均为敏感文件，不得提交、打包或写入日志。
+- OAuth 自动匹配优先要求推广 ID 集合完全一致；超管包含停用户时，仅允许授权集合完整覆盖单一项目/来源的唯一超集匹配，并必须报告被忽略 ID。若同时覆盖多个候选，必须拒绝导入。
+- 沈阳牛、沈阳白必须两路 API 全部成功后才合并；任一路失败或合并校验异常时，丢弃本次 API 临时结果并整项目降级浏览器，禁止混合 API 与浏览器的部分数据。
+- 多项目并行尚未投入生产；不得因为全局 API 模式而提前启用多项目并行。
 
 ## 固定运行入口
 
@@ -95,7 +103,8 @@ HERMES 默认使用快速预检以减少多项目排队耗时：
 快速预检会检查：
 
 - 项目根目录。
-- Chrome 9222 是否可连接；未启动时会自动尝试启动项目专用调试 Chrome。
+- `A` / API 模式的 preflight 不提前启动 Chrome；只有 API 最终失败、实际降级时才延迟启动并检查项目专用调试 Chrome。
+- `B` / 强制浏览器模式继续检查 Chrome 9222；未启动时会自动尝试启动项目专用调试 Chrome。
 - 当前项目配置是否合法。
 - Excel 路径是否存在。
 - 快商通导出目录是否存在。
@@ -131,7 +140,7 @@ chromium.connect_over_cdp("http://127.0.0.1:9222")
 "C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Default" https://cc.baidu.com/report
 ```
 
-`start_chrome_debug.bat` 用于人工准备项目专用调试 Chrome。preflight / run 默认会先复用 9222；未就绪时自动启动项目专用调试 Chrome，不要关闭老 Chrome。
+`start_chrome_debug.bat` 用于人工准备项目专用调试 Chrome。`B` 模式的 preflight / run 会先复用 9222；`A` 模式仅在实际降级时延迟执行同一套 Chrome 就绪逻辑。不要关闭老 Chrome。
 
 静默规则：
 
