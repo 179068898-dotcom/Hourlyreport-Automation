@@ -62,9 +62,10 @@ def show_startup_error(message: str) -> None:
 
 def windows_app_user_model_id(root: str | Path) -> str:
     root_path = Path(root)
-    icon = root_path / "assets" / "app_icon.ico"
+    # Follow the runtime icon so Windows refreshes the taskbar cache when it changes.
+    icon = root_path / "assets" / "app_icon.png"
     if not icon.exists():
-        icon = root_path / "assets" / "app_icon.png"
+        icon = root_path / "assets" / "app_icon.ico"
     icon_bytes = icon.read_bytes() if icon.exists() else b"default-icon"
     digest = hashlib.sha256(icon_bytes).hexdigest()[:12]
     return f"{WINDOWS_APP_ID_PREFIX}.{digest}"

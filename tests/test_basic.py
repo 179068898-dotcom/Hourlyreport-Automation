@@ -8340,18 +8340,24 @@ def test_regular_build_excludes_secrets_json():
     assert "configs/projects/project_template.json" in names
 
 
-def test_online_update_build_contains_program_but_excludes_user_data():
+def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     from tools.build_release import release_name
 
     root = Path(__file__).resolve().parents[1]
-    release = build_release(root, version="2026.7.19.105", online_update=True)
+    release = build_release(
+        root,
+        version="2026.7.19.106",
+        online_update=True,
+        output_dir=tmp_path,
+    )
 
     import zipfile
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.19.105.zip"
-    assert release_name("2026.7.19.105", online_update=True) == release.name
+    assert release.name == "Hourlyreport_automation_v2026.7.19.106.zip"
+    assert release.parent == tmp_path
+    assert release_name("2026.7.19.106", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -8956,6 +8962,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.title_label.font().pointSize() == 10
     assert window.system_config_button.text() == "系统"
     assert window.system_config_button.height() == window.title_label.height()
+    assert window.title_layout.itemAt(2).spacerItem().sizeHint().width() == 10
     assert window.hourly_title.text() == "小时报"
     assert window.daily_title.text() == "日报"
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
@@ -9024,6 +9031,10 @@ def test_data_source_control_defaults_to_api_and_emits_browser(monkeypatch):
     assert control.segment_frame.geometry().contains(control.api_button.geometry().center())
     assert control.segment_frame.geometry().contains(control.browser_button.geometry().center())
     assert "QFrame#dataSourceModeSegment" in control.styleSheet()
+    assert control.api_button.width() == control.api_button.height() == 22
+    assert control.browser_button.width() == control.browser_button.height() == 22
+    assert "border-radius: 11px" in control.styleSheet()
+    assert "border: 1px solid #b9d8ff" in control.styleSheet()
     assert "background: #3f83f8" in control.styleSheet()
     assert "color: #ffffff" in control.styleSheet()
 
@@ -9407,6 +9418,7 @@ def test_desktop_gui_uses_vista_yahei_bold_with_regular_secondary_text(monkeypat
     assert 'font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert 'font-family: "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
+    assert "QLabel#dailyCardTitle" in window.styleSheet()
     assert "font-weight: 600" not in window.styleSheet()
     assert "font-weight: 700" in window.styleSheet()
     assert "font-weight: 400" in window.styleSheet()
@@ -9463,21 +9475,44 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
     assert window.update_button.isHidden()
     window.on_update_checking()
+    assert window.update_button.isHidden()
+
+    from gui.update_manager import ReleaseUpdate
+    update = ReleaseUpdate(
+        version="2026.7.19.107",
+        download_url="https://example/update.zip",
+        asset_name="Hourlyreport_automation_v2026.7.19.107.zip",
+        sha256="a" * 64,
+        size=123,
+    )
+    window.on_update_available(update)
     assert not window.update_button.isHidden()
-    assert window.update_button.property("updateState") == "checking"
-    assert window.update_button.text() == ""
-    assert not window.update_button.icon().isNull()
+    assert window.update_button.property("updateState") == "available"
+    assert window.update_button.text() == "更新"
+    download_calls = []
+    monkeypatch.setattr(window.update_manager, "start_download", lambda value: download_calls.append(value) or True)
+    window.handle_update_button_clicked()
+    assert download_calls == [update]
+    assert window.update_button.property("updateState") == "downloading"
+    assert window.update_button.text() == "下载中"
     window.on_update_download_progress(41)
     assert not window.update_button.isHidden()
     assert window.update_button.property("updateState") == "downloading"
-    assert window.update_button.text() == ""
+    assert window.update_button.text() == "41%"
     assert "41%" in window.update_button.toolTip()
-    assert not window.update_button.icon().isNull()
-    window.on_update_ready("2026.7.15.102", Path("update.zip"))
-    assert window.update_button.property("updateState") == "ready"
+    window.on_update_failed("network unavailable")
+    assert not window.update_button.isHidden()
+    assert window.update_button.property("updateState") == "available"
     assert window.update_button.text() == "更新"
+    window.handle_update_button_clicked()
+    assert download_calls == [update, update]
+    window.on_update_download_progress(100)
+    assert window.update_button.text() == "100%"
+    window.on_update_ready("2026.7.19.107", Path("update.zip"))
+    assert window.update_button.property("updateState") == "ready"
+    assert window.update_button.text() == "更新重启"
     assert window.update_button.icon().isNull()
-    assert "2026.7.15.102" in window.update_button.toolTip()
+    assert "2026.7.19.107" in window.update_button.toolTip()
     window.on_update_up_to_date()
     assert window.update_button.isHidden()
     window.close()
@@ -9851,13 +9886,14 @@ def test_desktop_gui_period_selection_marks_checked_green(monkeypatch):
     assert 'QPushButton#periodButton:checked' in window.styleSheet()
     assert 'background: #ffffff' in window.styleSheet()
     assert all(not button.autoDefault() for button in window.period_buttons)
-    assert window.period_buttons[1].text() == "15:00"
-    assert window.period_buttons[1].icon().isNull() is False
+    assert window.period_buttons[0].text() == "11:00"
+    assert window.period_buttons[0].icon().isNull() is False
+    assert window.selected_period() == "11点"
     window.show()
     app.processEvents()
     assert len({button.width() for button in [window.hourly_action_control, *window.period_buttons]}) == 1
-    image = window.period_buttons[1].grab().toImage()
-    check_color = image.pixelColor(window.period_buttons[1].width() - 17, 13)
+    image = window.period_buttons[0].grab().toImage()
+    check_color = image.pixelColor(window.period_buttons[0].width() - 17, 13)
     assert check_color.green() > check_color.red()
     window.close()
 
@@ -10186,20 +10222,29 @@ def test_desktop_window_entry_runs_first_startup_directory_initialization(tmp_pa
 
 
 def test_online_update_selects_newer_github_release_asset():
-    from gui.update_manager import CURRENT_VERSION, parse_release_version, parse_version, select_release_update
+    from gui.update_manager import (
+        CURRENT_VERSION,
+        GITHUB_LATEST_RELEASE_URL,
+        parse_release_version,
+        parse_version,
+        select_release_update,
+    )
 
-    assert CURRENT_VERSION == "2026.7.19.105"
+    assert CURRENT_VERSION == "2026.7.19.106"
+    assert GITHUB_LATEST_RELEASE_URL == (
+        "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
+    )
     assert parse_version("v2026.7.19.104") == (2026, 7, 19, 104)
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.19.106",
+        "tag_name": "v2026.7.19.107",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.19.106.zip",
+                "name": "Hourlyreport_automation_v2026.7.19.107.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -10210,10 +10255,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.19.106"
+    assert update.version == "2026.7.19.107"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.19.106") is None
+    assert select_release_update(payload, "2026.7.19.107") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -10224,6 +10269,35 @@ def test_online_update_selects_newer_github_release_asset():
         {**payload, "assets": [{**payload["assets"][1], "size": 0}]},
     ):
         assert select_release_update(invalid, CURRENT_VERSION) is None
+
+
+def test_online_update_104_accepts_published_105_release_shape():
+    from gui.update_manager import select_release_update
+
+    payload = {
+        "tag_name": "v2026.7.19.105",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "Hourlyreport_automation_v2026.7.19.105.zip",
+                "browser_download_url": (
+                    "https://github.com/179068898-dotcom/Hourlyreport-Automation/releases/"
+                    "download/v2026.7.19.105/Hourlyreport_automation_v2026.7.19.105.zip"
+                ),
+                "digest": (
+                    "sha256:861dc0a764690eb7d2f11e423bc1ed3f1894e13beec94e3a813436aedfb3a5a6"
+                ),
+                "size": 57497183,
+            }
+        ],
+    }
+
+    update = select_release_update(payload, "2026.7.19.104")
+
+    assert update is not None
+    assert update.version == "2026.7.19.105"
+    assert update.asset_name == "Hourlyreport_automation_v2026.7.19.105.zip"
 
 
 def test_online_update_archive_rejects_path_traversal(tmp_path):
@@ -10268,6 +10342,50 @@ def test_online_update_archive_rejects_windows_alias_and_device_paths(tmp_path):
             archive.writestr(name, "bad")
         with pytest.raises(ValueError, match="不安全|受保护"):
             validate_update_archive(archive_path)
+
+
+def test_online_update_check_emits_available_without_downloading(monkeypatch):
+    import io
+    import json
+
+    import gui.update_manager as update_manager
+
+    payload = {
+        "tag_name": "v2026.7.19.107",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "Hourlyreport_automation_v2026.7.19.107.zip",
+                "browser_download_url": "https://example/update.zip",
+                "digest": "sha256:" + "a" * 64,
+                "size": 123,
+            }
+        ],
+    }
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    monkeypatch.setattr(
+        update_manager.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: Response(json.dumps(payload).encode("utf-8")),
+    )
+    manager = update_manager.GitHubUpdateManager()
+    available = []
+    ready = []
+    manager.available.connect(available.append)
+    manager.ready.connect(lambda *args: ready.append(args))
+
+    manager._check_for_update()
+
+    assert [item.version for item in available] == ["2026.7.19.107"]
+    assert ready == []
 
 
 def test_online_update_download_rejects_size_mismatch(tmp_path, monkeypatch):
@@ -11106,24 +11224,56 @@ def test_desktop_gui_exit_actions_clean_tray_and_pet(monkeypatch, exit_source):
 def test_desktop_gui_app_icon_assets_and_build_icon_are_configured():
     root = Path(__file__).resolve().parents[1]
     icon = root / "assets" / "app_icon.ico"
-    source = root / "assets" / "app_icon.png"
+    runtime_source = root / "assets" / "app_icon.png"
+    exe_source = root / "assets" / "app_icon_exe.png"
     build_script = (root / "tools" / "build_desktop_exe.py").read_text(encoding="utf-8")
+    spec_source = (root / "tools" / "hourlyreport_automation.spec").read_text(encoding="utf-8")
 
     assert icon.exists()
-    assert source.exists()
-    assert "--icon" in build_script
-    assert "app_icon.ico" in build_script
-    assert "--onefile" in build_script
-    assert "--windowed" in build_script
+    assert runtime_source.exists()
+    assert exe_source.exists()
+    assert "hourlyreport_automation.spec" in build_script
+    assert "app_icon.ico" in spec_source
+    assert "exe = EXE(" in spec_source
+    assert "console=False" in spec_source
 
     from PySide6.QtGui import QImage
 
-    image = QImage(str(source))
-    assert not image.isNull()
-    corner = image.pixelColor(max(1, image.width() // 32), max(1, image.height() // 32))
-    assert corner.alpha() == 0
-    center = image.pixelColor(image.width() // 2, image.height() // 2)
-    assert center.alpha() == 255
+    runtime_image = QImage(str(runtime_source))
+    assert not runtime_image.isNull()
+    runtime_corner = runtime_image.pixelColor(
+        max(1, runtime_image.width() // 32), max(1, runtime_image.height() // 32)
+    )
+    assert runtime_corner.alpha() == 0
+    runtime_center = runtime_image.pixelColor(runtime_image.width() // 2, runtime_image.height() // 2)
+    assert runtime_center.alpha() == 255
+
+    exe_image = QImage(str(exe_source))
+    assert not exe_image.isNull()
+    assert exe_image.pixelColor(1, 1).alpha() == 0
+    dark_background = exe_image.pixelColor(exe_image.width() // 2, exe_image.height() // 16)
+    assert dark_background.alpha() == 255
+    assert max(dark_background.red(), dark_background.green(), dark_background.blue()) < 40
+
+
+def test_desktop_build_spec_filters_unused_qt_components():
+    root = Path(__file__).resolve().parents[1]
+    spec = root / "tools" / "hourlyreport_automation.spec"
+    build_script = (root / "tools" / "build_desktop_exe.py").read_text(encoding="utf-8")
+
+    assert spec.exists()
+    source = spec.read_text(encoding="utf-8")
+    for marker in (
+        "qt6quick",
+        "qt6qml",
+        "qt6pdf",
+        "qt6virtualkeyboard",
+        "qt6opengl",
+        "opengl32sw.dll",
+    ):
+        assert marker in source.lower()
+    assert "qwindows.dll" in source.lower()
+    assert "hourlyreport_automation.spec" in build_script
 
 
 def test_desktop_gui_windows_app_id_changes_when_icon_changes(tmp_path):
@@ -11131,7 +11281,7 @@ def test_desktop_gui_windows_app_id_changes_when_icon_changes(tmp_path):
 
     assets = tmp_path / "assets"
     assets.mkdir()
-    icon = assets / "app_icon.ico"
+    icon = assets / "app_icon.png"
     icon.write_bytes(b"first-icon")
     first_id = windows_app_user_model_id(tmp_path)
 

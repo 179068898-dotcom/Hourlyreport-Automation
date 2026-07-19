@@ -75,7 +75,7 @@ from modules.task_stop_gate import (
     clear_task_stop_gate,
     request_task_stop,
 )
-from gui.update_manager import APP_EXE_NAME, GitHubUpdateManager, launch_update_helper
+from gui.update_manager import APP_EXE_NAME, GitHubUpdateManager, ReleaseUpdate, launch_update_helper
 from modules.project_config import (
     get_data_source_preference,
     get_excel_path,
@@ -395,8 +395,8 @@ class DataSourceModeControl(QFrame):
             QPushButton#dataSourceModeButton {{
                 color: #69788f;
                 background: transparent;
-                border: 0;
-                border-radius: 6px;
+                border: 1px solid #b9d8ff;
+                border-radius: 11px;
                 padding: 0;
                 font-family: {FONT_TITLE_STACK};
                 font-size: 8pt;
@@ -410,7 +410,7 @@ class DataSourceModeControl(QFrame):
             QPushButton#dataSourceModeButton:disabled {{
                 color: #a8b2c1;
                 background: transparent;
-                border: 0;
+                border: 1px solid #d8e3f0;
             }}
             QPushButton#dataSourceModeButton:checked:disabled {{
                 color: #ffffff;
@@ -455,8 +455,8 @@ class DataSourceModeControl(QFrame):
         return "B>A" if self._preference == "browser" else "A>B"
 
     def _target_geometries(self, preference: str) -> tuple[QRect, QRect]:
-        left = QRect(38, 2, 21, 22)
-        right = QRect(70, 2, 21, 22)
+        left = QRect(38, 2, 22, 22)
+        right = QRect(70, 2, 22, 22)
         if preference == "browser":
             return right, left
         return left, right
@@ -464,7 +464,7 @@ class DataSourceModeControl(QFrame):
     def _layout_children(self) -> None:
         self.prefix_label.setGeometry(0, 0, 36, self.height())
         self.segment_frame.setGeometry(36, 0, 58, self.height())
-        self.arrow_label.setGeometry(59, 0, 10, self.height())
+        self.arrow_label.setGeometry(60, 0, 9, self.height())
         if (
             self.api_animation.state() != QPropertyAnimation.State.Running
             and self.browser_animation.state() != QPropertyAnimation.State.Running
@@ -1483,6 +1483,7 @@ class MainWindow(QMainWindow):
         self.current_start_time = ""
         self._last_pet_event = ""
         self._quitting = False
+        self.pending_update_release: ReleaseUpdate | None = None
         self.pending_update_version = ""
         self.pending_update_archive: Path | None = None
         self.calendar_dialog: ModernCalendarDialog | None = None
@@ -1528,6 +1529,7 @@ class MainWindow(QMainWindow):
         self._build_tray()
         self.update_manager = GitHubUpdateManager(self)
         self.update_manager.checking.connect(self.on_update_checking)
+        self.update_manager.available.connect(self.on_update_available)
         self.update_manager.download_progress.connect(self.on_update_download_progress)
         self.update_manager.ready.connect(self.on_update_ready)
         self.update_manager.up_to_date.connect(self.on_update_up_to_date)
@@ -1685,6 +1687,7 @@ class MainWindow(QMainWindow):
         self.title_label.setFont(title_font)
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         title_layout.addWidget(self.title_label)
+        title_layout.addSpacing(10)
 
         self.system_config_button = HoverMenuButton("系统")
         self.system_config_button.setObjectName("systemConfigButton")
@@ -1761,7 +1764,7 @@ class MainWindow(QMainWindow):
         self.update_button.setFixedSize(22, 22)
         self.update_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.update_button.setToolTip("检查更新")
-        self.update_button.clicked.connect(self.install_downloaded_update)
+        self.update_button.clicked.connect(self.handle_update_button_clicked)
         self.update_button.hide()
         title_layout.addWidget(self.update_button)
         title_layout.addStretch(1)
@@ -1930,7 +1933,7 @@ class MainWindow(QMainWindow):
             self.period_group.addButton(button)
             self.period_buttons.append(button)
             action_grid.addWidget(button, *position)
-        self.period_buttons[1].setChecked(True)
+        self.period_buttons[0].setChecked(True)
         self.update_period_button_texts()
         hourly_layout.addLayout(action_grid)
         left_layout.addWidget(self.hourly_card)
@@ -2413,6 +2416,7 @@ class MainWindow(QMainWindow):
                 font-size: 9pt;
                 text-align: center;
             }}
+            QPushButton#updateButton[updateState="available"],
             QPushButton#updateButton[updateState="ready"] {{ padding: 0 8px; }}
             QPushButton#updateButton:hover {{ background: #2689df; border-color: #237dc9; }}
             QPushButton#updateButton:pressed {{ background: #1f7dcc; }}
@@ -2459,9 +2463,9 @@ class MainWindow(QMainWindow):
             }}
             QLabel#dailyCardTitle {{
                 color: #101b2e;
-                font-family: {FONT_REGULAR_STACK};
+                font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
-                font-weight: 400;
+                font-weight: 700;
             }}
             QLabel#sectionTitle {{
                 color: #17243b;
@@ -2697,26 +2701,35 @@ class MainWindow(QMainWindow):
             return
         self.update_manager.start()
 
-    def _set_update_button_state(self, state: str, *, tooltip: str = "") -> None:
+    def _set_update_button_state(
+        self,
+        state: str,
+        *,
+        tooltip: str = "",
+        progress: int | None = None,
+    ) -> None:
         self.update_button.setProperty("updateState", state)
-        if state == "checking":
-            self.update_button.setText("")
-            self.update_button.setIcon(make_line_icon("loop", "#ffffff", 16))
-            self.update_button.setFixedSize(22, 22)
-            self.update_button.setEnabled(False)
-            self.update_button.setToolTip(tooltip or "正在检查更新")
+        if state == "available":
+            self.update_button.setIcon(QIcon())
+            self.update_button.setText("更新")
+            width = self.update_button.fontMetrics().horizontalAdvance("更新") + 18
+            self.update_button.setFixedSize(width, 22)
+            self.update_button.setEnabled(True)
+            self.update_button.setToolTip(tooltip)
             self.update_button.show()
         elif state == "downloading":
-            self.update_button.setText("")
+            text = "下载中" if progress is None or progress <= 0 else f"{progress}%"
+            self.update_button.setText(text)
             self.update_button.setIcon(make_line_icon("download", "#ffffff", 16))
-            self.update_button.setFixedSize(22, 22)
+            width = self.update_button.fontMetrics().horizontalAdvance(text) + 32
+            self.update_button.setFixedSize(max(64, width), 22)
             self.update_button.setEnabled(False)
             self.update_button.setToolTip(tooltip)
             self.update_button.show()
         elif state == "ready":
             self.update_button.setIcon(QIcon())
-            self.update_button.setText("更新")
-            width = self.update_button.fontMetrics().horizontalAdvance("更新") + 18
+            self.update_button.setText("更新重启")
+            width = self.update_button.fontMetrics().horizontalAdvance("更新重启") + 18
             self.update_button.setFixedSize(width, 22)
             self.update_button.setEnabled(True)
             self.update_button.setToolTip(tooltip)
@@ -2733,11 +2746,34 @@ class MainWindow(QMainWindow):
         self._refresh_widget_style(self.update_button)
 
     def on_update_checking(self) -> None:
-        self._set_update_button_state("checking")
+        self._set_update_button_state("hidden")
+
+    def on_update_available(self, update: ReleaseUpdate) -> None:
+        self.pending_update_release = update
+        self.pending_update_version = ""
+        self.pending_update_archive = None
+        self._set_update_button_state("available", tooltip=f"发现新版本 {update.version}")
+
+    def handle_update_button_clicked(self) -> None:
+        state = str(self.update_button.property("updateState") or "")
+        if state == "available" and self.pending_update_release is not None:
+            if self.update_manager.start_download(self.pending_update_release):
+                self._set_update_button_state(
+                    "downloading",
+                    tooltip="正在下载更新 0%",
+                    progress=0,
+                )
+            return
+        if state == "ready":
+            self.install_downloaded_update()
 
     def on_update_download_progress(self, value: int) -> None:
         progress = max(0, min(100, int(value)))
-        self._set_update_button_state("downloading", tooltip=f"正在下载更新 {progress}%")
+        self._set_update_button_state(
+            "downloading",
+            tooltip=f"正在下载更新 {progress}%",
+            progress=progress,
+        )
 
     def on_update_ready(self, version: str, archive_path: str | Path) -> None:
         self.pending_update_version = version
@@ -2748,6 +2784,12 @@ class MainWindow(QMainWindow):
         self._set_update_button_state("hidden")
 
     def on_update_failed(self, _message: str) -> None:
+        if self.pending_update_release is not None and self.update_button.property("updateState") == "downloading":
+            self._set_update_button_state(
+                "available",
+                tooltip="下载失败，点击重新下载",
+            )
+            return
         self._set_update_button_state("hidden")
 
     def install_downloaded_update(self) -> None:
@@ -3137,7 +3179,7 @@ class MainWindow(QMainWindow):
         for button in self.period_buttons:
             if button.isChecked():
                 return str(button.property("periodValue") or button.text().replace("✓", "").strip())
-        return "15点"
+        return "11点"
 
     def update_period_button_texts(self) -> None:
         for button in self.period_buttons:

@@ -175,7 +175,14 @@ def _source_fingerprint(root: Path) -> str:
     for folder in (root / "gui", root / "modules"):
         if folder.is_dir():
             candidates.extend(folder.rglob("*.py"))
-    candidates.extend((root / "assets" / name) for name in ("app_icon.ico", "app_icon.png"))
+    candidates.extend(
+        (root / "assets" / name)
+        for name in ("app_icon.ico", "app_icon.png", "app_icon_exe.png")
+    )
+    candidates.extend(
+        root / "tools" / name
+        for name in ("build_desktop_exe.py", "hourlyreport_automation.spec")
+    )
     fonts_dir = root / "assets" / "fonts"
     if fonts_dir.is_dir():
         candidates.extend(fonts_dir.rglob("*"))
@@ -241,12 +248,13 @@ def build_release(
     internal: bool = False,
     online_update: bool = False,
     first_install: bool = False,
+    output_dir: str | Path | None = None,
 ) -> Path:
     if sum((bool(internal), bool(online_update), bool(first_install))) > 1:
         raise ValueError("内部包、首次安装包与在线更新包不能同时生成")
     root_path = Path(root)
-    dist_dir = root_path / "dist"
-    dist_dir.mkdir(exist_ok=True)
+    dist_dir = Path(output_dir) if output_dir is not None else root_path / "dist"
+    dist_dir.mkdir(parents=True, exist_ok=True)
     if first_install:
         _validate_first_install_source(root_path)
         clean_version = validate_online_version(version or "")

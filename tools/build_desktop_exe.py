@@ -35,7 +35,14 @@ def source_fingerprint(root: str | Path) -> str:
     for folder in (root_path / "gui", root_path / "modules"):
         if folder.is_dir():
             candidates.extend(folder.rglob("*.py"))
-    candidates.extend((root_path / "assets" / name) for name in ("app_icon.ico", "app_icon.png"))
+    candidates.extend(
+        (root_path / "assets" / name)
+        for name in ("app_icon.ico", "app_icon.png", "app_icon_exe.png")
+    )
+    candidates.extend(
+        root_path / "tools" / name
+        for name in ("build_desktop_exe.py", "hourlyreport_automation.spec")
+    )
     fonts_dir = root_path / "assets" / "fonts"
     if fonts_dir.is_dir():
         candidates.extend(fonts_dir.rglob("*"))
@@ -71,20 +78,18 @@ def build_desktop_exe(root: str | Path) -> int:
     if not python.exists():
         print("[失败] 缺少 .venv\\Scripts\\python.exe，请先运行 install_env.bat")
         return 1
-    icon = root_path / "assets" / "app_icon.ico"
+    spec = root_path / "tools" / "hourlyreport_automation.spec"
     command = [
         str(python),
         "-m",
         "PyInstaller",
         "--noconfirm",
-        "--onefile",
-        "--windowed",
         "--clean",
-        "--icon",
-        str(icon),
-        "--name",
-        APP_NAME,
-        str(root_path / "gui" / "app.py"),
+        "--distpath",
+        str(root_path / "dist"),
+        "--workpath",
+        str(root_path / "build" / APP_NAME),
+        str(spec),
     ]
     result = subprocess.run(command, cwd=root_path)
     if result.returncode != 0:

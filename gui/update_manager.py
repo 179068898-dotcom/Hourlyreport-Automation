@@ -157,6 +157,7 @@ def _update_storage_dir() -> Path:
 
 class GitHubUpdateManager(QObject):
     checking = Signal()
+    available = Signal(object)
     download_progress = Signal(int)
     ready = Signal(str, str)
     up_to_date = Signal()
@@ -164,16 +165,21 @@ class GitHubUpdateManager(QObject):
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
-        self._thread: threading.Thread | None = None
+        self._check_thread: threading.Thread | None = None
+        self._download_thread: threading.Thread | None = None
 
     def start(self) -> None:
-        if self._thread is not None and self._thread.is_alive():
+        if self._check_thread is not None and self._check_thread.is_alive():
             return
         self.checking.emit()
-        self._thread = threading.Thread(target=self._check_and_download, daemon=True, name="github-update-check")
-        self._thread.start()
+        self._check_thread = threading.Thread(
+            target=self._check_for_update,
+            daemon=True,
+            name="github-update-check",
+        )
+        self._check_thread.start()
 
-    def _check_and_download(self) -> None:
+    def _check_for_update(self) -> None:
         try:
             request = urllib.request.Request(
                 GITHUB_LATEST_RELEASE_URL,
@@ -189,6 +195,24 @@ class GitHubUpdateManager(QObject):
             if update is None:
                 self.up_to_date.emit()
                 return
+            self.available.emit(update)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+    def start_download(self, update: ReleaseUpdate) -> bool:
+        if self._download_thread is not None and self._download_thread.is_alive():
+            return False
+        self._download_thread = threading.Thread(
+            target=self._download_and_prepare,
+            args=(update,),
+            daemon=True,
+            name="github-update-download",
+        )
+        self._download_thread.start()
+        return True
+
+    def _download_and_prepare(self, update: ReleaseUpdate) -> None:
+        try:
             archive_path = self._download(update)
             validate_update_archive(archive_path)
             self.ready.emit(update.version, str(archive_path))
