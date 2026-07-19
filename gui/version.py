@@ -1,4 +1,4 @@
 from __future__ import annotations
 
 
-CURRENT_VERSION = "2026.7.19.104"
+CURRENT_VERSION = "2026.7.19.105"

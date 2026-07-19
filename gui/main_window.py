@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.branding import PRODUCT_DISPLAY_NAME
+from gui.branding import PRODUCT_DISPLAY_NAME, WINDOW_HEADER_TITLE
 from gui.clawd import ClawdAnimator
 from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
 from gui.desktop_pet import ClawdDesktopPet
@@ -102,14 +102,14 @@ STAGES = [
 TITLE_FONT_PT = 10
 MAIN_FONT_PT = 9
 SUB_FONT_PT = 8
-FONT_LIGHT_FAMILY = "Microsoft YaHei"
-FONT_REGULAR_FAMILY = "Microsoft YaHei"
+FONT_LIGHT_FAMILY = "Microsoft YaHei UI"
+FONT_REGULAR_FAMILY = "Microsoft YaHei UI"
 FONT_TITLE_FAMILY = "Microsoft YaHei"
-FONT_FAMILY = FONT_TITLE_FAMILY
-FONT_STACK = '"Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+FONT_FAMILY = FONT_REGULAR_FAMILY
+FONT_STACK = '"Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif'
 FONT_MENU_STACK = FONT_STACK
 FONT_REGULAR_STACK = FONT_STACK
-FONT_TITLE_STACK = FONT_STACK
+FONT_TITLE_STACK = '"Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif'
 BASE_WINDOW_SIZE = QSize(966, 700)
 
 
@@ -347,15 +347,20 @@ class DataSourceModeControl(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("dataSourceModeControl")
-        self.setFixedSize(106, 29)
+        self.setFixedSize(94, 26)
         self._preference = "api"
 
-        self.indicator = QFrame(self)
-        self.indicator.setObjectName("dataSourceModeIndicator")
-        self.browser_button = QPushButton("浏览器", self)
-        self.api_button = QPushButton("API", self)
-        self.browser_button.setToolTip("强制使用浏览器")
-        self.api_button.setToolTip("API 优先，失败自动切换浏览器")
+        self.prefix_label = QLabel("模式：", self)
+        self.prefix_label.setObjectName("dataSourceModePrefix")
+        self.segment_frame = QFrame(self)
+        self.segment_frame.setObjectName("dataSourceModeSegment")
+        self.arrow_label = QLabel(">", self)
+        self.arrow_label.setObjectName("dataSourceModeArrow")
+        self.arrow_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.browser_button = QPushButton("B", self)
+        self.api_button = QPushButton("A", self)
+        self.browser_button.setToolTip("B：强制使用浏览器")
+        self.api_button.setToolTip("A：API 优先，失败自动切换浏览器")
         for button in (self.browser_button, self.api_button):
             button.setObjectName("dataSourceModeButton")
             button.setCheckable(True)
@@ -364,32 +369,54 @@ class DataSourceModeControl(QFrame):
         self.browser_button.clicked.connect(lambda: self.set_preference("browser"))
         self.api_button.clicked.connect(lambda: self.set_preference("api"))
 
-        self.animation = QPropertyAnimation(self.indicator, b"geometry", self)
-        self.animation.setDuration(150)
-        self.animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.api_animation = QPropertyAnimation(self.api_button, b"geometry", self)
+        self.browser_animation = QPropertyAnimation(self.browser_button, b"geometry", self)
+        for animation in (self.api_animation, self.browser_animation):
+            animation.setDuration(170)
+            animation.setEasingCurve(QEasingCurve.Type.OutCubic)
         self.setStyleSheet(f"""
             QFrame#dataSourceModeControl {{
+                background: transparent;
+                border: 0;
+            }}
+            QFrame#dataSourceModeSegment {{
                 background: #f1f4f8;
                 border: 1px solid #e1e7ef;
                 border-radius: 8px;
-                font-family: {FONT_STACK};
             }}
-            QFrame#dataSourceModeIndicator {{
-                background: #3f83f8;
-                border: 1px solid #2f6fed;
-                border-radius: 7px;
+            QLabel#dataSourceModePrefix, QLabel#dataSourceModeArrow {{
+                color: #53647e;
+                background: transparent;
+                border: 0;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 8pt;
+                font-weight: 400;
             }}
             QPushButton#dataSourceModeButton {{
                 color: #69788f;
                 background: transparent;
                 border: 0;
-                border-radius: 7px;
+                border-radius: 6px;
                 padding: 0;
-                font-family: {FONT_REGULAR_STACK};
-                font-size: 7pt;
+                font-family: {FONT_TITLE_STACK};
+                font-size: 8pt;
+                font-weight: 700;
             }}
-            QPushButton#dataSourceModeButton:checked {{ color: #ffffff; }}
-            QPushButton#dataSourceModeButton:disabled {{ color: #a8b2c1; }}
+            QPushButton#dataSourceModeButton:checked {{
+                color: #ffffff;
+                background: #3f83f8;
+                border: 1px solid #2f6fed;
+            }}
+            QPushButton#dataSourceModeButton:disabled {{
+                color: #a8b2c1;
+                background: transparent;
+                border: 0;
+            }}
+            QPushButton#dataSourceModeButton:checked:disabled {{
+                color: #ffffff;
+                background: #9eb8df;
+                border-color: #91abd2;
+            }}
         """)
         self._layout_children()
 
@@ -402,88 +429,56 @@ class DataSourceModeControl(QFrame):
         self._preference = normalized
         self.browser_button.setChecked(normalized == "browser")
         self.api_button.setChecked(normalized == "api")
-        self.animation.stop()
-        target = self._target_geometry(normalized)
+        self.api_animation.stop()
+        self.browser_animation.stop()
+        api_target, browser_target = self._target_geometries(normalized)
         if animate and self.isVisible():
-            self.animation.setStartValue(self.indicator.geometry())
-            self.animation.setEndValue(target)
-            self.animation.start()
+            self.api_animation.setStartValue(self.api_button.geometry())
+            self.api_animation.setEndValue(api_target)
+            self.browser_animation.setStartValue(self.browser_button.geometry())
+            self.browser_animation.setEndValue(browser_target)
+            if normalized == "api":
+                self.api_button.raise_()
+            else:
+                self.browser_button.raise_()
+            self.api_animation.start()
+            self.browser_animation.start()
         else:
-            self.indicator.setGeometry(target)
+            self.api_button.setGeometry(api_target)
+            self.browser_button.setGeometry(browser_target)
+            self.api_button.raise_()
+            self.browser_button.raise_()
         if emit and changed:
             self.preference_changed.emit(normalized)
 
-    def _target_geometry(self, preference: str) -> QRect:
-        inner_width = self.width() - 2
-        half = inner_width // 2
-        return QRect(1 + (0 if preference == "browser" else half), 1, half, self.height() - 2)
+    def display_order(self) -> str:
+        return "B>A" if self._preference == "browser" else "A>B"
+
+    def _target_geometries(self, preference: str) -> tuple[QRect, QRect]:
+        left = QRect(38, 2, 21, 22)
+        right = QRect(70, 2, 21, 22)
+        if preference == "browser":
+            return right, left
+        return left, right
 
     def _layout_children(self) -> None:
-        half = self.width() // 2
-        self.browser_button.setGeometry(0, 0, half, self.height())
-        self.api_button.setGeometry(half, 0, self.width() - half, self.height())
-        if self.animation.state() != QPropertyAnimation.State.Running:
-            self.indicator.setGeometry(self._target_geometry(self._preference))
-        self.indicator.lower()
-        self.browser_button.raise_()
-        self.api_button.raise_()
+        self.prefix_label.setGeometry(0, 0, 36, self.height())
+        self.segment_frame.setGeometry(36, 0, 58, self.height())
+        self.arrow_label.setGeometry(59, 0, 10, self.height())
+        if (
+            self.api_animation.state() != QPropertyAnimation.State.Running
+            and self.browser_animation.state() != QPropertyAnimation.State.Running
+        ):
+            api_target, browser_target = self._target_geometries(self._preference)
+            self.api_button.setGeometry(api_target)
+            self.browser_button.setGeometry(browser_target)
+        self.segment_frame.lower()
+        self.prefix_label.raise_()
+        self.arrow_label.raise_()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._layout_children()
-
-
-class InlineDataModeMenu(QFrame):
-    preference_requested = Signal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(
-            None,
-            Qt.WindowType.Popup
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint,
-        )
-        self.setObjectName("inlineDataModeMenu")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setFixedSize(124, 47)
-
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(9, 9, 9, 9)
-        layout.setSpacing(0)
-        self.data_source_control = DataSourceModeControl(self)
-        self.data_source_control.preference_changed.connect(self.preference_requested.emit)
-        layout.addWidget(self.data_source_control)
-
-        self.setStyleSheet(f"""
-            QFrame#inlineDataModeMenu {{
-                background: #ffffff;
-                border: 1px solid #cfd8e5;
-                border-radius: 10px;
-                font-family: {FONT_MENU_STACK};
-            }}
-        """)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        path = QPainterPath()
-        path.addRoundedRect(QRectF(self.rect()), 10, 10)
-        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
-
-    def sync(self, preference: str) -> None:
-        self.data_source_control.set_preference(preference, animate=False, emit=False)
-
-    def popup_below(self, anchor: QWidget) -> None:
-        position = anchor.mapToGlobal(QPoint(0, anchor.height() + 2))
-        screen = QApplication.screenAt(position) or QApplication.primaryScreen()
-        if screen:
-            available = screen.availableGeometry()
-            x = min(max(position.x(), available.left() + 6), available.right() - self.width() - 6)
-            y = min(position.y(), available.bottom() - self.height() - 6)
-            position = QPoint(x, max(y, available.top() + 6))
-        self.move(position)
-        self.show()
-        self.raise_()
-
 
 class RunStopSplitControl(QFrame):
     diagonal_gap_width = 2
@@ -511,8 +506,9 @@ class RunStopSplitControl(QFrame):
                 background: transparent;
                 border: 0;
                 padding: 0 5px;
-                font-family: {FONT_REGULAR_STACK};
+                font-family: {FONT_TITLE_STACK};
                 font-size: 9pt;
+                font-weight: 700;
             }}
             QPushButton#runSegmentButton:hover, QPushButton#stopSegmentButton:hover {{
                 background: rgba(255, 255, 255, 24);
@@ -1521,9 +1517,9 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         icon = QIcon(str(app_icon_path(self.root)))
         self.setWindowIcon(icon)
-        self.setWindowTitle(PRODUCT_DISPLAY_NAME)
+        self.setWindowTitle(WINDOW_HEADER_TITLE)
         base_font = QFont(FONT_FAMILY, MAIN_FONT_PT)
-        base_font.setWeight(QFont.Weight.Bold)
+        base_font.setWeight(QFont.Weight.Normal)
         self.setFont(base_font)
         self.setFixedSize(BASE_WINDOW_SIZE)
         self._drag_offset = None
@@ -1682,7 +1678,7 @@ class MainWindow(QMainWindow):
         title_layout.setSpacing(2)
         self.spinner = ClawdAnimator(self.title_bar, width=46, height=24, background="#edf0f4")
         title_layout.addWidget(self.spinner)
-        self.title_label = QLabel(PRODUCT_DISPLAY_NAME)
+        self.title_label = QLabel(WINDOW_HEADER_TITLE)
         self.title_label.setObjectName("windowTitleLabel")
         title_font = QFont(FONT_TITLE_FAMILY, TITLE_FONT_PT)
         title_font.setWeight(QFont.Weight.Bold)
@@ -1690,7 +1686,7 @@ class MainWindow(QMainWindow):
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         title_layout.addWidget(self.title_label)
 
-        self.system_config_button = HoverMenuButton("系统配置")
+        self.system_config_button = HoverMenuButton("系统")
         self.system_config_button.setObjectName("systemConfigButton")
         config_font = QFont(FONT_LIGHT_FAMILY, MAIN_FONT_PT)
         config_font.setWeight(QFont.Weight.Normal)
@@ -1757,19 +1753,6 @@ class MainWindow(QMainWindow):
         self.inline_config_menu.exit_requested.connect(self.exit_application)
         self.system_config_button.clicked.connect(self.show_system_config_menu)
         title_layout.addWidget(self.system_config_button)
-
-        self.data_mode_button = HoverMenuButton("数据模式")
-        self.data_mode_button.setObjectName("dataModeButton")
-        self.data_mode_button.setFont(QFont(config_font))
-        data_mode_metrics = self.data_mode_button.fontMetrics()
-        self.data_mode_button.setFixedSize(
-            data_mode_metrics.horizontalAdvance(self.data_mode_button.text()) + 10,
-            title_text_height,
-        )
-        self.data_mode_menu = InlineDataModeMenu(self)
-        self.data_mode_menu.preference_requested.connect(self.set_global_data_source_preference)
-        self.data_mode_button.clicked.connect(self.show_data_mode_menu)
-        title_layout.addWidget(self.data_mode_button)
 
         self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
@@ -1867,9 +1850,14 @@ class MainWindow(QMainWindow):
 
         project_title_row = QHBoxLayout()
         project_title_row.setSpacing(8)
-        project_label = QLabel("项目")
-        project_label.setObjectName("sectionTitle")
-        project_title_row.addWidget(project_label)
+        self.data_source_control = DataSourceModeControl()
+        self.data_source_control.set_preference(
+            self.data_source_preference,
+            animate=False,
+            emit=False,
+        )
+        self.data_source_control.preference_changed.connect(self.set_global_data_source_preference)
+        project_title_row.addWidget(self.data_source_control)
         project_title_row.addStretch(1)
         self.multi_preview_hint = QLabel("功能暂未上线，仅供预览")
         self.multi_preview_hint.setObjectName("multiPreviewHint")
@@ -1957,7 +1945,7 @@ class MainWindow(QMainWindow):
         daily_header.setSpacing(12)
         daily_header.addWidget(self._make_icon_box("calendar"))
         self.daily_title = QLabel("日报")
-        self.daily_title.setObjectName("cardTitle")
+        self.daily_title.setObjectName("dailyCardTitle")
         daily_header.addWidget(self.daily_title)
         daily_header.addStretch(1)
         daily_layout.addLayout(daily_header)
@@ -2398,7 +2386,7 @@ class MainWindow(QMainWindow):
                 font-weight: 700;
             }}
             QPushButton {{ outline: 0; }}
-            QPushButton#systemConfigButton, QPushButton#dataModeButton {{
+            QPushButton#systemConfigButton {{
                 min-height: 0;
                 background: transparent;
                 border: 1px solid transparent;
@@ -2410,12 +2398,11 @@ class MainWindow(QMainWindow):
                 font-weight: 400;
                 text-align: center;
             }}
-            QPushButton#systemConfigButton:hover, QPushButton#dataModeButton:hover {{
+            QPushButton#systemConfigButton:hover {{
                 background: #eef1f5;
                 border-color: #e1e6ed;
             }}
-            QPushButton#systemConfigButton::menu-indicator,
-            QPushButton#dataModeButton::menu-indicator {{ image: none; width: 0; }}
+            QPushButton#systemConfigButton::menu-indicator {{ image: none; width: 0; }}
             QPushButton#updateButton {{
                 min-height: 0;
                 background: #3897eb;
@@ -2469,6 +2456,12 @@ class MainWindow(QMainWindow):
                 font-family: {FONT_TITLE_STACK};
                 font-size: 11pt;
                 font-weight: 700;
+            }}
+            QLabel#dailyCardTitle {{
+                color: #101b2e;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 11pt;
+                font-weight: 400;
             }}
             QLabel#sectionTitle {{
                 color: #17243b;
@@ -2567,7 +2560,9 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 color: #ffffff;
                 padding: 4px 12px;
+                font-family: {FONT_TITLE_STACK};
                 font-size: 9pt;
+                font-weight: 700;
                 text-align: center;
             }}
             QPushButton#primaryActionButton:hover {{ background: #326ee9; }}
@@ -2583,7 +2578,9 @@ class MainWindow(QMainWindow):
                 border-radius: 10px;
                 color: #263750;
                 padding: 4px 12px;
+                font-family: {FONT_REGULAR_STACK};
                 font-size: 9pt;
+                font-weight: 400;
                 text-align: center;
             }}
             QPushButton#secondaryActionButton:hover, QPushButton#dateHintButton:hover {{
@@ -2692,17 +2689,8 @@ class MainWindow(QMainWindow):
         if self.inline_config_menu.isVisible():
             self.inline_config_menu.hide()
             return
-        self.data_mode_menu.hide()
         self.inline_config_menu.sync(self.pet_mode, self.pet_scale)
         self.inline_config_menu.popup_below(self.system_config_button)
-
-    def show_data_mode_menu(self) -> None:
-        if self.data_mode_menu.isVisible():
-            self.data_mode_menu.hide()
-            return
-        self.inline_config_menu.hide()
-        self.data_mode_menu.sync(self.data_source_preference)
-        self.data_mode_menu.popup_below(self.data_mode_button)
 
     def start_update_check(self) -> None:
         if not (self.root / APP_EXE_NAME).is_file():
@@ -2874,7 +2862,7 @@ class MainWindow(QMainWindow):
             saved = save_data_source_preference(self.root, preference)
         except Exception:
             self.data_source_preference = previous
-            self.data_mode_menu.data_source_control.set_preference(
+            self.data_source_control.set_preference(
                 previous,
                 animate=True,
                 emit=False,
@@ -2884,8 +2872,8 @@ class MainWindow(QMainWindow):
             self.append_log(f"[失败] {message}")
             return
         self.data_source_preference = saved
-        if hasattr(self, "data_mode_menu"):
-            self.data_mode_menu.data_source_control.set_preference(
+        if hasattr(self, "data_source_control"):
+            self.data_source_control.set_preference(
                 self.data_source_preference,
                 animate=False,
                 emit=False,
@@ -3565,8 +3553,7 @@ class MainWindow(QMainWindow):
         self.daily_action_control.set_stop_enabled(can_stop and self.current_task_type == "daily")
 
     def set_data_source_control_locked(self, locked: bool) -> None:
-        self.data_mode_menu.data_source_control.setEnabled(not locked)
-        self.data_mode_button.setEnabled(not locked)
+        self.data_source_control.setEnabled(not locked)
 
     def reset_stages(self) -> None:
         self.progress.setValue(0)

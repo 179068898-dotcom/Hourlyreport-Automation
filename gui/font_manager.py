@@ -31,7 +31,16 @@ def load_private_ui_font(root: str | Path) -> Path | None:
     for candidate in private_font_candidates(root):
         if not candidate.is_file():
             continue
-        font_id = QFontDatabase.addApplicationFont(str(candidate))
+        try:
+            font_data = candidate.read_bytes()
+        except OSError:
+            continue
+        # Qt on Windows can reject a valid font when any parent path contains
+        # non-ASCII characters. Loading from memory also keeps packaged builds
+        # independent from their extraction directory.
+        font_id = QFontDatabase.addApplicationFontFromData(font_data)
+        if font_id < 0:
+            font_id = QFontDatabase.addApplicationFont(str(candidate))
         if font_id < 0:
             continue
         families = QFontDatabase.applicationFontFamilies(font_id)

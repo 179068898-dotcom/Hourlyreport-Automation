@@ -8344,14 +8344,14 @@ def test_online_update_build_contains_program_but_excludes_user_data():
     from tools.build_release import release_name
 
     root = Path(__file__).resolve().parents[1]
-    release = build_release(root, version="2026.7.19.104", online_update=True)
+    release = build_release(root, version="2026.7.19.105", online_update=True)
 
     import zipfile
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.19.104.zip"
-    assert release_name("2026.7.19.104", online_update=True) == release.name
+    assert release.name == "Hourlyreport_automation_v2026.7.19.105.zip"
+    assert release_name("2026.7.19.105", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -8927,6 +8927,7 @@ def test_desktop_gui_progress_lives_below_project_selector(monkeypatch):
 def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
+    from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication, QFrame, QGraphicsDropShadowEffect
     from gui.main_window import MainWindow
 
@@ -8950,10 +8951,10 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert 40 <= window.spinner.width() <= 52
     assert window.spinner.height() <= 26
     assert window.spinner.objectName() == "clawdAnimator"
-    assert window.windowTitle() == "蚁之力 · 竞价数据自动化"
-    assert window.title_label.text() == "蚁之力 · 竞价数据自动化"
+    assert window.windowTitle() == "蚁之力-竞价数据自动化"
+    assert window.title_label.text() == "蚁之力-竞价数据自动化"
     assert window.title_label.font().pointSize() == 10
-    assert window.system_config_button.text().startswith("系统配置")
+    assert window.system_config_button.text() == "系统"
     assert window.system_config_button.height() == window.title_label.height()
     assert window.hourly_title.text() == "小时报"
     assert window.daily_title.text() == "日报"
@@ -8969,7 +8970,8 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.close_button.toolTip() == "关闭界面"
     assert not window.close_button.icon().isNull()
     assert not window.windowIcon().isNull()
-    assert window.font().family() == "Microsoft YaHei"
+    assert window.font().family() == "Microsoft YaHei UI"
+    assert window.font().weight() == QFont.Weight.Normal
     assert window.font().pointSize() == 9
     assert window.left_layout.spacing() == 14
     assert window.task_control_card.minimumHeight() == window.task_control_card.maximumHeight() == 208
@@ -9009,12 +9011,19 @@ def test_data_source_control_defaults_to_api_and_emits_browser(monkeypatch):
     changes = []
     control.preference_changed.connect(changes.append)
 
-    assert (control.width(), control.height()) == (106, 29)
+    assert (control.width(), control.height()) == (94, 26)
     assert control.preference() == "api"
     assert control.api_button.isChecked()
     assert not control.browser_button.isChecked()
-    assert control.browser_button.text() == "浏览器"
-    assert control.api_button.text() == "API"
+    assert control.prefix_label.text() == "模式："
+    assert control.browser_button.text() == "B"
+    assert control.api_button.text() == "A"
+    assert control.display_order() == "A>B"
+    assert control.api_button.x() < control.browser_button.x()
+    assert control.segment_frame.objectName() == "dataSourceModeSegment"
+    assert control.segment_frame.geometry().contains(control.api_button.geometry().center())
+    assert control.segment_frame.geometry().contains(control.browser_button.geometry().center())
+    assert "QFrame#dataSourceModeSegment" in control.styleSheet()
     assert "background: #3f83f8" in control.styleSheet()
     assert "color: #ffffff" in control.styleSheet()
 
@@ -9024,10 +9033,31 @@ def test_data_source_control_defaults_to_api_and_emits_browser(monkeypatch):
     assert changes == ["browser"]
     assert control.browser_button.isChecked()
     assert not control.api_button.isChecked()
+    assert control.display_order() == "B>A"
+    assert control.browser_button.x() < control.api_button.x()
     control.close()
 
 
-def test_desktop_gui_data_mode_menu_is_separate_and_compact(tmp_path, monkeypatch):
+def test_data_source_control_animates_selected_mode_to_the_left(monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import DataSourceModeControl
+
+    app = QApplication.instance() or QApplication([])
+    control = DataSourceModeControl()
+    control.show()
+    app.processEvents()
+
+    control.set_preference("browser", animate=True)
+    QTest.qWait(220)
+
+    assert control.display_order() == "B>A"
+    assert control.browser_button.x() < control.api_button.x()
+    control.close()
+
+
+def test_desktop_gui_data_mode_control_lives_in_project_header(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
     from gui.main_window import MainWindow
@@ -9036,22 +9066,14 @@ def test_desktop_gui_data_mode_menu_is_separate_and_compact(tmp_path, monkeypatc
     app = QApplication.instance() or QApplication([])
     window = MainWindow(tmp_path)
 
-    assert window.data_mode_button.text() == "数据模式"
-    assert window.data_mode_button.height() == window.system_config_button.height()
-    assert window.data_mode_button.font() == window.system_config_button.font()
-    assert window.data_mode_button.font().pointSize() == 9
+    assert not hasattr(window, "data_mode_button")
+    assert not hasattr(window, "data_mode_menu")
     assert not hasattr(window.inline_config_menu, "data_source_control")
-    control = window.data_mode_menu.data_source_control
-    assert (control.width(), control.height()) == (106, 29)
+    control = window.data_source_control
+    assert (control.width(), control.height()) == (94, 26)
     assert control.preference() == "api"
     assert window.project_combo.popup.search.placeholderText() == "输入 B/N 快速检索对应项目"
-
-    window.inline_config_menu.show()
-    window.show_data_mode_menu()
-    assert window.inline_config_menu.isHidden()
-    window.data_mode_menu.show()
-    window.show_system_config_menu()
-    assert window.data_mode_menu.isHidden()
+    assert control.parentWidget() is not window.title_bar
 
     window._quitting = True
     window.close()
@@ -9066,7 +9088,7 @@ def test_desktop_gui_data_source_preference_persists_and_locks_during_tasks(tmp_
     _write_minimal_gui_project(tmp_path)
     app = QApplication.instance() or QApplication([])
     window = MainWindow(tmp_path)
-    control = window.data_mode_menu.data_source_control
+    control = window.data_source_control
 
     assert control.preference() == "api"
     control.set_preference("browser", animate=False)
@@ -9105,7 +9127,7 @@ def test_desktop_gui_environment_failures_restore_data_source_control(
     _write_minimal_gui_project(tmp_path)
     app = QApplication.instance() or QApplication([])
     window = main_window.MainWindow(tmp_path)
-    control = window.data_mode_menu.data_source_control
+    control = window.data_source_control
     control.setEnabled(False)
 
     if failure_path == "exit_code":
@@ -9148,7 +9170,7 @@ def test_desktop_gui_data_source_save_failure_rolls_back_without_sensitive_detai
     app = QApplication.instance() or QApplication([])
     window = main_window.MainWindow(tmp_path)
     window.append_log = logs.append
-    control = window.data_mode_menu.data_source_control
+    control = window.data_source_control
     control.set_preference("browser", animate=False)
 
     assert window.data_source_preference == "api"
@@ -9372,17 +9394,17 @@ def test_desktop_gui_uses_vista_yahei_bold_with_regular_secondary_text(monkeypat
     assert SUB_FONT_PT == 8
     assert window.font().pointSize() == MAIN_FONT_PT
     assert window.progress_text.font().pointSize() == SUB_FONT_PT
-    assert window.font().family() == "Microsoft YaHei"
-    assert window.font().weight() == QFont.Weight.Bold
+    assert window.font().family() == "Microsoft YaHei UI"
+    assert window.font().weight() == QFont.Weight.Normal
     assert window.title_label.font().family() == "Microsoft YaHei"
     assert window.title_label.font().weight() == QFont.Weight.Bold
-    assert window.system_config_button.font().family() == "Microsoft YaHei"
+    assert window.system_config_button.font().family() == "Microsoft YaHei UI"
     assert window.system_config_button.font().weight() == QFont.Weight.Normal
-    assert window.data_mode_button.font().family() == "Microsoft YaHei"
-    assert window.data_mode_button.font().weight() == QFont.Weight.Normal
-    assert window.log_view.font().family() == "Microsoft YaHei"
+    assert window.data_source_control.prefix_label.font().weight() == QFont.Weight.Normal
+    assert window.log_view.font().family() == "Microsoft YaHei UI"
     assert window.log_view.font().weight() == QFont.Weight.Normal
     assert window.log_view.font().pointSize() == MAIN_FONT_PT
+    assert 'font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;' in window.styleSheet()
     assert 'font-family: "Microsoft YaHei", "Microsoft YaHei UI", "Segoe UI", sans-serif;' in window.styleSheet()
     assert "QLabel#cardTitle" in window.styleSheet()
     assert "font-weight: 600" not in window.styleSheet()
@@ -9402,11 +9424,9 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
 
     assert not hasattr(window, "excel_config_button")
     assert not hasattr(window, "credentials_config_button")
-    assert window.system_config_button.text() == "系统配置"
+    assert window.system_config_button.text() == "系统"
     assert window.system_config_button.font().pointSize() == window.title_label.font().pointSize() - 1
-    assert window.data_mode_button.font().pointSize() == window.system_config_button.font().pointSize()
-    assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统配置") + 12
-    assert window.data_mode_button.width() <= window.data_mode_button.fontMetrics().horizontalAdvance("数据模式") + 12
+    assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统") + 12
     assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
         "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
@@ -9469,11 +9489,11 @@ def test_private_ui_font_prefers_bundled_vista_face(tmp_path, monkeypatch):
     font_path = tmp_path / "assets" / "fonts" / "microsoft_yahei_vista_bold.ttf"
     font_path.parent.mkdir(parents=True)
     font_path.write_bytes(b"licensed-font-placeholder")
-    loaded = []
+    loaded_data = []
     monkeypatch.setattr(
         font_manager.QFontDatabase,
-        "addApplicationFont",
-        lambda path: loaded.append(Path(path)) or 9,
+        "addApplicationFontFromData",
+        lambda data: loaded_data.append(bytes(data)) or 9,
     )
     monkeypatch.setattr(
         font_manager.QFontDatabase,
@@ -9482,7 +9502,7 @@ def test_private_ui_font_prefers_bundled_vista_face(tmp_path, monkeypatch):
     )
 
     assert font_manager.load_private_ui_font(tmp_path) == font_path
-    assert loaded == [font_path]
+    assert loaded_data == [b"licensed-font-placeholder"]
 
 
 def _write_minimal_gui_project(root: Path) -> None:
@@ -10168,18 +10188,18 @@ def test_desktop_window_entry_runs_first_startup_directory_initialization(tmp_pa
 def test_online_update_selects_newer_github_release_asset():
     from gui.update_manager import CURRENT_VERSION, parse_release_version, parse_version, select_release_update
 
-    assert CURRENT_VERSION == "2026.7.19.104"
+    assert CURRENT_VERSION == "2026.7.19.105"
     assert parse_version("v2026.7.19.104") == (2026, 7, 19, 104)
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.19.105",
+        "tag_name": "v2026.7.19.106",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.19.105.zip",
+                "name": "Hourlyreport_automation_v2026.7.19.106.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -10190,10 +10210,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.19.105"
+    assert update.version == "2026.7.19.106"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.19.105") is None
+    assert select_release_update(payload, "2026.7.19.106") is None
 
     for invalid in (
         {**payload, "draft": True},

@@ -36,6 +36,9 @@ def source_fingerprint(root: str | Path) -> str:
         if folder.is_dir():
             candidates.extend(folder.rglob("*.py"))
     candidates.extend((root_path / "assets" / name) for name in ("app_icon.ico", "app_icon.png"))
+    fonts_dir = root_path / "assets" / "fonts"
+    if fonts_dir.is_dir():
+        candidates.extend(fonts_dir.rglob("*"))
     digest = hashlib.sha256()
     for path in sorted({item for item in candidates if item.is_file()}, key=lambda item: item.relative_to(root_path).as_posix()):
         relative = path.relative_to(root_path).as_posix().encode("utf-8")
