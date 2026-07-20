@@ -98,26 +98,49 @@ logs/run.log
 
 退出码 `0` 才算完成。GUI 成功后会自动打开当前项目 Excel。
 
-## 常见异常
+## 常见异常与防复发
 
-| 现象 | 处理 |
-|---|---|
-| 当前项目不对 | 人工先在 GUI/菜单切换项目，再重新执行固定 BAT |
-| Chrome 9222 无法连接 | 等待自动启动；仍失败再运行 `start_chrome_debug.bat` 排障 |
-| 百度要求验证码/滑块 | 停止，等待人工完成验证后整次重跑 |
-| 快商通没有 30 分钟内文件 | 正常按 0 对话继续，不当作 BUG |
-| Excel 被占用 | 关闭对应 WPS/Excel 文件后整次重跑 |
-| 百度数据两次不稳定 | 等待页面/API 稳定后整次重跑，不手工补数 |
-| API 多来源某一路失败 | 程序自动丢弃临时结果并整项目降级浏览器；浏览器也失败时查看 `reports/baidu_multi_source_report.json` 后整次重跑 |
+以下按「现象→原因→处理→防复发」整理，避免同一错误反复出现。
+
+| 现象 | 原因 | 处理 | 防复发 |
+|------|------|------|--------|
+| 当前项目不对 | 默认配置是昆明牛，切其他项目时未改配置 | `--project` 标志临时覆盖，或人工切项目后重跑 | 接到任务先确认当前项目，用 `--project` 不碰配置 |
+| 做完额外项目后忘了跑当前任务 | 切项目后注意力未回当前任务 | 以当前任务为准，做完一个项目回到用户要求 | 多项目任务做完后立刻回到用户当前要求，不凭记忆补流程 |
+| 绕过BAT自己拼main.py | 不知道BAT或为省事 | 交互式用 `--project` 直连main.py（API模式推荐）；自动执行必须走BAT | 区分：交互式→main.py+--project，自动执行→BAT |
+| 用了cronjob run代替BAT，导致多跑一轮 | 误用cronjob手动触发 | 日报/小时报固定走BAT或main.py直连，不用cronjob手动触发代替 | cronjob只用于定时任务，不用于手动触发 |
+| BAT从bash直接跑报编码错 | bash解析bat语法导致乱码 | 用 venv python 直接跑 main.py，或 `cmd.exe /c` 包装 | 记住：bash不能直接跑.bat |
+| Chrome 9222 test-browser-connect误判 | 代理网络导致err_proxy_connection_failed假阴性 | 用 `curl -s http://localhost:9222/json/version` 验证，跳过test直接preflight | 确认方法：curl返回"Chrome/..."即正常，不要信test-browser-connect |
+| 预检包含Chrome导致15分钟延迟 | 旧版预检必须检查Chrome（浏览器模式） | API模式预检自动跳过Chrome检查，只有降级时才启动Chrome | 默认用API模式，无需单独检查Chrome |
+| 百度要求验证码/滑块 | 登录态过期或异常 | 停止，等待人工完成验证后整次重跑 | 不跳过验证，不手工补数据 |
+| 快商通没有30分钟内文件 | 忘记导出或导出路径不对 | 正常按0对话继续，不当作BUG | 导出文件放 `kst_exports/` 或项目配置目录 |
+| Excel被占用 | WPS/Excel打开中 | 关闭对应WPS/Excel文件后整次重跑 | 执行前先查tasklist确认wps.exe/et.exe/EXCEL.EXE已关闭 |
+| Excel文件名猜错 | 各项目文件名不同，习惯性猜文件名 | 从 `reports/*_final_run_report.json` 的 `excel_path` 字段读取 | 永不允许猜文件名，必须从report JSON读 |
+| 忘记打开Excel | 流程遗漏 | 写入后必须 `os.startfile(excel_path)` 打开 | 写入操作后立刻打开Excel，自检项 |
+| 打开Excel报文件不存在/中文路径乱码 | 用cmd //c start导致编码问题 | 用 `os.startfile(path)` 或 `powershell Start-Process` | 禁止cmd //c start中文路径 |
+| Excel筛选按钮丢失 | openpyxl的wb.save清空所有sheet的autoFilter | 写入后从备份恢复所有sheet的filter/protection元数据 | 恢复函数必须覆盖所有sheet（时段数据/百度/大夜数据） |
+| 百度数据不一致且3轮重试一致 | 百度后端数据问题，非临时错误 | 不盲重试——3轮重试100%一致说明是百度后端数据延迟 | 报告用户手动在百度后台验证，不加重试 |
+| API多来源某一路失败 | 沈阳牛/沈阳白双来源任一路异常 | 程序自动丢弃API临时结果并整项目降级浏览器 | 不混合API与浏览器的部分数据，不写部分结果 |
+| 回复太啰嗦/重复/AI味重 | 输出工具结果后又补解释 | 一行格式："项目+时段已做完，已打开，请检阅。" | 只给结果，不复述流程，一句话 |
+| 做完报告后输出数据表格 | 误以为用户要看到具体数字 | 微信消息不展示展现/点击/消费数据 | 数字在Excel里，消息只说状态 |
+| 百度日报数据不稳定时报错 | 页面加载未完成就读取 | 等待页面/API稳定后整次重跑 | 不手工补Excel |
+| 手工编造或补填数据 | 写入失败后补救心理 | 失败后整次重跑，不手工改Excel数字 | 只允许程序写入，禁止手动干预 |
 
 ## 不得做
 
-- 不跳过 preflight。
-- 不绕过固定 BAT。
-- 不自动启动 Edge。
-- 不删除浏览器 profile 作为常规处理。
-- 不泄露或提交 `secrets/secrets.json`。
-- 不在失败后手工改 Excel 数字。
+同见AGENTS.md 禁止行为清单。
+
+- 不操作 QQ，不截图，不自动发送消息。
+- 不自动操作商务通网页或客户端。
+- 不手工编造或补填百度、商务通数据。
+- 不在 Excel 打开时强行写入。
+- 不修改无关 sheet、汇总区、公式区、截图区。
+- 不提交 secrets、运行报告、日志、备份或本地项目选择状态。
+- 不在消息或文档中记录真实账号密码。
+- 不绕过固定 BAT 自己拼 `main.py --mode run`（交互式例外：API模式下`--project`直连main.py可接受）。
+- 不猜测 Excel 文件名，必须从 report JSON 读取。
+- 不手工补 Excel 数字。
+- 不输出数据表格到微信消息。
+- 不重复解释或复述已经给出的结果。
 
 ## 对应 SOP
 
