@@ -52,7 +52,7 @@ from gui.branding import PRODUCT_DISPLAY_NAME, WINDOW_HEADER_TITLE
 from gui.clawd import ClawdAnimator
 from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
 from gui.desktop_pet import ClawdDesktopPet
-from gui.excel_open_settings import load_open_excel_preference, save_open_excel_preference
+from gui.excel_open_settings import load_auto_open_excel, save_auto_open_excel
 from gui.environment_check import (
     environment_repair_command,
     initialize_kst_directories_once,
@@ -87,6 +87,7 @@ from modules.project_config import (
     load_project_config,
     set_data_source_preference as save_data_source_preference,
 )
+from modules.excel_path_config import EXCEL_ROOT_NAME, configure_excel_paths
 from modules.secrets_package import (
     SecretsPackageError,
     export_secrets_package,
@@ -486,86 +487,6 @@ class DataSourceModeControl(QFrame):
         self._layout_children()
 
 
-class ExcelOpenToggle(QFrame):
-    preference_changed = Signal(str, bool)
-
-    def __init__(self, task: str, checked: bool = True, parent=None):
-        super().__init__(parent)
-        self.task = task
-        self.setObjectName("excelOpenToggle")
-        self.setFixedSize(58, 24)
-        self.label = QLabel("open", self)
-        self.label.setObjectName("excelOpenToggleLabel")
-        self.label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
-        self.button = QPushButton("", self)
-        self.button.setObjectName("excelOpenToggleButton")
-        self.button.setCheckable(True)
-        self.button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.button.setChecked(bool(checked))
-        self.button.toggled.connect(self._on_toggled)
-        self.setStyleSheet(f"""
-            QFrame#excelOpenToggle {{
-                background: transparent;
-                border: 0;
-            }}
-            QLabel#excelOpenToggleLabel {{
-                color: #64748b;
-                background: transparent;
-                border: 0;
-                font-family: {FONT_REGULAR_STACK};
-                font-size: 8pt;
-                font-weight: 400;
-            }}
-            QPushButton#excelOpenToggleButton {{
-                background: #dfe4eb;
-                border: 0;
-                border-radius: 8px;
-                padding: 0;
-            }}
-            QPushButton#excelOpenToggleButton:checked {{
-                background: #3f8cff;
-            }}
-            QPushButton#excelOpenToggleButton:disabled {{
-                background: #e7ebf1;
-            }}
-        """)
-
-    def isChecked(self) -> bool:
-        return self.button.isChecked()
-
-    def setChecked(self, checked: bool) -> None:
-        self.button.setChecked(bool(checked))
-
-    def setEnabled(self, enabled: bool) -> None:
-        super().setEnabled(enabled)
-        self.button.setEnabled(enabled)
-        self.label.setEnabled(enabled)
-
-    def _on_toggled(self, checked: bool) -> None:
-        self.preference_changed.emit(self.task, bool(checked))
-        self.button.style().unpolish(self.button)
-        self.button.style().polish(self.button)
-        self.update()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self.label.setGeometry(0, 0, 27, self.height())
-        self.button.setGeometry(32, 4, 26, 16)
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        rect = self.button.geometry()
-        knob_size = 12
-        x = rect.right() - knob_size - 2 if self.button.isChecked() else rect.left() + 2
-        y = rect.top() + (rect.height() - knob_size) // 2
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#ffffff"))
-        painter.drawEllipse(QRect(x, y, knob_size, knob_size))
-        painter.end()
-
-
 class RunStopSplitControl(QFrame):
     diagonal_gap_width = 2
 
@@ -670,6 +591,8 @@ class InlineConfigMenu(QFrame):
     import_secrets_requested = Signal()
     export_secrets_requested = Signal()
     restore_backup_requested = Signal()
+    excel_path_config_requested = Signal()
+    excel_auto_open_requested = Signal(bool)
     pet_mode_requested = Signal(str)
     pet_scale_requested = Signal(float)
     exit_requested = Signal()
@@ -692,6 +615,25 @@ class InlineConfigMenu(QFrame):
         layout.addWidget(self._action_row("导入授权配置", self.import_secrets_requested.emit))
         layout.addWidget(self._action_row("导出授权配置", self.export_secrets_requested.emit))
         layout.addWidget(self._action_row("恢复备份", self.restore_backup_requested.emit))
+        layout.addWidget(self._action_row("Excel 路径配置", self.excel_path_config_requested.emit))
+        layout.addWidget(self._separator())
+
+        self.excel_auto_toggle = InlineMenuRow("Excel 自动打开", expandable=True)
+        self.excel_auto_toggle.clicked.connect(self._toggle_excel_auto_section)
+        layout.addWidget(self.excel_auto_toggle)
+
+        self.excel_auto_section = QWidget()
+        self.excel_auto_section.setObjectName("inlineMenuSection")
+        excel_auto_layout = QVBoxLayout(self.excel_auto_section)
+        excel_auto_layout.setContentsMargins(10, 2, 0, 3)
+        excel_auto_layout.setSpacing(3)
+        self.excel_start_choice = self._choice_row("启动", lambda: self.excel_auto_open_requested.emit(True))
+        self.excel_stop_choice = self._choice_row("停止", lambda: self.excel_auto_open_requested.emit(False))
+        excel_auto_layout.addWidget(self.excel_start_choice)
+        excel_auto_layout.addWidget(self.excel_stop_choice)
+        self.excel_auto_section.hide()
+        layout.addWidget(self.excel_auto_section)
+
         layout.addWidget(self._separator())
 
         self.pet_toggle = InlineMenuRow("桌面宠物", expandable=True)
@@ -860,11 +802,23 @@ class InlineConfigMenu(QFrame):
 
     def _toggle_pet_section(self) -> None:
         expanded = not self.pet_section.isVisible()
+        self.excel_auto_section.hide()
+        self.excel_auto_toggle.set_expanded(False)
         self.pet_section.setVisible(expanded)
         self.pet_toggle.set_expanded(expanded)
         if not expanded:
             self.size_section.hide()
             self.size_toggle.set_expanded(False)
+        self._refresh_height()
+
+    def _toggle_excel_auto_section(self) -> None:
+        expanded = not self.excel_auto_section.isVisible()
+        self.pet_section.hide()
+        self.pet_toggle.set_expanded(False)
+        self.size_section.hide()
+        self.size_toggle.set_expanded(False)
+        self.excel_auto_section.setVisible(expanded)
+        self.excel_auto_toggle.set_expanded(expanded)
         self._refresh_height()
 
     def _toggle_size_section(self) -> None:
@@ -884,11 +838,18 @@ class InlineConfigMenu(QFrame):
             section_layout.invalidate()
             section_layout.activate()
             height += self.pet_section.sizeHint().height()
+        if not self.excel_auto_section.isHidden():
+            section_layout = self.excel_auto_section.layout()
+            section_layout.invalidate()
+            section_layout.activate()
+            height += self.excel_auto_section.sizeHint().height()
         self.setFixedHeight(height)
 
-    def sync(self, pet_mode: str, pet_scale: float) -> None:
+    def sync(self, pet_mode: str, pet_scale: float, excel_auto_open: bool) -> None:
         self._set_selected(self.clawd_choice, pet_mode == PET_CLAWD)
         self._set_selected(self.hidden_choice, pet_mode == PET_HIDDEN)
+        self._set_selected(self.excel_start_choice, excel_auto_open)
+        self._set_selected(self.excel_stop_choice, not excel_auto_open)
         value = round(normalize_pet_scale(pet_scale) * 100)
         self.size_slider.blockSignals(True)
         self.size_slider.setValue(value)
@@ -1582,8 +1543,7 @@ class MainWindow(QMainWindow):
         self.pending_update_archive: Path | None = None
         self.calendar_dialog: ModernCalendarDialog | None = None
         self.data_source_preference = get_data_source_preference(self.root)
-        self.open_excel_after_hourly = load_open_excel_preference(self.root, "hourly")
-        self.open_excel_after_daily = load_open_excel_preference(self.root, "daily")
+        self.open_excel_automatically = load_auto_open_excel(self.root)
         self._manual_update_check_requested = False
         self._task_stop_requested = False
         self._task_stop_locked = False
@@ -1638,6 +1598,7 @@ class MainWindow(QMainWindow):
         self.desktop_pet.set_pet_scale(self.pet_scale)
         self.desktop_pet.restore_position(self.pet_position)
         self._sync_pet_menu()
+        self._sync_excel_auto_open_menu()
         self.desktop_pet.set_enabled(self.pet_mode == PET_CLAWD)
         self.refresh_projects()
         self.set_current_flow_idle()
@@ -1806,12 +1767,14 @@ class MainWindow(QMainWindow):
         import_secrets_action = QAction("导入授权配置", self.system_config_menu)
         export_secrets_action = QAction("导出授权配置", self.system_config_menu)
         restore_backup_action = QAction("恢复备份", self.system_config_menu)
+        excel_path_config_action = QAction("Excel 路径配置", self.system_config_menu)
         self.project_check_action.triggered.connect(self.run_environment_preflight)
         update_path_action.triggered.connect(self.open_selected_project_config)
         update_credentials_action.triggered.connect(self.open_credentials_config)
         import_secrets_action.triggered.connect(self.import_authorization_config)
         export_secrets_action.triggered.connect(self.export_authorization_config)
         restore_backup_action.triggered.connect(self.restore_backup)
+        excel_path_config_action.triggered.connect(self.configure_excel_paths_from_folder)
         self.system_config_menu.addAction(self.project_check_action)
         self.system_config_menu.addSeparator()
         # 保留 QAction 和处理函数，暂时不向菜单暴露路径、账号密码编辑入口。
@@ -1820,6 +1783,21 @@ class MainWindow(QMainWindow):
         self.system_config_menu.addAction(import_secrets_action)
         self.system_config_menu.addAction(export_secrets_action)
         self.system_config_menu.addAction(restore_backup_action)
+        self.system_config_menu.addAction(excel_path_config_action)
+        self.system_config_menu.addSeparator()
+        self.excel_auto_open_menu = QMenu("Excel 自动打开", self.system_config_menu)
+        self.excel_auto_open_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        self.excel_auto_open_group = QActionGroup(self.excel_auto_open_menu)
+        self.excel_auto_open_group.setExclusive(True)
+        self.excel_auto_start_action = QAction("启动", self.excel_auto_open_group)
+        self.excel_auto_stop_action = QAction("停止", self.excel_auto_open_group)
+        self.excel_auto_start_action.setCheckable(True)
+        self.excel_auto_stop_action.setCheckable(True)
+        self.excel_auto_start_action.triggered.connect(lambda checked: checked and self.set_excel_auto_open(True))
+        self.excel_auto_stop_action.triggered.connect(lambda checked: checked and self.set_excel_auto_open(False))
+        self.excel_auto_open_menu.addAction(self.excel_auto_start_action)
+        self.excel_auto_open_menu.addAction(self.excel_auto_stop_action)
+        self.system_config_menu.addMenu(self.excel_auto_open_menu)
         self.system_config_menu.addSeparator()
         self.pet_menu = QMenu("桌面宠物", self.system_config_menu)
         self.pet_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
@@ -1840,6 +1818,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.exit_application)
         self.system_config_menu.addAction(exit_action)
         self._style_menu(self.system_config_menu, 236)
+        self._style_menu(self.excel_auto_open_menu, 206)
         self._style_menu(self.pet_menu, 206)
         self.inline_config_menu = InlineConfigMenu(self)
         self.inline_config_menu.project_check_requested.connect(self.run_environment_preflight)
@@ -1848,6 +1827,8 @@ class MainWindow(QMainWindow):
         self.inline_config_menu.import_secrets_requested.connect(self.import_authorization_config)
         self.inline_config_menu.export_secrets_requested.connect(self.export_authorization_config)
         self.inline_config_menu.restore_backup_requested.connect(self.restore_backup)
+        self.inline_config_menu.excel_path_config_requested.connect(self.configure_excel_paths_from_folder)
+        self.inline_config_menu.excel_auto_open_requested.connect(self.set_excel_auto_open)
         self.inline_config_menu.pet_mode_requested.connect(self.set_desktop_pet_mode)
         self.inline_config_menu.pet_scale_requested.connect(self.set_desktop_pet_scale)
         self.inline_config_menu.exit_requested.connect(self.exit_application)
@@ -1876,8 +1857,8 @@ class MainWindow(QMainWindow):
         self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
         self.update_button.setProperty("updateState", "hidden")
-        self.update_button.setIconSize(QSize(13, 13))
-        self.update_button.setFixedSize(22, 22)
+        self.update_button.setIconSize(QSize(11, 11))
+        self.update_button.setFixedSize(20, 20)
         self.update_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.update_button.setToolTip("检查更新")
         self.update_button.clicked.connect(self.handle_update_button_clicked)
@@ -2027,9 +2008,6 @@ class MainWindow(QMainWindow):
         self.hourly_title.setObjectName("cardTitle")
         header.addWidget(self.hourly_title)
         header.addStretch(1)
-        self.hourly_open_toggle = ExcelOpenToggle("hourly", self.open_excel_after_hourly)
-        self.hourly_open_toggle.preference_changed.connect(self.on_excel_open_toggle_changed)
-        header.addWidget(self.hourly_open_toggle)
         hourly_layout.addLayout(header)
 
         action_grid = QGridLayout()
@@ -2070,9 +2048,6 @@ class MainWindow(QMainWindow):
         self.daily_title.setObjectName("dailyCardTitle")
         daily_header.addWidget(self.daily_title)
         daily_header.addStretch(1)
-        self.daily_open_toggle = ExcelOpenToggle("daily", self.open_excel_after_daily)
-        self.daily_open_toggle.preference_changed.connect(self.on_excel_open_toggle_changed)
-        daily_header.addWidget(self.daily_open_toggle)
         daily_layout.addLayout(daily_header)
 
         daily_button_row = QHBoxLayout()
@@ -2532,15 +2507,15 @@ class MainWindow(QMainWindow):
                 min-height: 0;
                 background: #3897eb;
                 border: 1px solid #2e8ddd;
-                border-radius: 11px;
+                border-radius: 10px;
                 padding: 0;
                 color: #ffffff;
-                font-size: 9pt;
+                font-size: 8pt;
                 text-align: center;
             }}
             QPushButton#updateButton[updateState="available"],
             QPushButton#updateButton[updateState="ready"],
-            QPushButton#updateButton[updateState="failed"] {{ padding: 0 8px; }}
+            QPushButton#updateButton[updateState="failed"] {{ padding: 0 4px; }}
             QPushButton#updateButton[updateState="failed"] {{
                 background: #f1f6ff;
                 border-color: #b9d2f4;
@@ -2550,7 +2525,7 @@ class MainWindow(QMainWindow):
                 background: #eef6ff;
                 border-color: #cfe2ff;
                 color: #2f6fed;
-                padding: 0 8px;
+                padding: 0 4px;
             }}
             QPushButton#updateButton:hover {{ background: #2689df; border-color: #237dc9; }}
             QPushButton#updateButton[updateState="failed"]:hover {{
@@ -2835,7 +2810,7 @@ class MainWindow(QMainWindow):
         if self.inline_config_menu.isVisible():
             self.inline_config_menu.hide()
             return
-        self.inline_config_menu.sync(self.pet_mode, self.pet_scale)
+        self.inline_config_menu.sync(self.pet_mode, self.pet_scale, self.open_excel_automatically)
         self.inline_config_menu.popup_below(self.system_config_button)
 
     def show_help_menu(self) -> None:
@@ -2935,15 +2910,9 @@ class MainWindow(QMainWindow):
 
     def check_updates_manually(self) -> None:
         self._manual_update_check_requested = True
-        if not (self.root / APP_EXE_NAME).is_file():
-            self._manual_update_check_requested = False
-            self._set_update_button_state("failed", tooltip="当前目录缺少主程序，无法检查在线更新")
-            return
         self.update_manager.start()
 
     def start_update_check(self) -> None:
-        if not (self.root / APP_EXE_NAME).is_file():
-            return
         self.update_manager.start()
 
     def _set_update_button_state(
@@ -2957,55 +2926,50 @@ class MainWindow(QMainWindow):
         if state == "available":
             self.update_button.setIcon(QIcon())
             self.update_button.setText("更新")
-            width = self.update_button.fontMetrics().horizontalAdvance("更新") + 18
-            self.update_button.setFixedSize(width, 22)
+            self.update_button.setFixedSize(34, 20)
             self.update_button.setEnabled(True)
             self.update_button.setToolTip(tooltip)
             self.update_button.show()
         elif state == "checking":
-            self.update_button.setIcon(make_line_icon("download", "#ffffff", 16))
+            self.update_button.setIcon(make_line_icon("download", "#ffffff", 14))
             self.update_button.setText("")
-            self.update_button.setFixedSize(22, 22)
+            self.update_button.setFixedSize(20, 20)
             self.update_button.setEnabled(False)
             self.update_button.setToolTip(tooltip or "正在检查更新")
             self.update_button.show()
         elif state == "downloading":
-            text = "下载中" if progress is None or progress <= 0 else f"{progress}%"
+            text = "" if progress is None or progress <= 0 else f"{progress}%"
             self.update_button.setText(text)
-            self.update_button.setIcon(make_line_icon("download", "#ffffff", 16))
-            width = self.update_button.fontMetrics().horizontalAdvance(text) + 32
-            self.update_button.setFixedSize(max(64, width), 22)
+            self.update_button.setIcon(make_line_icon("download", "#ffffff", 14) if not text else QIcon())
+            self.update_button.setFixedSize(34 if text else 20, 20)
             self.update_button.setEnabled(False)
             self.update_button.setToolTip(tooltip)
             self.update_button.show()
         elif state == "ready":
             self.update_button.setIcon(QIcon())
-            self.update_button.setText("更新重启")
-            width = self.update_button.fontMetrics().horizontalAdvance("更新重启") + 18
-            self.update_button.setFixedSize(width, 22)
+            self.update_button.setText("重启")
+            self.update_button.setFixedSize(34, 20)
             self.update_button.setEnabled(True)
             self.update_button.setToolTip(tooltip)
             self.update_button.show()
         elif state == "installing":
-            self.update_button.setIcon(make_line_icon("loop", "#ffffff", 16))
+            self.update_button.setIcon(make_line_icon("loop", "#ffffff", 14))
             self.update_button.setText("")
-            self.update_button.setFixedSize(22, 22)
+            self.update_button.setFixedSize(20, 20)
             self.update_button.setEnabled(False)
             self.update_button.setToolTip(tooltip or "正在安装更新")
             self.update_button.show()
         elif state == "failed":
             self.update_button.setIcon(QIcon())
             self.update_button.setText("重试")
-            width = self.update_button.fontMetrics().horizontalAdvance("重试") + 18
-            self.update_button.setFixedSize(width, 22)
+            self.update_button.setFixedSize(34, 20)
             self.update_button.setEnabled(True)
             self.update_button.setToolTip(tooltip or "检查更新失败，点击重试")
             self.update_button.show()
         elif state == "current":
             self.update_button.setIcon(QIcon())
             self.update_button.setText("最新")
-            width = self.update_button.fontMetrics().horizontalAdvance("最新") + 18
-            self.update_button.setFixedSize(width, 22)
+            self.update_button.setFixedSize(34, 20)
             self.update_button.setEnabled(False)
             self.update_button.setToolTip(tooltip or "当前已是最新版本")
             self.update_button.show()
@@ -3053,20 +3017,20 @@ class MainWindow(QMainWindow):
         self._set_update_button_state("ready", tooltip=f"更新到 {version}")
 
     def on_update_up_to_date(self) -> None:
-        if self._manual_update_check_requested:
-            self._manual_update_check_requested = False
-            self._set_update_button_state("current", tooltip=f"当前已是最新版本 {CURRENT_VERSION}")
-            QTimer.singleShot(2500, self._hide_current_update_badge)
-            return
+        self._manual_update_check_requested = False
         self._set_update_button_state("hidden")
 
     def on_update_failed(self, message: str) -> None:
+        manual_check = self._manual_update_check_requested
         self._manual_update_check_requested = False
         if self.pending_update_release is not None and self.update_button.property("updateState") == "downloading":
             self._set_update_button_state(
                 "available",
                 tooltip="下载失败，点击重新下载",
             )
+            return
+        if not manual_check:
+            self._set_update_button_state("hidden")
             return
         detail = f"检查更新失败，点击重试：{message}" if message else "检查更新失败，点击重试"
         self._set_update_button_state("failed", tooltip=detail)
@@ -3179,7 +3143,7 @@ class MainWindow(QMainWindow):
         self.clawd_pet_action.setChecked(self.pet_mode == PET_CLAWD)
         self.hidden_pet_action.setChecked(self.pet_mode == PET_HIDDEN)
         if hasattr(self, "inline_config_menu"):
-            self.inline_config_menu.sync(self.pet_mode, self.pet_scale)
+            self.inline_config_menu.sync(self.pet_mode, self.pet_scale, self.open_excel_automatically)
 
     def set_global_data_source_preference(self, preference: str) -> None:
         previous = self.data_source_preference
@@ -3204,31 +3168,28 @@ class MainWindow(QMainWindow):
                 emit=False,
             )
 
-    def on_excel_open_toggle_changed(self, task: str, enabled: bool) -> None:
-        normalized = "daily" if task == "daily" else "hourly"
+    def set_excel_auto_open(self, enabled: bool) -> None:
+        previous = self.open_excel_automatically
         try:
-            save_open_excel_preference(self.root, normalized, enabled)
+            save_auto_open_excel(self.root, enabled)
         except Exception as exc:
-            previous = self.open_excel_after_daily if normalized == "daily" else self.open_excel_after_hourly
-            toggle = self.daily_open_toggle if normalized == "daily" else self.hourly_open_toggle
-            toggle.button.blockSignals(True)
-            toggle.setChecked(previous)
-            toggle.button.blockSignals(False)
             message = f"Excel 打开偏好保存失败：{exc}"
             self.progress_text.setText(message)
             self.append_log(f"[失败] {message}")
+            self.open_excel_automatically = previous
+            self._sync_excel_auto_open_menu()
             return
-        if normalized == "daily":
-            self.open_excel_after_daily = bool(enabled)
-        else:
-            self.open_excel_after_hourly = bool(enabled)
+        self.open_excel_automatically = bool(enabled)
+        self._sync_excel_auto_open_menu()
 
     def should_open_excel_after_task(self, task: str) -> bool:
-        if task == "daily":
-            return bool(self.open_excel_after_daily)
-        if task == "hourly":
-            return bool(self.open_excel_after_hourly)
-        return False
+        return task in {"hourly", "daily"} and bool(self.open_excel_automatically)
+
+    def _sync_excel_auto_open_menu(self) -> None:
+        enabled = bool(self.open_excel_automatically)
+        self.excel_auto_start_action.setChecked(enabled)
+        self.excel_auto_stop_action.setChecked(not enabled)
+        self.inline_config_menu.sync(self.pet_mode, self.pet_scale, enabled)
 
     def set_desktop_pet_mode(self, mode: str) -> None:
         self.pet_mode = mode
@@ -3339,6 +3300,45 @@ class MainWindow(QMainWindow):
         else:
             path.write_text('{\n  "baidu": {}\n}\n', encoding="utf-8")
         return path
+
+    def configure_excel_paths_from_folder(self) -> None:
+        initial_dir = self.root
+        try:
+            excel_path = self.selected_project_excel_path()
+            initial_dir = next(
+                (path for path in (excel_path.parent, *excel_path.parents) if path.name == EXCEL_ROOT_NAME),
+                excel_path.parent,
+            )
+        except Exception:
+            pass
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "选择【竞价】文件夹",
+            str(initial_dir),
+            QFileDialog.Option.ShowDirsOnly,
+        )
+        if not selected:
+            return
+
+        result = configure_excel_paths(self.root, Path(selected))
+        if result.errors:
+            detail = "\n".join(f"• {error}" for error in result.errors)
+            self.append_log("[失败] Excel 路径配置未修改：" + "；".join(result.errors))
+            QMessageBox.warning(
+                self,
+                "Excel 路径配置未修改",
+                "未修改任何项目配置，请检查以下路径：\n\n" + detail,
+            )
+            return
+
+        self.refresh_projects()
+        backup_text = str(result.backup_dir) if result.backup_dir else ""
+        self.append_log(f"[通过] Excel 路径配置完成：{result.updated} 个项目；备份：{backup_text}")
+        QMessageBox.information(
+            self,
+            "Excel 路径配置完成",
+            f"已成功更新 {result.updated} 个项目的 Excel 路径。\n\n配置备份：\n{backup_text}",
+        )
 
     def open_selected_project_config(self) -> None:
         path = self.selected_project_config_path()
@@ -3900,10 +3900,6 @@ class MainWindow(QMainWindow):
         self.hourly_action_control.set_run_enabled(run_enabled)
         self.daily_action_control.set_run_enabled(run_enabled)
         self.project_check_action.setEnabled(enabled and has_projects)
-        if hasattr(self, "hourly_open_toggle"):
-            self.hourly_open_toggle.setEnabled(enabled)
-        if hasattr(self, "daily_open_toggle"):
-            self.daily_open_toggle.setEnabled(enabled)
 
     def set_stop_controls(self) -> None:
         can_stop = (

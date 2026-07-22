@@ -3,14 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Literal
-
-
-ExcelTask = Literal["hourly", "daily"]
-OPEN_EXCEL_KEYS = {
-    "hourly": "open_excel_after_hourly",
-    "daily": "open_excel_after_daily",
-}
+AUTO_OPEN_KEY = "open_excel_automatically"
+LEGACY_OPEN_EXCEL_KEYS = ("open_excel_after_hourly", "open_excel_after_daily")
 
 
 def _config_path(root: str | Path) -> Path:
@@ -34,14 +28,17 @@ def _write_config(root: str | Path, data: dict) -> Path:
     return path
 
 
-def load_open_excel_preference(root: str | Path, task: ExcelTask) -> bool:
-    key = OPEN_EXCEL_KEYS[task]
-    value = _read_config(root).get(key, True)
-    return value if isinstance(value, bool) else True
-
-
-def save_open_excel_preference(root: str | Path, task: ExcelTask, enabled: bool) -> Path:
-    key = OPEN_EXCEL_KEYS[task]
+def load_auto_open_excel(root: str | Path) -> bool:
     data = _read_config(root)
-    data[key] = bool(enabled)
+    value = data.get(AUTO_OPEN_KEY)
+    if isinstance(value, bool):
+        return value
+    legacy_values = [data.get(key) for key in LEGACY_OPEN_EXCEL_KEYS]
+    configured = [value for value in legacy_values if isinstance(value, bool)]
+    return all(configured) if configured else True
+
+
+def save_auto_open_excel(root: str | Path, enabled: bool) -> Path:
+    data = _read_config(root)
+    data[AUTO_OPEN_KEY] = bool(enabled)
     return _write_config(root, data)

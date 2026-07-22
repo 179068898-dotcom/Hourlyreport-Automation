@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import threading
@@ -16,6 +17,11 @@ from typing import Any
 from PySide6.QtCore import QObject, Signal
 
 from gui.version import CURRENT_VERSION
+
+try:
+    import certifi
+except Exception:  # pragma: no cover - fallback for broken local environments
+    certifi = None
 
 
 GITHUB_LATEST_RELEASE_URL = (
@@ -155,6 +161,12 @@ def _update_storage_dir() -> Path:
     return path
 
 
+def _trusted_https_context() -> ssl.SSLContext:
+    if certifi is not None:
+        return ssl.create_default_context(cafile=certifi.where())
+    return ssl.create_default_context()
+
+
 class GitHubUpdateManager(QObject):
     checking = Signal()
     available = Signal(object)
@@ -189,7 +201,7 @@ class GitHubUpdateManager(QObject):
                     "X-GitHub-Api-Version": "2022-11-28",
                 },
             )
-            with urllib.request.urlopen(request, timeout=6) as response:
+            with urllib.request.urlopen(request, timeout=6, context=_trusted_https_context()) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             update = select_release_update(payload, CURRENT_VERSION)
             if update is None:
@@ -236,7 +248,7 @@ class GitHubUpdateManager(QObject):
             headers={"User-Agent": f"HourlyreportAutomation/{CURRENT_VERSION}"},
         )
         downloaded = 0
-        with urllib.request.urlopen(request, timeout=20) as response, partial.open("wb") as output:
+        with urllib.request.urlopen(request, timeout=20, context=_trusted_https_context()) as response, partial.open("wb") as output:
             total = update.size or int(response.headers.get("Content-Length") or 0)
             while True:
                 chunk = response.read(1024 * 1024)

@@ -9546,7 +9546,7 @@ def test_desktop_gui_normal_window_is_fixed_with_standard_controls(monkeypatch):
     assert window.hourly_title.text() == "小时报"
     assert window.daily_title.text() == "日报"
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
-        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
+        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "Excel 路径配置", "Excel 自动打开", "桌面宠物", "退出程序"
     ]
     assert window.minimize_button.toolTip() == "最小化"
     assert window.maximize_button.toolTip() == "最大化"
@@ -9651,7 +9651,6 @@ def test_data_source_control_animates_selected_mode_to_the_left(monkeypatch):
 def test_desktop_gui_data_mode_control_lives_in_project_header(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
-    from gui.excel_open_settings import load_open_excel_preference
     from gui.main_window import MainWindow
 
     _write_minimal_gui_project(tmp_path)
@@ -9674,7 +9673,6 @@ def test_desktop_gui_data_mode_control_lives_in_project_header(tmp_path, monkeyp
 def test_desktop_gui_data_source_preference_persists_and_locks_during_tasks(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
-    from gui.excel_open_settings import load_open_excel_preference
     from gui.main_window import MainWindow
     from modules.project_config import get_data_source_preference
 
@@ -9707,26 +9705,156 @@ def test_desktop_gui_data_source_preference_persists_and_locks_during_tasks(tmp_
     window.close()
 
 
-def test_excel_open_preferences_default_true_and_persist(tmp_path):
-    from gui.excel_open_settings import load_open_excel_preference, save_open_excel_preference
+def test_excel_auto_open_defaults_true_migrates_old_preferences_and_persists(tmp_path):
+    from gui.excel_open_settings import load_auto_open_excel, save_auto_open_excel
 
-    assert load_open_excel_preference(tmp_path, "hourly") is True
-    assert load_open_excel_preference(tmp_path, "daily") is True
+    assert load_auto_open_excel(tmp_path) is True
+    config_path = tmp_path / "configs" / "app_config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"open_excel_after_hourly": False, "open_excel_after_daily": True}),
+        encoding="utf-8",
+    )
+    assert load_auto_open_excel(tmp_path) is False
 
-    save_open_excel_preference(tmp_path, "hourly", False)
-    save_open_excel_preference(tmp_path, "daily", True)
+    save_auto_open_excel(tmp_path, True)
 
-    saved = json.loads((tmp_path / "configs" / "app_config.json").read_text(encoding="utf-8"))
-    assert saved["open_excel_after_hourly"] is False
-    assert saved["open_excel_after_daily"] is True
-    assert load_open_excel_preference(tmp_path, "hourly") is False
-    assert load_open_excel_preference(tmp_path, "daily") is True
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["open_excel_automatically"] is True
+    assert load_auto_open_excel(tmp_path) is True
 
 
-def test_desktop_gui_excel_open_toggles_control_task_completion(tmp_path, monkeypatch):
+def _write_excel_path_project(path, project_id, project_name, excel_path, *, template=False):
+    payload = {
+        "project_id": project_id,
+        "project_name": project_name,
+        "is_template": template,
+        "excel": {"path": str(excel_path), "hourly_sheet": "时段数据", "daily_sheet": "百度"},
+        "keep_me": {"unchanged": True},
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
+
+
+def test_configure_excel_paths_updates_every_project_after_complete_validation(tmp_path):
+    from modules.excel_path_config import configure_excel_paths
+
+    projects_dir = tmp_path / "configs" / "projects"
+    projects_dir.mkdir(parents=True)
+    selected_root = tmp_path / "new-drive" / "【竞价】"
+    selected_root.mkdir(parents=True)
+    suffixes = {
+        "alpha": ("【❤甲】", "【2026年】【甲】竞价数据", "甲.xlsx"),
+        "beta": ("【❤乙】", "【2026年】【乙】竞价数据", "乙.xlsm"),
+    }
+    originals = {}
+    for project_id, suffix in suffixes.items():
+        target = selected_root.joinpath(*suffix)
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"excel")
+        old_path = Path("D:/Seafile/【竞价】").joinpath(*suffix)
+        config_path = projects_dir / f"{project_id}.json"
+        originals[project_id] = _write_excel_path_project(config_path, project_id, project_id, old_path)
+    _write_excel_path_project(
+        projects_dir / "project_template.json",
+        "template",
+        "模板",
+        "D:/template.xlsx",
+        template=True,
+    )
+
+    result = configure_excel_paths(tmp_path, selected_root)
+
+    assert result.updated == 2
+    assert result.errors == ()
+    assert result.backup_dir is not None and result.backup_dir.is_dir()
+    for project_id, suffix in suffixes.items():
+        config_path = projects_dir / f"{project_id}.json"
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        assert Path(saved["excel"]["path"]) == selected_root.joinpath(*suffix)
+        assert saved["keep_me"] == originals[project_id]["keep_me"]
+        assert (result.backup_dir / config_path.name).is_file()
+
+
+def test_configure_excel_paths_is_all_or_nothing_when_any_target_is_missing(tmp_path):
+    from modules.excel_path_config import configure_excel_paths
+
+    projects_dir = tmp_path / "configs" / "projects"
+    projects_dir.mkdir(parents=True)
+    selected_root = tmp_path / "【竞价】"
+    selected_root.mkdir()
+    existing = selected_root / "甲" / "甲.xlsx"
+    existing.parent.mkdir()
+    existing.write_bytes(b"excel")
+    paths = {
+        "alpha": "D:/Seafile/【竞价】/甲/甲.xlsx",
+        "beta": "D:/Seafile/【竞价】/乙/乙.xlsx",
+    }
+    for project_id, excel_path in paths.items():
+        _write_excel_path_project(projects_dir / f"{project_id}.json", project_id, project_id, excel_path)
+    before = {path.name: path.read_bytes() for path in projects_dir.glob("*.json")}
+
+    result = configure_excel_paths(tmp_path, selected_root)
+
+    assert result.updated == 0
+    assert result.backup_dir is None
+    assert any("beta" in error and "乙.xlsx" in error for error in result.errors)
+    assert {path.name: path.read_bytes() for path in projects_dir.glob("*.json")} == before
+
+
+def test_configure_excel_paths_rejects_folder_not_named_competition(tmp_path):
+    from modules.excel_path_config import configure_excel_paths
+
+    selected_root = tmp_path / "Seafile"
+    selected_root.mkdir()
+
+    result = configure_excel_paths(tmp_path, selected_root)
+
+    assert result.updated == 0
+    assert result.backup_dir is None
+    assert result.errors == ("请选择名称为【竞价】的文件夹。",)
+
+
+def test_configure_excel_paths_restores_every_config_after_write_failure(tmp_path, monkeypatch):
+    import modules.excel_path_config as excel_path_config
+
+    projects_dir = tmp_path / "configs" / "projects"
+    projects_dir.mkdir(parents=True)
+    selected_root = tmp_path / "【竞价】"
+    selected_root.mkdir()
+    for project_id in ("alpha", "beta"):
+        target = selected_root / project_id / f"{project_id}.xlsx"
+        target.parent.mkdir()
+        target.write_bytes(b"excel")
+        _write_excel_path_project(
+            projects_dir / f"{project_id}.json",
+            project_id,
+            project_id,
+            f"D:/Seafile/【竞价】/{project_id}/{project_id}.xlsx",
+        )
+    before = {path.name: path.read_bytes() for path in projects_dir.glob("*.json")}
+    real_write = excel_path_config._write_json_atomic
+    calls = []
+
+    def fail_second_write(path, data):
+        calls.append(path)
+        if len(calls) == 2:
+            raise OSError("simulated write failure")
+        real_write(path, data)
+
+    monkeypatch.setattr(excel_path_config, "_write_json_atomic", fail_second_write)
+
+    result = excel_path_config.configure_excel_paths(tmp_path, selected_root)
+
+    assert result.updated == 0
+    assert any("已恢复原配置" in error for error in result.errors)
+    assert {path.name: path.read_bytes() for path in projects_dir.glob("*.json")} == before
+
+
+def test_desktop_gui_excel_auto_open_menu_controls_all_task_completion(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
-    from gui.excel_open_settings import load_open_excel_preference
+    from gui.excel_open_settings import load_auto_open_excel
     from gui.main_window import MainWindow
 
     _write_minimal_gui_project(tmp_path)
@@ -9740,10 +9868,13 @@ def test_desktop_gui_excel_open_toggles_control_task_completion(tmp_path, monkey
     window.desktop_pet.announce = lambda *args, **kwargs: announcements.append(args)
     window.desktop_pet.set_busy = lambda _busy: None
 
-    assert window.hourly_open_toggle.isChecked()
-    assert window.daily_open_toggle.isChecked()
-    window.hourly_open_toggle.setChecked(False)
-    assert load_open_excel_preference(tmp_path, "hourly") is False
+    assert not hasattr(window, "hourly_open_toggle")
+    assert not hasattr(window, "daily_open_toggle")
+    assert window.open_excel_automatically is True
+    assert window.inline_config_menu.excel_start_choice.property("selected") is True
+    assert window.inline_config_menu.excel_stop_choice.property("selected") is False
+    window.set_excel_auto_open(False)
+    assert load_auto_open_excel(tmp_path) is False
 
     window.current_task_type = "hourly"
     window.current_project_name = "演示项目"
@@ -9751,7 +9882,7 @@ def test_desktop_gui_excel_open_toggles_control_task_completion(tmp_path, monkey
     assert opened == []
     assert any("跳过打开 Excel" in line for line in logs)
 
-    window.daily_open_toggle.setChecked(True)
+    window.set_excel_auto_open(True)
     window.current_task_type = "daily"
     window.current_project_name = "演示项目"
     window.on_task_finished(0)
@@ -9767,7 +9898,6 @@ def test_desktop_gui_help_menu_and_manual_update_check(tmp_path, monkeypatch):
     import gui.main_window as main_window
 
     _write_minimal_gui_project(tmp_path)
-    (tmp_path / main_window.APP_EXE_NAME).write_bytes(b"placeholder")
     app = QApplication.instance() or QApplication([])
     window = main_window.MainWindow(tmp_path)
     starts = []
@@ -9781,8 +9911,8 @@ def test_desktop_gui_help_menu_and_manual_update_check(tmp_path, monkeypatch):
     assert starts == [True]
     assert window._manual_update_check_requested is True
     window.on_update_up_to_date()
-    assert window.update_button.text() == "最新"
-    assert window.update_button.property("updateState") == "current"
+    assert window.update_button.isHidden()
+    assert window.update_button.property("updateState") == "hidden"
 
     window.show_about_clawd()
     assert window._last_about_dialog.windowTitle() == "关于小螃蟹"
@@ -10111,7 +10241,7 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.system_config_button.width() <= window.system_config_button.fontMetrics().horizontalAdvance("系统") + 12
     assert window.system_config_button.height() <= window.system_config_button.fontMetrics().height() + 10
     assert [action.text() for action in window.system_config_menu.actions() if not action.isSeparator()] == [
-        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "桌面宠物", "退出程序"
+        "项目配置检查", "导入授权配置", "导出授权配置", "恢复备份", "Excel 路径配置", "Excel 自动打开", "桌面宠物", "退出程序"
     ]
     from gui.main_window import InlineMenuRow
     inline_labels = [row.text() for row in window.inline_config_menu.findChildren(InlineMenuRow)]
@@ -10119,6 +10249,9 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert "更新账号密码" not in inline_labels
     assert "导入授权配置" in inline_labels
     assert "导出授权配置" in inline_labels
+    assert "Excel 路径配置" in inline_labels
+    assert "Excel 自动打开" in inline_labels
+    assert [action.text() for action in window.excel_auto_open_menu.actions()] == ["启动", "停止"]
     assert [action.text() for action in window.pet_menu.actions() if not action.isSeparator()] == [
         "Clawd 小螃蟹", "隐藏宠物"
     ]
@@ -10148,6 +10281,10 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert not window.update_button.isHidden()
     assert window.update_button.property("updateState") == "checking"
     window.on_update_failed("network unavailable")
+    assert window.update_button.isHidden()
+    window._manual_update_check_requested = True
+    window.on_update_checking()
+    window.on_update_failed("network unavailable")
     assert not window.update_button.isHidden()
     assert window.update_button.property("updateState") == "failed"
     assert window.update_button.text() == "重试"
@@ -10169,7 +10306,8 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     window.handle_update_button_clicked()
     assert download_calls == [update]
     assert window.update_button.property("updateState") == "downloading"
-    assert window.update_button.text() == "下载中"
+    assert window.update_button.text() == ""
+    assert window.update_button.width() <= window.system_config_button.width()
     window.on_update_download_progress(41)
     assert not window.update_button.isHidden()
     assert window.update_button.property("updateState") == "downloading"
@@ -10185,11 +10323,45 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.update_button.text() == "100%"
     window.on_update_ready("2026.7.22.108", Path("update.zip"))
     assert window.update_button.property("updateState") == "ready"
-    assert window.update_button.text() == "更新重启"
+    assert window.update_button.text() == "重启"
     assert window.update_button.icon().isNull()
     assert "2026.7.22.108" in window.update_button.toolTip()
     window.on_update_up_to_date()
     assert window.update_button.isHidden()
+    window.close()
+
+
+def test_desktop_gui_excel_path_configuration_uses_selected_competition_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from types import SimpleNamespace
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+    import gui.main_window as main_window
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    selected_root = tmp_path / "new-drive" / "【竞价】"
+    selected_root.mkdir(parents=True)
+    calls = []
+    refreshed = []
+    notices = []
+    monkeypatch.setattr(QFileDialog, "getExistingDirectory", lambda *args, **kwargs: str(selected_root))
+    monkeypatch.setattr(
+        main_window,
+        "configure_excel_paths",
+        lambda root, selected: calls.append((Path(root), Path(selected)))
+        or SimpleNamespace(updated=9, errors=(), backup_dir=tmp_path / "backups" / "excel-paths"),
+    )
+    monkeypatch.setattr(window, "refresh_projects", lambda: refreshed.append(True))
+    monkeypatch.setattr(QMessageBox, "information", lambda *args: notices.append(args) or QMessageBox.StandardButton.Ok)
+
+    window.configure_excel_paths_from_folder()
+
+    assert calls == [(tmp_path, selected_root)]
+    assert refreshed == [True]
+    assert notices and "9 个项目" in notices[0][2]
+
+    window._quitting = True
     window.close()
 
 
@@ -11114,6 +11286,56 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     assert [item.version for item in available] == ["2026.7.22.109"]
     assert ready == []
+
+
+def test_online_update_uses_bundled_ca_context_for_github_requests(monkeypatch):
+    import io
+    import json
+    from types import SimpleNamespace
+
+    import gui.update_manager as update_manager
+
+    payload = {
+        "tag_name": "v2026.7.22.109",
+        "draft": False,
+        "prerelease": False,
+        "assets": [
+            {
+                "name": "Hourlyreport_automation_v2026.7.22.109.zip",
+                "browser_download_url": "https://example/update.zip",
+                "digest": "sha256:" + "a" * 64,
+                "size": 123,
+            }
+        ],
+    }
+    contexts = []
+    calls = []
+    ca_bundle = r"C:\app\certifi\cacert.pem"
+    context = object()
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            self.close()
+
+    monkeypatch.setattr(update_manager, "certifi", SimpleNamespace(where=lambda: ca_bundle))
+    monkeypatch.setattr(
+        update_manager.ssl,
+        "create_default_context",
+        lambda *, cafile=None: contexts.append(cafile) or context,
+    )
+    monkeypatch.setattr(
+        update_manager.urllib.request,
+        "urlopen",
+        lambda request, **kwargs: calls.append(kwargs) or Response(json.dumps(payload).encode("utf-8")),
+    )
+
+    update_manager.GitHubUpdateManager()._check_for_update()
+
+    assert contexts == [ca_bundle]
+    assert calls and calls[0]["context"] is context
 
 
 def test_online_update_download_rejects_size_mismatch(tmp_path, monkeypatch):
