@@ -1012,6 +1012,7 @@ def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("reports") / "final_run_report.json") is False
     assert should_include_file(Path("logs") / "run.log") is False
     assert should_include_file(Path("backups") / "target.xlsx") is False
+    assert should_include_file(Path("diagnostics") / "diagnostic_20260722_101257.zip") is False
     assert should_include_file(Path("kst_exports") / "export.xlsx") is False
     assert should_include_file(Path("secrets") / "secrets.json") is False
     assert should_include_file(Path("samples") / "真实业务.xlsx") is False
@@ -10472,7 +10473,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.19.106"
+    assert CURRENT_VERSION == "2026.7.22.107"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
     )
@@ -10480,13 +10481,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.19.107",
+        "tag_name": "v2026.7.22.108",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.19.107.zip",
+                "name": "Hourlyreport_automation_v2026.7.22.108.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -10497,10 +10498,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.19.107"
+    assert update.version == "2026.7.22.108"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.19.107") is None
+    assert select_release_update(payload, "2026.7.22.108") is None
 
     for invalid in (
         {**payload, "draft": True},

@@ -1,7 +1,7 @@
 <h1 align="center">🐜 蚁之力 · 竞价数据自动化</h1>
 
 <p align="center">
-  <sub><code>H O U R L Y _ R E P O R T _ B O T</code> &nbsp; · &nbsp; v2026.7.19.106</sub>
+  <sub><code>H O U R L Y _ R E P O R T _ B O T</code> &nbsp; · &nbsp; v2026.7.22.107</sub>
 </p>
 
 <p align="center">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?logo=windows&logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/GUI-PySide6-41CD52?logo=qt&logoColor=white" alt="PySide6">
   <img src="https://img.shields.io/badge/browser-Chrome%20CDP-4285F4?logo=googlechrome&logoColor=white" alt="Chrome CDP">
-  <img src="https://img.shields.io/badge/version-2026.7.19.106-667eea" alt="Version">
+  <img src="https://img.shields.io/badge/version-2026.7.22.107-667eea" alt="Version">
   <img src="https://img.shields.io/badge/build-Inno%20Setup-225588?logo=windows&logoColor=white" alt="Inno Setup">
   <img src="https://img.shields.io/badge/commits-133-4B8BBE" alt="Commits">
 </p>
@@ -138,7 +138,7 @@
 下载并运行最新安装器，其余自动完成：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.19.106.exe
+Hourlyreport_automation_setup_v2026.7.22.107.exe
 ```
 
 安装器会：创建程序目录 → 注册快捷方式 → 部署默认项目配置。
@@ -492,7 +492,7 @@ credentials.local.json           # 本机百度账号（.gitignore）
 
 | 项目 | 说明 |
 |:--|:--|
-| 版本基线 | `2026.7.19.106`（标准安装器） |
+| 版本基线 | `2026.7.22.107`（标准安装器） |
 | 仓库 | `179068898-dotcom/Hourlyreport-Automation`（GitHub Releases） |
 | 检测 | GUI 启动时后台检查最新 Release |
 | 下载 | 检测到新版本 → 标题栏显示更新按钮 → 点击下载增量 ZIP |
@@ -503,7 +503,7 @@ credentials.local.json           # 本机百度账号（.gitignore）
 
 ```
 发布年.月.日.永久累计序号
-2026.7.19.106
+2026.7.22.107
          └── 累计序号：从 100 起，永不按日期重置
 ```
 
@@ -574,6 +574,7 @@ credentials.local.json           # 本机百度账号（.gitignore）
 
 | 版本 | 日期 | 里程碑 |
 |:--|:--|:--|
+| `2026.7.22.107` | 2026-07-22 | 快商通统计口径修正、隔离 Python 安装修复、依赖锁定、脱敏诊断包与日志归档 |
 | `2026.7.19.106` | 2026-07-19 | 标准 Windows 安装器基线（Inno Setup），持久化日志 |
 | `2026.7.19.105` | 2026-07-19 | UI 细节优化 |
 | ~104 | 2026-07-19 | API 优先桌面自动化，GitHub Release 在线更新 |
