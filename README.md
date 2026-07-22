@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-2026.7.22.107-4f7cff?style=for-the-badge" alt="Version">
+  <img src="https://img.shields.io/badge/version-2026.7.22.108-4f7cff?style=for-the-badge" alt="Version">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Windows">
   <img src="https://img.shields.io/badge/Python-3.14.5-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python">
   <img src="https://img.shields.io/badge/GUI-PySide6-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="PySide6">
@@ -87,7 +87,7 @@ flowchart LR
 管理员提供完整安装器：
 
 ```text
-Hourlyreport_automation_setup_v2026.7.22.107.exe
+Hourlyreport_automation_setup_v2026.7.22.108.exe
 ```
 
 安装器会部署程序、默认项目配置、桌面快捷方式和开始菜单入口。首次启动时会自动检查运行环境，缺少环境时下载隔离的项目专用 Python 3.14.5，不使用、不修改、也不要求卸载系统 Python。
@@ -212,22 +212,22 @@ hourly_report_bot_release_v0.4.4/
 当前标准安装器基线：
 
 ```text
-2026.7.22.107
+2026.7.22.108
 ```
 
 版本号规则：
 
 ```text
 发布年.月.日.永久累计序号
-例如：2026.7.22.107
+例如：2026.7.22.108
 ```
 
 GitHub Release 规则：
 
 - 仓库：`179068898-dotcom/Hourlyreport-Automation`
-- tag：`v2026.7.22.107`
-- 在线更新包：`Hourlyreport_automation_v2026.7.22.107.zip`
-- 完整安装器：`Hourlyreport_automation_setup_v2026.7.22.107.exe`
+- tag：`v2026.7.22.108`
+- 在线更新包：`Hourlyreport_automation_v2026.7.22.108.zip`
+- 完整安装器：`Hourlyreport_automation_setup_v2026.7.22.108.exe`
 - 每次发布必须提供中文更新说明，见 `docs/releases/`。
 
 在线更新包只包含程序文件，不覆盖：
@@ -254,6 +254,7 @@ GitHub Release 规则：
 
 | 版本 | 日期 | 重点 |
 |:--|:--|:--|
+| `2026.7.22.108` | 2026-07-22 | GUI 增加小时报/日报完成后打开 Excel 独立开关；新增帮助菜单、关于小螃蟹和手动检查版本入口 |
 | `2026.7.22.107` | 2026-07-22 | 快商通统计口径修正、隔离 Python 安装修复、依赖锁定、脱敏诊断包、日志归档 |
 | `2026.7.19.106` | 2026-07-19 | 标准 Windows 安装器基线、持久化日志、在线更新流程收敛 |
 | `2026.7.19.105` | 2026-07-19 | GUI 细节优化、数据模式控件调整 |

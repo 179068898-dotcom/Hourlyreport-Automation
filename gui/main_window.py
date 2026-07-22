@@ -52,6 +52,7 @@ from gui.branding import PRODUCT_DISPLAY_NAME, WINDOW_HEADER_TITLE
 from gui.clawd import ClawdAnimator
 from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
 from gui.desktop_pet import ClawdDesktopPet
+from gui.excel_open_settings import load_open_excel_preference, save_open_excel_preference
 from gui.environment_check import (
     environment_repair_command,
     initialize_kst_directories_once,
@@ -79,6 +80,7 @@ from modules.task_stop_gate import (
     request_task_stop,
 )
 from gui.update_manager import APP_EXE_NAME, GitHubUpdateManager, ReleaseUpdate, launch_update_helper
+from gui.version import CURRENT_VERSION
 from modules.project_config import (
     get_data_source_preference,
     get_excel_path,
@@ -482,6 +484,87 @@ class DataSourceModeControl(QFrame):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._layout_children()
+
+
+class ExcelOpenToggle(QFrame):
+    preference_changed = Signal(str, bool)
+
+    def __init__(self, task: str, checked: bool = True, parent=None):
+        super().__init__(parent)
+        self.task = task
+        self.setObjectName("excelOpenToggle")
+        self.setFixedSize(58, 24)
+        self.label = QLabel("open", self)
+        self.label.setObjectName("excelOpenToggleLabel")
+        self.label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+        self.button = QPushButton("", self)
+        self.button.setObjectName("excelOpenToggleButton")
+        self.button.setCheckable(True)
+        self.button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.button.setChecked(bool(checked))
+        self.button.toggled.connect(self._on_toggled)
+        self.setStyleSheet(f"""
+            QFrame#excelOpenToggle {{
+                background: transparent;
+                border: 0;
+            }}
+            QLabel#excelOpenToggleLabel {{
+                color: #64748b;
+                background: transparent;
+                border: 0;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 8pt;
+                font-weight: 400;
+            }}
+            QPushButton#excelOpenToggleButton {{
+                background: #dfe4eb;
+                border: 0;
+                border-radius: 8px;
+                padding: 0;
+            }}
+            QPushButton#excelOpenToggleButton:checked {{
+                background: #3f8cff;
+            }}
+            QPushButton#excelOpenToggleButton:disabled {{
+                background: #e7ebf1;
+            }}
+        """)
+
+    def isChecked(self) -> bool:
+        return self.button.isChecked()
+
+    def setChecked(self, checked: bool) -> None:
+        self.button.setChecked(bool(checked))
+
+    def setEnabled(self, enabled: bool) -> None:
+        super().setEnabled(enabled)
+        self.button.setEnabled(enabled)
+        self.label.setEnabled(enabled)
+
+    def _on_toggled(self, checked: bool) -> None:
+        self.preference_changed.emit(self.task, bool(checked))
+        self.button.style().unpolish(self.button)
+        self.button.style().polish(self.button)
+        self.update()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.label.setGeometry(0, 0, 27, self.height())
+        self.button.setGeometry(32, 4, 26, 16)
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        rect = self.button.geometry()
+        knob_size = 12
+        x = rect.right() - knob_size - 2 if self.button.isChecked() else rect.left() + 2
+        y = rect.top() + (rect.height() - knob_size) // 2
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(QRect(x, y, knob_size, knob_size))
+        painter.end()
+
 
 class RunStopSplitControl(QFrame):
     diagonal_gap_width = 2
@@ -1499,6 +1582,9 @@ class MainWindow(QMainWindow):
         self.pending_update_archive: Path | None = None
         self.calendar_dialog: ModernCalendarDialog | None = None
         self.data_source_preference = get_data_source_preference(self.root)
+        self.open_excel_after_hourly = load_open_excel_preference(self.root, "hourly")
+        self.open_excel_after_daily = load_open_excel_preference(self.root, "daily")
+        self._manual_update_check_requested = False
         self._task_stop_requested = False
         self._task_stop_locked = False
         self._task_active = False
@@ -1768,6 +1854,25 @@ class MainWindow(QMainWindow):
         self.system_config_button.clicked.connect(self.show_system_config_menu)
         title_layout.addWidget(self.system_config_button)
 
+        self.help_button = HoverMenuButton("帮助")
+        self.help_button.setObjectName("systemConfigButton")
+        self.help_button.setFont(config_font)
+        self.help_button.setFixedSize(
+            config_metrics.horizontalAdvance(self.help_button.text()) + 10,
+            title_text_height,
+        )
+        self.help_menu = QMenu(self.help_button)
+        self.help_menu.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
+        about_clawd_action = QAction("关于小螃蟹", self.help_menu)
+        check_version_action = QAction("检查版本", self.help_menu)
+        about_clawd_action.triggered.connect(self.show_about_clawd)
+        check_version_action.triggered.connect(self.check_updates_manually)
+        self.help_menu.addAction(about_clawd_action)
+        self.help_menu.addAction(check_version_action)
+        self._style_menu(self.help_menu, 164)
+        self.help_button.clicked.connect(self.show_help_menu)
+        title_layout.addWidget(self.help_button)
+
         self.update_button = QPushButton("更新")
         self.update_button.setObjectName("updateButton")
         self.update_button.setProperty("updateState", "hidden")
@@ -1922,6 +2027,9 @@ class MainWindow(QMainWindow):
         self.hourly_title.setObjectName("cardTitle")
         header.addWidget(self.hourly_title)
         header.addStretch(1)
+        self.hourly_open_toggle = ExcelOpenToggle("hourly", self.open_excel_after_hourly)
+        self.hourly_open_toggle.preference_changed.connect(self.on_excel_open_toggle_changed)
+        header.addWidget(self.hourly_open_toggle)
         hourly_layout.addLayout(header)
 
         action_grid = QGridLayout()
@@ -1962,6 +2070,9 @@ class MainWindow(QMainWindow):
         self.daily_title.setObjectName("dailyCardTitle")
         daily_header.addWidget(self.daily_title)
         daily_header.addStretch(1)
+        self.daily_open_toggle = ExcelOpenToggle("daily", self.open_excel_after_daily)
+        self.daily_open_toggle.preference_changed.connect(self.on_excel_open_toggle_changed)
+        daily_header.addWidget(self.daily_open_toggle)
         daily_layout.addLayout(daily_header)
 
         daily_button_row = QHBoxLayout()
@@ -2435,10 +2546,20 @@ class MainWindow(QMainWindow):
                 border-color: #b9d2f4;
                 color: #2f6fed;
             }}
+            QPushButton#updateButton[updateState="current"] {{
+                background: #eef6ff;
+                border-color: #cfe2ff;
+                color: #2f6fed;
+                padding: 0 8px;
+            }}
             QPushButton#updateButton:hover {{ background: #2689df; border-color: #237dc9; }}
             QPushButton#updateButton[updateState="failed"]:hover {{
                 background: #e6f0ff;
                 border-color: #9fc3f4;
+            }}
+            QPushButton#updateButton[updateState="current"]:hover {{
+                background: #eef6ff;
+                border-color: #cfe2ff;
             }}
             QPushButton#updateButton:pressed {{ background: #1f7dcc; }}
             QPushButton#updateButton:disabled {{ color: #ffffff; }}
@@ -2717,6 +2838,109 @@ class MainWindow(QMainWindow):
         self.inline_config_menu.sync(self.pet_mode, self.pet_scale)
         self.inline_config_menu.popup_below(self.system_config_button)
 
+    def show_help_menu(self) -> None:
+        self.inline_config_menu.hide()
+        self.help_menu.popup(self.help_button.mapToGlobal(QPoint(0, self.help_button.height() + 4)))
+
+    def show_about_clawd(self) -> None:
+        dialog = QDialog(self)
+        dialog.setObjectName("aboutClawdDialog")
+        dialog.setWindowTitle("关于小螃蟹")
+        dialog.setFixedSize(360, 330)
+        dialog.setModal(True)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(28, 26, 28, 18)
+        layout.setSpacing(10)
+
+        icon_label = QLabel()
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon_path = self.root / "assets" / "app_icon.png"
+        if icon_path.exists():
+            pixmap = QPixmap(str(icon_path)).scaled(
+                82,
+                82,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            icon_label.setPixmap(pixmap)
+        layout.addWidget(icon_label)
+
+        name_label = QLabel("Clawd 小螃蟹")
+        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name_label.setObjectName("aboutClawdTitle")
+        layout.addWidget(name_label)
+
+        product_label = QLabel("蚁之力 · 竞价数据自动化")
+        product_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        product_label.setObjectName("aboutClawdText")
+        layout.addWidget(product_label)
+
+        version_label = QLabel(f"版本 {CURRENT_VERSION}")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_label.setObjectName("aboutClawdText")
+        layout.addWidget(version_label)
+
+        author_label = QLabel("来源：179068898-dotcom / Hourlyreport-Automation")
+        author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        author_label.setObjectName("aboutClawdText")
+        layout.addWidget(author_label)
+
+        copyright_label = QLabel("© 179068898-dotcom")
+        copyright_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        copyright_label.setObjectName("aboutClawdText")
+        layout.addWidget(copyright_label)
+        layout.addStretch(1)
+
+        ok_button = QPushButton("确定")
+        ok_button.setObjectName("aboutClawdOkButton")
+        ok_button.setFixedSize(82, 32)
+        ok_button.clicked.connect(dialog.accept)
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        button_row.addWidget(ok_button)
+        layout.addLayout(button_row)
+
+        dialog.setStyleSheet(f"""
+            QDialog#aboutClawdDialog {{
+                background: #ffffff;
+                border: 1px solid #d6dee9;
+                font-family: {FONT_STACK};
+            }}
+            QLabel#aboutClawdTitle {{
+                color: #111827;
+                font-family: {FONT_TITLE_STACK};
+                font-size: 12pt;
+                font-weight: 700;
+            }}
+            QLabel#aboutClawdText {{
+                color: #4b5563;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 9pt;
+                font-weight: 400;
+            }}
+            QPushButton#aboutClawdOkButton {{
+                color: #0f172a;
+                background: #ffffff;
+                border: 1px solid #2f80ed;
+                border-radius: 4px;
+                font-family: {FONT_REGULAR_STACK};
+                font-size: 9pt;
+            }}
+            QPushButton#aboutClawdOkButton:hover {{
+                background: #edf6ff;
+            }}
+        """)
+        self._last_about_dialog = dialog
+        dialog.exec()
+
+    def check_updates_manually(self) -> None:
+        self._manual_update_check_requested = True
+        if not (self.root / APP_EXE_NAME).is_file():
+            self._manual_update_check_requested = False
+            self._set_update_button_state("failed", tooltip="当前目录缺少主程序，无法检查在线更新")
+            return
+        self.update_manager.start()
+
     def start_update_check(self) -> None:
         if not (self.root / APP_EXE_NAME).is_file():
             return
@@ -2777,6 +3001,14 @@ class MainWindow(QMainWindow):
             self.update_button.setEnabled(True)
             self.update_button.setToolTip(tooltip or "检查更新失败，点击重试")
             self.update_button.show()
+        elif state == "current":
+            self.update_button.setIcon(QIcon())
+            self.update_button.setText("最新")
+            width = self.update_button.fontMetrics().horizontalAdvance("最新") + 18
+            self.update_button.setFixedSize(width, 22)
+            self.update_button.setEnabled(False)
+            self.update_button.setToolTip(tooltip or "当前已是最新版本")
+            self.update_button.show()
         else:
             self.update_button.hide()
         self._refresh_widget_style(self.update_button)
@@ -2785,6 +3017,7 @@ class MainWindow(QMainWindow):
         self._set_update_button_state("checking", tooltip="正在检查更新")
 
     def on_update_available(self, update: ReleaseUpdate) -> None:
+        self._manual_update_check_requested = False
         self.pending_update_release = update
         self.pending_update_version = ""
         self.pending_update_archive = None
@@ -2820,9 +3053,15 @@ class MainWindow(QMainWindow):
         self._set_update_button_state("ready", tooltip=f"更新到 {version}")
 
     def on_update_up_to_date(self) -> None:
+        if self._manual_update_check_requested:
+            self._manual_update_check_requested = False
+            self._set_update_button_state("current", tooltip=f"当前已是最新版本 {CURRENT_VERSION}")
+            QTimer.singleShot(2500, self._hide_current_update_badge)
+            return
         self._set_update_button_state("hidden")
 
     def on_update_failed(self, message: str) -> None:
+        self._manual_update_check_requested = False
         if self.pending_update_release is not None and self.update_button.property("updateState") == "downloading":
             self._set_update_button_state(
                 "available",
@@ -2831,6 +3070,10 @@ class MainWindow(QMainWindow):
             return
         detail = f"检查更新失败，点击重试：{message}" if message else "检查更新失败，点击重试"
         self._set_update_button_state("failed", tooltip=detail)
+
+    def _hide_current_update_badge(self) -> None:
+        if str(self.update_button.property("updateState") or "") == "current":
+            self._set_update_button_state("hidden")
 
     def install_downloaded_update(self) -> None:
         if not self.pending_update_archive or not self.pending_update_version:
@@ -2960,6 +3203,32 @@ class MainWindow(QMainWindow):
                 animate=False,
                 emit=False,
             )
+
+    def on_excel_open_toggle_changed(self, task: str, enabled: bool) -> None:
+        normalized = "daily" if task == "daily" else "hourly"
+        try:
+            save_open_excel_preference(self.root, normalized, enabled)
+        except Exception as exc:
+            previous = self.open_excel_after_daily if normalized == "daily" else self.open_excel_after_hourly
+            toggle = self.daily_open_toggle if normalized == "daily" else self.hourly_open_toggle
+            toggle.button.blockSignals(True)
+            toggle.setChecked(previous)
+            toggle.button.blockSignals(False)
+            message = f"Excel 打开偏好保存失败：{exc}"
+            self.progress_text.setText(message)
+            self.append_log(f"[失败] {message}")
+            return
+        if normalized == "daily":
+            self.open_excel_after_daily = bool(enabled)
+        else:
+            self.open_excel_after_hourly = bool(enabled)
+
+    def should_open_excel_after_task(self, task: str) -> bool:
+        if task == "daily":
+            return bool(self.open_excel_after_daily)
+        if task == "hourly":
+            return bool(self.open_excel_after_hourly)
+        return False
 
     def set_desktop_pet_mode(self, mode: str) -> None:
         self.pet_mode = mode
@@ -3559,13 +3828,21 @@ class MainWindow(QMainWindow):
             self.flow_crab.show()
             self.append_log("任务完成，退出码 0")
             if self.current_task_type in {"hourly", "daily"}:
-                self.open_current_project_excel()
                 task_name = "小时报" if self.current_task_type == "hourly" else "日报"
-                self.desktop_pet.announce(
-                    f"{self.current_project_name} {task_name}完成啦，Excel 已经打开。",
-                    "jumping",
-                    8500,
-                )
+                if self.should_open_excel_after_task(self.current_task_type):
+                    self.open_current_project_excel()
+                    self.desktop_pet.announce(
+                        f"{self.current_project_name} {task_name}完成啦，Excel 已经打开。",
+                        "jumping",
+                        8500,
+                    )
+                else:
+                    self.append_log(f"[通知] {task_name}已完成，按 open 设置跳过打开 Excel。")
+                    self.desktop_pet.announce(
+                        f"{self.current_project_name} {task_name}完成啦。",
+                        "jumping",
+                        6500,
+                    )
             else:
                 self.desktop_pet.announce(
                     f"{self.current_project_name} 项目配置检查完成。",
@@ -3623,6 +3900,10 @@ class MainWindow(QMainWindow):
         self.hourly_action_control.set_run_enabled(run_enabled)
         self.daily_action_control.set_run_enabled(run_enabled)
         self.project_check_action.setEnabled(enabled and has_projects)
+        if hasattr(self, "hourly_open_toggle"):
+            self.hourly_open_toggle.setEnabled(enabled)
+        if hasattr(self, "daily_open_toggle"):
+            self.daily_open_toggle.setEnabled(enabled)
 
     def set_stop_controls(self) -> None:
         can_stop = (

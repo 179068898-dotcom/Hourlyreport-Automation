@@ -8907,7 +8907,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     release = build_release(
         root,
-        version="2026.7.22.107",
+        version="2026.7.22.108",
         online_update=True,
         output_dir=tmp_path,
     )
@@ -8916,9 +8916,9 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.22.107.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.22.108.zip"
     assert release.parent == tmp_path
-    assert release_name("2026.7.22.107", online_update=True) == release.name
+    assert release_name("2026.7.22.108", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -9651,6 +9651,7 @@ def test_data_source_control_animates_selected_mode_to_the_left(monkeypatch):
 def test_desktop_gui_data_mode_control_lives_in_project_header(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
+    from gui.excel_open_settings import load_open_excel_preference
     from gui.main_window import MainWindow
 
     _write_minimal_gui_project(tmp_path)
@@ -9673,6 +9674,7 @@ def test_desktop_gui_data_mode_control_lives_in_project_header(tmp_path, monkeyp
 def test_desktop_gui_data_source_preference_persists_and_locks_during_tasks(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
+    from gui.excel_open_settings import load_open_excel_preference
     from gui.main_window import MainWindow
     from modules.project_config import get_data_source_preference
 
@@ -9700,6 +9702,94 @@ def test_desktop_gui_data_source_preference_persists_and_locks_during_tasks(tmp_
     assert not control.isEnabled()
     window.show_task_error("测试启动失败")
     assert control.isEnabled()
+
+    window._quitting = True
+    window.close()
+
+
+def test_excel_open_preferences_default_true_and_persist(tmp_path):
+    from gui.excel_open_settings import load_open_excel_preference, save_open_excel_preference
+
+    assert load_open_excel_preference(tmp_path, "hourly") is True
+    assert load_open_excel_preference(tmp_path, "daily") is True
+
+    save_open_excel_preference(tmp_path, "hourly", False)
+    save_open_excel_preference(tmp_path, "daily", True)
+
+    saved = json.loads((tmp_path / "configs" / "app_config.json").read_text(encoding="utf-8"))
+    assert saved["open_excel_after_hourly"] is False
+    assert saved["open_excel_after_daily"] is True
+    assert load_open_excel_preference(tmp_path, "hourly") is False
+    assert load_open_excel_preference(tmp_path, "daily") is True
+
+
+def test_desktop_gui_excel_open_toggles_control_task_completion(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.excel_open_settings import load_open_excel_preference
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    opened = []
+    logs = []
+    announcements = []
+    window.open_current_project_excel = lambda: opened.append(window.current_task_type)
+    window.append_log = logs.append
+    window.desktop_pet.announce = lambda *args, **kwargs: announcements.append(args)
+    window.desktop_pet.set_busy = lambda _busy: None
+
+    assert window.hourly_open_toggle.isChecked()
+    assert window.daily_open_toggle.isChecked()
+    window.hourly_open_toggle.setChecked(False)
+    assert load_open_excel_preference(tmp_path, "hourly") is False
+
+    window.current_task_type = "hourly"
+    window.current_project_name = "演示项目"
+    window.on_task_finished(0)
+    assert opened == []
+    assert any("跳过打开 Excel" in line for line in logs)
+
+    window.daily_open_toggle.setChecked(True)
+    window.current_task_type = "daily"
+    window.current_project_name = "演示项目"
+    window.on_task_finished(0)
+    assert opened == ["daily"]
+
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_help_menu_and_manual_update_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QDialog
+    import gui.main_window as main_window
+
+    _write_minimal_gui_project(tmp_path)
+    (tmp_path / main_window.APP_EXE_NAME).write_bytes(b"placeholder")
+    app = QApplication.instance() or QApplication([])
+    window = main_window.MainWindow(tmp_path)
+    starts = []
+    window.update_manager.start = lambda: starts.append(True)
+    monkeypatch.setattr(QDialog, "exec", lambda self: 0)
+
+    assert window.help_button.text() == "帮助"
+    assert [action.text() for action in window.help_menu.actions()] == ["关于小螃蟹", "检查版本"]
+
+    window.check_updates_manually()
+    assert starts == [True]
+    assert window._manual_update_check_requested is True
+    window.on_update_up_to_date()
+    assert window.update_button.text() == "最新"
+    assert window.update_button.property("updateState") == "current"
+
+    window.show_about_clawd()
+    assert window._last_about_dialog.windowTitle() == "关于小螃蟹"
+    about_text = "\n".join(label.text() for label in window._last_about_dialog.findChildren(main_window.QLabel))
+    assert "Clawd 小螃蟹" in about_text
+    assert main_window.CURRENT_VERSION in about_text
+    assert "179068898-dotcom" in about_text
 
     window._quitting = True
     window.close()
@@ -10868,7 +10958,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.22.107"
+    assert CURRENT_VERSION == "2026.7.22.108"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
     )
@@ -10876,13 +10966,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.22.108",
+        "tag_name": "v2026.7.22.109",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.22.108.zip",
+                "name": "Hourlyreport_automation_v2026.7.22.109.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -10893,10 +10983,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.22.108"
+    assert update.version == "2026.7.22.109"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.22.108") is None
+    assert select_release_update(payload, "2026.7.22.109") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -10989,12 +11079,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.22.108",
+        "tag_name": "v2026.7.22.109",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.22.108.zip",
+                "name": "Hourlyreport_automation_v2026.7.22.109.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11022,7 +11112,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.22.108"]
+    assert [item.version for item in available] == ["2026.7.22.109"]
     assert ready == []
 
 
