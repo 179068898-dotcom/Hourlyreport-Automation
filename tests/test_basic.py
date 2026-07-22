@@ -7604,6 +7604,117 @@ def test_baidu_oauth_bundle_import_is_atomic_and_does_not_expose_tokens(tmp_path
     assert len(list((tmp_path / "backups").glob("secrets_before_oauth_*.json"))) == 1
 
 
+def test_baidu_oauth_bundle_can_sync_profile_to_cloud_token_store(tmp_path):
+    import hashlib
+    import hmac
+
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu_api_gateway": {
+            "app_id": "app-1",
+            "client_key": "client-key",
+            "token_url": "https://example.invalid/baidu/oauth/token",
+        },
+        "baidu_api": {"existing": {"app_id": "app-1"}},
+    }), encoding="utf-8")
+    bundle_path = tmp_path / "download.baidu-auth"
+    bundle_path.write_text(json.dumps({
+        "format": "baidu-oauth-export-v1",
+        "app_id": "app-1",
+        "authorization": {
+            "access_token": "new.access.token",
+            "refresh_token": "new.refresh.token",
+            "open_id": "open-1",
+            "user_id": 123,
+            "master_uid": 123,
+            "master_name": "manager",
+            "user_account_type": 2,
+            "sub_accounts": [{"user_id": 456, "user_name": "child"}],
+        },
+    }), encoding="utf-8")
+    calls = []
+
+    def transport(url, payload, headers, timeout):
+        calls.append((url, payload, headers, timeout))
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        expected = hmac.new(
+            b"client-key",
+            (headers["X-Baidu-Refresh-Timestamp"] + "\n" + canonical).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        assert headers["X-Baidu-Refresh-Signature"] == expected
+        return {"status": "ok", "profile": {"api_profile": "changsha_niu_baidu"}}
+
+    report = import_baidu_oauth_bundle(
+        tmp_path,
+        bundle_path,
+        "changsha_niu_baidu",
+        sync_cloud_token_store=True,
+        transport=transport,
+    )
+
+    assert calls[0][0] == "https://example.invalid/baidu/oauth/store-profile"
+    assert calls[0][1]["apiProfile"] == "changsha_niu_baidu"
+    assert calls[0][1]["authorization"]["refresh_token"] == "new.refresh.token"
+    assert report["cloud_sync"]["passed"] is True
+    assert "new.access.token" not in json.dumps(report, ensure_ascii=False)
+    assert "new.refresh.token" not in json.dumps(report, ensure_ascii=False)
+
+
+def test_baidu_oauth_cloud_sync_all_profiles_skips_incomplete_records(tmp_path):
+    import hashlib
+    import hmac
+    from modules.baidu_oauth_bundle import sync_baidu_oauth_profiles_to_cloud
+
+    secrets_path = tmp_path / "secrets" / "secrets.json"
+    secrets_path.parent.mkdir(parents=True)
+    secrets_path.write_text(json.dumps({
+        "baidu_api_gateway": {
+            "app_id": "app-1",
+            "client_key": "client-key",
+            "store_profile_url": "https://example.invalid/baidu/oauth/store-profile",
+        },
+        "baidu_api": {
+            "complete_baidu": {
+                "app_id": "app-1",
+                "access_token": "secret.access.token",
+                "refresh_token": "secret.refresh.token",
+                "open_id": "open",
+                "user_id": 123,
+                "sub_accounts": [{"user_id": 456}],
+            },
+            "legacy_placeholder": {
+                "app_id": "app-1",
+                "access_token": "placeholder",
+            },
+        },
+    }), encoding="utf-8")
+    calls = []
+
+    def transport(url, payload, headers, timeout):
+        calls.append((url, payload, headers, timeout))
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        expected = hmac.new(
+            b"client-key",
+            (headers["X-Baidu-Refresh-Timestamp"] + "\n" + canonical).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        assert headers["X-Baidu-Refresh-Signature"] == expected
+        return {"status": "ok", "profile": {"api_profile": payload["apiProfile"]}}
+
+    report = sync_baidu_oauth_profiles_to_cloud(tmp_path, transport=transport)
+
+    assert report["passed"] is True
+    assert report["synced_count"] == 1
+    assert report["skipped_count"] == 1
+    assert calls[0][0] == "https://example.invalid/baidu/oauth/store-profile"
+    assert calls[0][1]["apiProfile"] == "complete_baidu"
+    serialized_report = json.dumps(report, ensure_ascii=False)
+    assert "secret.access.token" not in serialized_report
+    assert "secret.refresh.token" not in serialized_report
+
+
 def test_oauth_import_rereads_secrets_inside_shared_lock(tmp_path, monkeypatch):
     from contextlib import contextmanager
     import modules.baidu_oauth_bundle as oauth_bundle
@@ -8046,6 +8157,229 @@ def _load_baidu_oauth_callback_module(module_name="baidu_oauth_refresh_test"):
     return callback
 
 
+def _signed_refresh_headers(callback, payload, client_key, timestamp):
+    timestamp = str(timestamp)
+    return {
+        "X-Baidu-Refresh-Timestamp": timestamp,
+        "X-Baidu-Refresh-Signature": callback._refresh_signature(timestamp, payload, client_key),
+    }
+
+
+def test_cloud_token_store_loads_missing_store_as_empty_and_upserts_profile():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_cloud_store_test")
+    objects = {}
+    config = {
+        "app_id": "app-1",
+        "token_store_bucket": "hourlyreport-1300869225",
+        "token_store_region": "ap-nanjing",
+        "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+    }
+
+    def fake_cos(method, bucket, region, key, body=None):
+        assert bucket == "hourlyreport-1300869225"
+        assert region == "ap-nanjing"
+        if method == "GET":
+            if key not in objects:
+                raise callback.OAuthCallbackError("token_store_not_found", "missing", 404)
+            return json.loads(objects[key])
+        if method == "PUT":
+            objects[key] = body
+            return {"ok": True}
+        raise AssertionError(method)
+
+    store = callback.load_token_store(config, fake_cos)
+    assert store["format"] == "baidu-token-store-v1"
+    callback.upsert_token_profile(
+        store,
+        "ningbo_niu_baidu",
+        {
+            "access_token": "a.b.c",
+            "refresh_token": "d.e.f",
+            "open_id": "open",
+            "user_id": 45187067,
+            "expires_time": "2026-07-23 11:17:33",
+            "refresh_expires_time": "2026-08-21 11:17:33",
+        },
+        "app-1",
+    )
+    callback.save_token_store(config, store, fake_cos)
+    saved = json.loads(objects["baidu-oauth/token-store/baidu_oauth_tokens.json"])
+    assert saved["profiles"]["ningbo_niu_baidu"]["user_id"] == 45187067
+
+
+def test_cloud_token_endpoint_returns_cached_access_token_without_refresh():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_cloud_token_cached_test")
+    now = 1784700000
+    payload = {"apiProfile": "ningbo_niu_baidu", "forceRefresh": False}
+    headers = _signed_refresh_headers(callback, payload, "client-key", now)
+    store = {
+        "format": "baidu-token-store-v1",
+        "profiles": {
+            "ningbo_niu_baidu": {
+                "app_id": "app-1",
+                "access_token": "cached.access.token",
+                "refresh_token": "cached.refresh.token",
+                "open_id": "open",
+                "user_id": 45187067,
+                "expires_time": "2026-07-23 11:17:33",
+                "refresh_expires_time": "2026-08-21 11:17:33",
+            }
+        },
+    }
+
+    def fake_cos(method, bucket, region, key, body=None):
+        assert method == "GET"
+        return store
+
+    def fail_oauth(*_args):
+        raise AssertionError("should not refresh")
+
+    result = callback.process_cloud_token_request(
+        payload,
+        headers,
+        {
+            "app_id": "app-1",
+            "secret_key": "server-secret-key",
+            "refresh_client_key": "client-key",
+            "refresh_max_timestamp_skew_seconds": 300,
+            "token_store_bucket": "hourlyreport-1300869225",
+            "token_store_region": "ap-nanjing",
+            "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+        },
+        fake_cos,
+        fail_oauth,
+        now,
+    )
+    assert result["access_token"] == "cached.access.token"
+    assert result["token_refresh"] == "not_needed"
+    assert result["api_profile"] == "ningbo_niu_baidu"
+    assert "refresh_token" not in json.dumps(result)
+
+
+def test_cloud_token_endpoint_refreshes_and_persists_rotated_token():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_cloud_token_refresh_test")
+    now = 1784700000
+    payload = {"apiProfile": "ningbo_niu_baidu", "forceRefresh": True}
+    headers = _signed_refresh_headers(callback, payload, "client-key", now)
+    objects = {
+        "baidu-oauth/token-store/baidu_oauth_tokens.json": json.dumps({
+            "format": "baidu-token-store-v1",
+            "profiles": {
+                "ningbo_niu_baidu": {
+                    "app_id": "app-1",
+                    "access_token": "old.access.token",
+                    "refresh_token": "old.refresh.token",
+                    "open_id": "open",
+                    "user_id": 45187067,
+                    "expires_time": "2026-07-22 11:18:00",
+                    "refresh_expires_time": "2026-08-21 11:17:33",
+                }
+            },
+        })
+    }
+    oauth_calls = []
+
+    def fake_cos(method, bucket, region, key, body=None):
+        if method == "GET":
+            return json.loads(objects[key])
+        if method == "PUT":
+            objects[key] = body
+            return {"ok": True}
+        raise AssertionError(method)
+
+    def fake_oauth(url, body, timeout):
+        oauth_calls.append((url, body, timeout))
+        return {
+            "code": "0",
+            "data": {
+                "accessToken": "new.access.token",
+                "refreshToken": "new.refresh.token",
+                "openId": "open-2",
+                "expiresTime": "2026-07-23 11:17:33",
+                "refreshExpiresTime": "2026-08-21 11:17:33",
+                "expiresIn": 86400,
+                "refreshExpiresIn": 2592000,
+            },
+        }
+
+    result = callback.process_cloud_token_request(
+        payload,
+        headers,
+        {
+            "app_id": "app-1",
+            "secret_key": "server-secret-key",
+            "refresh_client_key": "client-key",
+            "refresh_max_timestamp_skew_seconds": 300,
+            "token_store_bucket": "hourlyreport-1300869225",
+            "token_store_region": "ap-nanjing",
+            "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+        },
+        fake_cos,
+        fake_oauth,
+        now,
+    )
+
+    assert oauth_calls[0][1]["refreshToken"] == "old.refresh.token"
+    saved = json.loads(objects["baidu-oauth/token-store/baidu_oauth_tokens.json"])
+    assert saved["profiles"]["ningbo_niu_baidu"]["refresh_token"] == "new.refresh.token"
+    assert result["access_token"] == "new.access.token"
+    assert result["token_refresh"] == "refreshed"
+    assert "refresh_token" not in json.dumps(result)
+
+
+def test_store_profile_endpoint_upserts_authorization_without_leaking_tokens():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_store_profile_test")
+    now = 1784700000
+    payload = {
+        "apiProfile": "ningbo_niu_baidu",
+        "authorization": {
+            "access_token": "new.access.token",
+            "refresh_token": "new.refresh.token",
+            "open_id": "open",
+            "user_id": 45187067,
+            "expires_time": "2026-07-23 11:17:33",
+            "refresh_expires_time": "2026-08-21 11:17:33",
+            "master_name": "BDCC-test",
+            "sub_accounts": [{"user_id": 45144300, "user_name": "ningbo-1"}],
+        },
+    }
+    headers = _signed_refresh_headers(callback, payload, "client-key", now)
+    objects = {}
+
+    def fake_cos(method, bucket, region, key, body=None):
+        if method == "GET":
+            if key not in objects:
+                raise callback.OAuthCallbackError("token_store_not_found", "missing", 404)
+            return json.loads(objects[key])
+        if method == "PUT":
+            objects[key] = body
+            return {"ok": True}
+        raise AssertionError(method)
+
+    result = callback.process_store_profile_request(
+        payload,
+        headers,
+        {
+            "app_id": "app-1",
+            "refresh_client_key": "client-key",
+            "refresh_max_timestamp_skew_seconds": 300,
+            "token_store_bucket": "hourlyreport-1300869225",
+            "token_store_region": "ap-nanjing",
+            "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+        },
+        fake_cos,
+        now,
+    )
+
+    saved = json.loads(objects["baidu-oauth/token-store/baidu_oauth_tokens.json"])
+    assert saved["profiles"]["ningbo_niu_baidu"]["refresh_token"] == "new.refresh.token"
+    assert result["api_profile"] == "ningbo_niu_baidu"
+    assert result["user_id"] == 45187067
+    assert result["sub_account_count"] == 1
+    assert "new.access.token" not in json.dumps(result)
+    assert "new.refresh.token" not in json.dumps(result)
+
+
 def test_baidu_oauth_refresh_accepts_signed_request_and_hides_server_secrets():
     callback = _load_baidu_oauth_callback_module()
     timestamp = "1800000000"
@@ -8239,7 +8573,13 @@ def test_baidu_oauth_wsgi_routes_refresh_post_and_rejects_refresh_get(monkeypatc
     assert json.loads(b"".join(result).decode("utf-8"))["code"] == "method_not_allowed"
 
 
-def _write_token_manager_secrets(root, *, expires_time="2026-07-17 09:20:00", other_profile=None):
+def _write_token_manager_secrets(
+    root,
+    *,
+    expires_time="2026-07-17 09:20:00",
+    other_profile=None,
+    token_url=None,
+):
     secrets_path = root / "secrets" / "secrets.json"
     secrets_path.parent.mkdir(parents=True)
     payload = {
@@ -8259,6 +8599,8 @@ def _write_token_manager_secrets(root, *, expires_time="2026-07-17 09:20:00", ot
             },
         },
     }
+    if token_url is not None:
+        payload["baidu_api_gateway"]["token_url"] = token_url
     if other_profile is not None:
         payload["baidu_api"]["other_baidu"] = other_profile
     secrets_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -8330,6 +8672,52 @@ def test_token_manager_refreshes_within_ten_minute_window(tmp_path):
     assert calls[0][0] == "https://example.invalid/baidu/oauth/refresh"
     assert calls[0][1] == {"appId": "app-1", "userId": 123, "refreshToken": "old.refresh.token"}
     assert calls[0][3] == 20
+
+
+def test_token_manager_cloud_first_uses_token_endpoint_without_local_refresh_token(tmp_path):
+    import hashlib
+    import hmac
+    from datetime import datetime
+    from modules.baidu_token_manager import ensure_valid_access_token_cloud_first
+
+    _write_token_manager_secrets(
+        tmp_path,
+        token_url="https://example.invalid/baidu/oauth/token",
+    )
+    calls = []
+
+    def transport(url, payload, headers, timeout):
+        calls.append((url, payload, headers, timeout))
+        canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        expected = hmac.new(
+            b"fake-client-key",
+            (headers["X-Baidu-Refresh-Timestamp"] + "\n" + canonical).encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        assert headers["X-Baidu-Refresh-Signature"] == expected
+        return {
+            "status": "ok",
+            "authorization": {
+                "access_token": "cloud.access.token",
+                "api_profile": "kunming_niu_baidu",
+                "expires_time": "2026-07-18 09:00:00",
+                "token_refresh": "not_needed",
+            },
+        }
+
+    token, metadata = ensure_valid_access_token_cloud_first(
+        {},
+        tmp_path,
+        "kunming_niu_baidu",
+        now=datetime(2026, 7, 17, 9, 0, 0),
+        transport=transport,
+    )
+
+    assert token == "cloud.access.token"
+    assert metadata["token_source"] == "cloud"
+    assert calls[0][0] == "https://example.invalid/baidu/oauth/token"
+    assert calls[0][1] == {"apiProfile": "kunming_niu_baidu", "forceRefresh": False}
+    assert "old.refresh.token" not in json.dumps(calls[0], ensure_ascii=False)
 
 
 def test_token_manager_deducts_lock_wait_from_refresh_timeout(tmp_path, monkeypatch):

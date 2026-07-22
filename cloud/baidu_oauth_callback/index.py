@@ -3,11 +3,12 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 
@@ -15,10 +16,13 @@ ACCESS_TOKEN_URL = "https://u.baidu.com/oauth/accessToken"
 REFRESH_TOKEN_URL = "https://u.baidu.com/oauth/refreshToken"
 USER_INFO_URL = "https://u.baidu.com/oauth/getUserInfo"
 EXPORT_FORMAT = "baidu-oauth-export-v1"
+TOKEN_STORE_FORMAT = "baidu-token-store-v1"
 REQUIRED_QUERY_FIELDS = ("appId", "authCode", "state", "userId", "timestamp", "signature")
 REFRESH_REQUEST_FIELDS = frozenset(("appId", "userId", "refreshToken"))
 REFRESH_TIMESTAMP_HEADER = "X-Baidu-Refresh-Timestamp"
 REFRESH_SIGNATURE_HEADER = "X-Baidu-Refresh-Signature"
+PROFILE_PATTERN = re.compile(r"^[a-z0-9_]{3,80}$")
+TOKEN_REFRESH_WINDOW_SECONDS = 600
 
 
 class OAuthCallbackError(RuntimeError):
@@ -43,6 +47,12 @@ def _load_config() -> Dict[str, Any]:
         "refresh_max_timestamp_skew_seconds": int(
             os.environ.get("BAIDU_REFRESH_MAX_TIMESTAMP_SKEW_SECONDS", "300")
         ),
+        "token_store_bucket": os.environ.get("BAIDU_TOKEN_STORE_BUCKET", "").strip(),
+        "token_store_region": os.environ.get("BAIDU_TOKEN_STORE_REGION", "").strip(),
+        "token_store_key": os.environ.get(
+            "BAIDU_TOKEN_STORE_KEY",
+            "baidu-oauth/token-store/baidu_oauth_tokens.json",
+        ).strip(),
     }
 
 
@@ -105,6 +115,90 @@ def _post_json(url: str, payload: Dict[str, Any], timeout_seconds: int = 20) -> 
         raise OAuthCallbackError("oauth_invalid_response", "百度 OAuth 服务返回内容异常", 502) from exc
 
 
+def _cos_authorization(
+    method: str,
+    bucket: str,
+    region: str,
+    key: str,
+    headers: Dict[str, str],
+    secret_id: str,
+    secret_key: str,
+    now_timestamp: Optional[int] = None,
+) -> str:
+    start = int(time.time()) if now_timestamp is None else int(now_timestamp)
+    end = start + 600
+    key_time = "%d;%d" % (start, end)
+    sign_time = key_time
+    signed_headers = sorted(key.lower() for key in headers)
+    header_string = "&".join(
+        "%s=%s" % (
+            name,
+            urllib.parse.quote(str(headers[name]), safe="-_.~").lower(),
+        )
+        for name in signed_headers
+    )
+    path = "/" + key.lstrip("/")
+    http_string = "%s\n%s\n\n%s\n" % (
+        method.lower(),
+        urllib.parse.quote(path, safe="/-_.~"),
+        header_string,
+    )
+    sign_key = hmac.new(secret_key.encode("utf-8"), key_time.encode("utf-8"), hashlib.sha1).hexdigest()
+    string_to_sign = "sha1\n%s\n%s\n" % (
+        sign_time,
+        hashlib.sha1(http_string.encode("utf-8")).hexdigest(),
+    )
+    signature = hmac.new(sign_key.encode("utf-8"), string_to_sign.encode("utf-8"), hashlib.sha1).hexdigest()
+    return (
+        "q-sign-algorithm=sha1"
+        "&q-ak=%s"
+        "&q-sign-time=%s"
+        "&q-key-time=%s"
+        "&q-header-list=%s"
+        "&q-url-param-list="
+        "&q-signature=%s"
+    ) % (secret_id, sign_time, key_time, ";".join(signed_headers), signature)
+
+
+def _cos_transport(method: str, bucket: str, region: str, key: str, body: Optional[str] = None) -> Dict[str, Any]:
+    secret_id = os.environ.get("TENCENT_SECRET_ID", "").strip()
+    secret_key = os.environ.get("TENCENT_SECRET_KEY", "").strip()
+    token = os.environ.get("TENCENT_TOKEN", "").strip()
+    if not secret_id or not secret_key:
+        raise OAuthCallbackError("cos_config_missing", "cos secret config missing", 500)
+    method = method.upper()
+    host = "%s.cos.%s.myqcloud.com" % (bucket, region)
+    signed_headers = {"host": host}
+    if token:
+        signed_headers["x-cos-security-token"] = token
+    headers = {
+        "Host": host,
+        "Authorization": _cos_authorization(method, bucket, region, key, signed_headers, secret_id, secret_key),
+    }
+    if token:
+        headers["x-cos-security-token"] = token
+    data = None
+    if method == "PUT":
+        data = str(body or "").encode("utf-8")
+        headers["Content-Type"] = "application/json; charset=utf-8"
+    url = "https://%s/%s" % (host, urllib.parse.quote(key.lstrip("/"), safe="/-_.~"))
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            response_body = response.read().decode("utf-8")
+            if method == "GET":
+                return json.loads(response_body or "{}")
+            return {"ok": True}
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise OAuthCallbackError("token_store_not_found", "token store not found", 404) from exc
+        raise OAuthCallbackError("cos_http_error", "cos http error %s" % exc.code, 502) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise OAuthCallbackError("cos_network_error", "cos network error", 502) from exc
+    except json.JSONDecodeError as exc:
+        raise OAuthCallbackError("token_store_invalid", "token store json invalid", 500) from exc
+
+
 def _refresh_signature(timestamp: str, payload: Dict[str, Any], client_key: str) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     message = "%s\n%s" % (timestamp, canonical)
@@ -121,6 +215,130 @@ def _header_value(headers: Dict[str, Any], name: str) -> str:
         if str(key).lower() == wanted:
             return str(value or "").strip()
     return ""
+
+
+def _validate_signed_payload(
+    payload: Dict[str, Any],
+    headers: Dict[str, Any],
+    config: Dict[str, Any],
+    now_timestamp: Optional[int] = None,
+) -> None:
+    if not config.get("refresh_client_key"):
+        raise OAuthCallbackError("server_config_error", "refresh client config missing", 500)
+    timestamp = _header_value(headers, REFRESH_TIMESTAMP_HEADER)
+    signature = _header_value(headers, REFRESH_SIGNATURE_HEADER)
+    if not timestamp or not signature:
+        raise OAuthCallbackError("missing_refresh_signature", "refresh signature missing")
+    try:
+        request_timestamp = int(timestamp)
+    except ValueError as exc:
+        raise OAuthCallbackError("invalid_refresh_timestamp", "refresh timestamp invalid") from exc
+    current_timestamp = int(time.time()) if now_timestamp is None else int(now_timestamp)
+    max_skew = int(config.get("refresh_max_timestamp_skew_seconds", 300))
+    if abs(current_timestamp - request_timestamp) > max_skew:
+        raise OAuthCallbackError("expired_refresh_request", "refresh request expired")
+    expected = _refresh_signature(timestamp, payload, str(config["refresh_client_key"]))
+    if not hmac.compare_digest(expected.lower(), signature.lower()):
+        raise OAuthCallbackError("refresh_signature_mismatch", "refresh signature mismatch")
+
+
+def _token_store_location(config: Dict[str, Any]) -> tuple:
+    bucket = str(config.get("token_store_bucket") or "").strip()
+    region = str(config.get("token_store_region") or "").strip()
+    key = str(config.get("token_store_key") or "").strip()
+    if not bucket or not region or not key:
+        raise OAuthCallbackError("token_store_config_missing", "token store config missing", 500)
+    return bucket, region, key
+
+
+def _empty_token_store() -> Dict[str, Any]:
+    return {
+        "format": TOKEN_STORE_FORMAT,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "profiles": {},
+    }
+
+
+def _normalize_token_store(raw: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise OAuthCallbackError("token_store_invalid", "token store content invalid", 500)
+    store = dict(raw)
+    store["format"] = TOKEN_STORE_FORMAT
+    profiles = store.get("profiles")
+    if not isinstance(profiles, dict):
+        profiles = {}
+    store["profiles"] = profiles
+    return store
+
+
+def load_token_store(
+    config: Dict[str, Any],
+    cos_transport: Callable[[str, str, str, str, Optional[str]], Dict[str, Any]],
+) -> Dict[str, Any]:
+    bucket, region, key = _token_store_location(config)
+    try:
+        return _normalize_token_store(cos_transport("GET", bucket, region, key, None))
+    except OAuthCallbackError as exc:
+        if exc.status_code == 404 or exc.code == "token_store_not_found":
+            return _empty_token_store()
+        raise
+
+
+def save_token_store(
+    config: Dict[str, Any],
+    store: Dict[str, Any],
+    cos_transport: Callable[[str, str, str, str, Optional[str]], Dict[str, Any]],
+) -> None:
+    bucket, region, key = _token_store_location(config)
+    store["format"] = TOKEN_STORE_FORMAT
+    store["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    body = json.dumps(store, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    cos_transport("PUT", bucket, region, key, body)
+
+
+def _validate_profile_name(api_profile: Any) -> str:
+    profile = str(api_profile or "").strip()
+    if not PROFILE_PATTERN.match(profile):
+        raise OAuthCallbackError("invalid_api_profile", "api profile invalid")
+    return profile
+
+
+def _validate_authorization_record(record: Any) -> Dict[str, Any]:
+    if not isinstance(record, dict):
+        raise OAuthCallbackError("invalid_authorization", "authorization invalid")
+    required = ("access_token", "refresh_token", "open_id", "user_id")
+    if any(record.get(key) in (None, "") for key in required):
+        raise OAuthCallbackError("invalid_authorization", "authorization incomplete")
+    normalized = dict(record)
+    try:
+        normalized["user_id"] = int(normalized["user_id"])
+    except (TypeError, ValueError) as exc:
+        raise OAuthCallbackError("invalid_authorization", "authorization user_id invalid") from exc
+    return normalized
+
+
+def get_token_profile(store: Dict[str, Any], api_profile: str) -> Dict[str, Any]:
+    profile = _validate_profile_name(api_profile)
+    record = store.get("profiles", {}).get(profile)
+    if not isinstance(record, dict):
+        raise OAuthCallbackError("token_profile_missing", "api authorization profile missing", 401)
+    return record
+
+
+def upsert_token_profile(
+    store: Dict[str, Any],
+    api_profile: str,
+    authorization: Dict[str, Any],
+    app_id: str,
+) -> Dict[str, Any]:
+    profile = _validate_profile_name(api_profile)
+    record = _validate_authorization_record(authorization)
+    record["app_id"] = app_id
+    record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if isinstance(record.get("sub_accounts"), list):
+        record["sub_account_count"] = len(record["sub_accounts"])
+    store.setdefault("profiles", {})[profile] = record
+    return record
 
 
 def process_refresh_request(
@@ -302,6 +520,132 @@ def process_oauth_callback(
     }
 
 
+def _parse_baidu_time(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _cloud_token_needs_refresh(record: Dict[str, Any], now_timestamp: Optional[int] = None) -> bool:
+    if not record.get("access_token"):
+        return True
+    if not record.get("refresh_token"):
+        raise OAuthCallbackError("reauthorization_required", "refresh token missing", 401)
+    expires_at = _parse_baidu_time(record.get("expires_time"))
+    if expires_at is None:
+        return True
+    now = datetime.fromtimestamp(int(time.time()) if now_timestamp is None else int(now_timestamp), timezone.utc)
+    return expires_at <= now + timedelta(seconds=TOKEN_REFRESH_WINDOW_SECONDS)
+
+
+def _refresh_record(
+    record: Dict[str, Any],
+    config: Dict[str, Any],
+    transport: Callable[[str, Dict[str, Any], int], Dict[str, Any]],
+) -> Dict[str, Any]:
+    if not config.get("app_id") or not config.get("secret_key"):
+        raise OAuthCallbackError("server_config_error", "baidu app config missing", 500)
+    response = transport(
+        REFRESH_TOKEN_URL,
+        {
+            "appId": config["app_id"],
+            "refreshToken": str(record.get("refresh_token") or ""),
+            "secretKey": config["secret_key"],
+            "userId": int(record.get("user_id")),
+        },
+        20,
+    )
+    if str(response.get("code")) != "0" or not isinstance(response.get("data"), dict):
+        raise OAuthCallbackError("reauthorization_required", "cloud token refresh failed", 401)
+    data = response["data"]
+    if not data.get("accessToken") or not data.get("refreshToken"):
+        raise OAuthCallbackError("refresh_incomplete", "cloud token refresh response incomplete", 502)
+    updated = dict(record)
+    updated.update({
+        "access_token": data["accessToken"],
+        "refresh_token": data["refreshToken"],
+        "open_id": data.get("openId") or record.get("open_id"),
+        "expires_time": data.get("expiresTime") or record.get("expires_time"),
+        "refresh_expires_time": data.get("refreshExpiresTime") or record.get("refresh_expires_time"),
+        "expires_in": data.get("expiresIn"),
+        "refresh_expires_in": data.get("refreshExpiresIn"),
+    })
+    return updated
+
+
+def process_cloud_token_request(
+    payload: Dict[str, Any],
+    headers: Dict[str, Any],
+    config: Dict[str, Any],
+    cos_transport: Callable[[str, str, str, str, Optional[str]], Dict[str, Any]] = _cos_transport,
+    oauth_transport: Callable[[str, Dict[str, Any], int], Dict[str, Any]] = _post_json,
+    now_timestamp: Optional[int] = None,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise OAuthCallbackError("invalid_token_request", "token request invalid")
+    api_profile = _validate_profile_name(payload.get("apiProfile"))
+    if set(payload) - {"apiProfile", "forceRefresh"}:
+        raise OAuthCallbackError("invalid_token_request", "token request has unsupported fields")
+    _validate_signed_payload(payload, headers, config, now_timestamp)
+    store = load_token_store(config, cos_transport)
+    record = get_token_profile(store, api_profile)
+    if config.get("app_id") and record.get("app_id") and str(record["app_id"]) != str(config["app_id"]):
+        raise OAuthCallbackError("app_id_mismatch", "stored authorization app id mismatch", 401)
+    refreshed = False
+    if bool(payload.get("forceRefresh")) or _cloud_token_needs_refresh(record, now_timestamp):
+        record = _refresh_record(record, config, oauth_transport)
+        store.setdefault("profiles", {})[api_profile] = record
+        save_token_store(config, store, cos_transport)
+        refreshed = True
+    return {
+        "api_profile": api_profile,
+        "access_token": record["access_token"],
+        "open_id": record.get("open_id"),
+        "user_id": record.get("user_id"),
+        "expires_time": record.get("expires_time"),
+        "token_refresh": "refreshed" if refreshed else "not_needed",
+    }
+
+
+def process_store_profile_request(
+    payload: Dict[str, Any],
+    headers: Dict[str, Any],
+    config: Dict[str, Any],
+    cos_transport: Callable[[str, str, str, str, Optional[str]], Dict[str, Any]] = _cos_transport,
+    now_timestamp: Optional[int] = None,
+) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise OAuthCallbackError("invalid_store_profile_request", "store profile request invalid")
+    if set(payload) != {"apiProfile", "authorization"}:
+        raise OAuthCallbackError("invalid_store_profile_request", "store profile request incomplete")
+    _validate_signed_payload(payload, headers, config, now_timestamp)
+    api_profile = _validate_profile_name(payload.get("apiProfile"))
+    store = load_token_store(config, cos_transport)
+    record = upsert_token_profile(store, api_profile, payload.get("authorization"), str(config.get("app_id") or ""))
+    save_token_store(config, store, cos_transport)
+    return {
+        "api_profile": api_profile,
+        "user_id": record.get("user_id"),
+        "master_name": record.get("master_name"),
+        "sub_account_count": int(record.get("sub_account_count") or len(record.get("sub_accounts") or [])),
+    }
+
+
 def _response(status_code: int, payload: Dict[str, Any], filename: Optional[str] = None) -> Dict[str, Any]:
     headers = {
         "Content-Type": "application/json; charset=utf-8",
@@ -353,11 +697,45 @@ def refresh_handler(event, context):
         return _response(500, {"status": "error", "code": "internal_error", "message": "更新授权令牌失败"})
 
 
+def token_handler(event, context):
+    event = event or {}
+    method = str(event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method") or "POST")
+    if method.upper() != "POST":
+        return _response(405, {"status": "error", "code": "method_not_allowed"})
+    try:
+        payload = _extract_json_body(event)
+        result = process_cloud_token_request(payload, event.get("headers") or {}, _load_config())
+        return _response(200, {"status": "ok", "authorization": result})
+    except OAuthCallbackError as exc:
+        return _response(exc.status_code, {"status": "error", "code": exc.code, "message": str(exc)})
+    except Exception:
+        return _response(500, {"status": "error", "code": "internal_error", "message": "cloud token request failed"})
+
+
+def store_profile_handler(event, context):
+    event = event or {}
+    method = str(event.get("httpMethod") or event.get("requestContext", {}).get("http", {}).get("method") or "POST")
+    if method.upper() != "POST":
+        return _response(405, {"status": "error", "code": "method_not_allowed"})
+    try:
+        payload = _extract_json_body(event)
+        result = process_store_profile_request(payload, event.get("headers") or {}, _load_config())
+        return _response(200, {"status": "ok", "profile": result})
+    except OAuthCallbackError as exc:
+        return _response(exc.status_code, {"status": "error", "code": exc.code, "message": str(exc)})
+    except Exception:
+        return _response(500, {"status": "error", "code": "internal_error", "message": "store profile request failed"})
+
+
 def main_handler(event, context):
     event = event or {}
     path = str(event.get("path") or event.get("rawPath") or "")
     if path.rstrip("/") == "/baidu/oauth/refresh":
         return refresh_handler(event, context)
+    if path.rstrip("/") == "/baidu/oauth/token":
+        return token_handler(event, context)
+    if path.rstrip("/") == "/baidu/oauth/store-profile":
+        return store_profile_handler(event, context)
     query = _extract_query(event or {})
     if not query:
         return _response(200, {"status": "ready", "service": "baidu-oauth-callback"})

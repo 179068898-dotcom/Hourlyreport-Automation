@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from modules.baidu_token_manager import secrets_file_lock
+from modules.baidu_token_manager import _post_refresh, _signed_post, secrets_file_lock
 
 
 EXPORT_FORMAT = "baidu-oauth-export-v1"
@@ -178,6 +178,9 @@ def import_baidu_oauth_bundle(
     root: Path,
     source_path: str | Path,
     api_profile: str,
+    *,
+    sync_cloud_token_store: bool = False,
+    transport=None,
 ) -> dict[str, Any]:
     profile = str(api_profile or "").strip()
     source = Path(source_path)
@@ -225,6 +228,36 @@ def import_baidu_oauth_bundle(
         secrets.setdefault("baidu_api", {})[profile] = record
         _write_json_atomic(secrets_path, secrets)
 
+    cloud_sync = {"enabled": False}
+    if sync_cloud_token_store:
+        gateway = secrets.get("baidu_api_gateway") if isinstance(secrets, dict) else None
+        if not isinstance(gateway, dict):
+            raise BaiduOAuthImportError("缺少百度 API 网关配置，无法同步云端授权")
+        store_profile_url = str(
+            gateway.get("store_profile_url")
+            or str(gateway.get("token_url") or "").rstrip("/").replace("/token", "/store-profile")
+        ).strip()
+        client_key = str(gateway.get("client_key") or "").strip()
+        if not store_profile_url.lower().startswith("https://") or not client_key:
+            raise BaiduOAuthImportError("百度云端授权同步地址或客户端密钥未配置")
+        payload = {"apiProfile": profile, "authorization": record}
+        response = _signed_post(
+            store_profile_url,
+            payload,
+            client_key,
+            datetime.now(),
+            20,
+            transport or _post_refresh,
+        )
+        if not isinstance(response, dict) or response.get("status") != "ok":
+            raise BaiduOAuthImportError("百度云端授权同步失败")
+        cloud_sync = {
+            "enabled": True,
+            "passed": True,
+            "api_profile": profile,
+            "sub_account_count": len(record["sub_accounts"]),
+        }
+
     report = {
         "passed": True,
         "api_profile": profile,
@@ -234,6 +267,7 @@ def import_baidu_oauth_bundle(
         "backup_path": str(backup_path),
         "source_path": str(source),
         "source_should_be_deleted": True,
+        "cloud_sync": cloud_sync,
     }
     if match is not None:
         report.update({
@@ -244,3 +278,74 @@ def import_baidu_oauth_bundle(
         if match.get("ignored_authorized_promotion_ids"):
             report["ignored_authorized_promotion_ids"] = match["ignored_authorized_promotion_ids"]
     return report
+
+
+def sync_baidu_oauth_profiles_to_cloud(
+    root: Path,
+    profiles: list[str] | None = None,
+    *,
+    transport=None,
+) -> dict[str, Any]:
+    secrets_path = Path(root) / "secrets" / "secrets.json"
+    secrets = _read_json(secrets_path)
+    gateway = secrets.get("baidu_api_gateway")
+    if not isinstance(gateway, dict):
+        raise BaiduOAuthImportError("缺少百度 API 网关配置，无法同步云端授权")
+    store_profile_url = str(
+        gateway.get("store_profile_url")
+        or str(gateway.get("token_url") or "").rstrip("/").replace("/token", "/store-profile")
+    ).strip()
+    client_key = str(gateway.get("client_key") or "").strip()
+    if not store_profile_url.lower().startswith("https://") or not client_key:
+        raise BaiduOAuthImportError("百度云端授权同步地址或客户端密钥未配置")
+
+    all_profiles = secrets.get("baidu_api")
+    if not isinstance(all_profiles, dict):
+        raise BaiduOAuthImportError("本机没有百度 API 授权配置")
+    requested = set(profiles or [])
+    synced: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    for profile_name in sorted(all_profiles):
+        if requested and profile_name not in requested:
+            continue
+        record = all_profiles.get(profile_name)
+        if not isinstance(record, dict):
+            skipped.append({"api_profile": profile_name, "reason": "invalid_record"})
+            continue
+        required = ("access_token", "refresh_token", "open_id", "user_id")
+        if any(record.get(key) in (None, "") for key in required):
+            skipped.append({"api_profile": profile_name, "reason": "incomplete_authorization"})
+            continue
+        payload = {"apiProfile": profile_name, "authorization": record}
+        try:
+            response = _signed_post(
+                store_profile_url,
+                payload,
+                client_key,
+                datetime.now(),
+                20,
+                transport or _post_refresh,
+            )
+            if not isinstance(response, dict) or response.get("status") != "ok":
+                failed.append({"api_profile": profile_name, "reason": str(response.get("code") or "sync_failed")})
+                continue
+            synced.append({
+                "api_profile": profile_name,
+                "user_id": record.get("user_id"),
+                "sub_account_count": len(record.get("sub_accounts") or []),
+            })
+        except Exception as exc:
+            failed.append({"api_profile": profile_name, "reason": exc.__class__.__name__})
+    missing = sorted(requested - set(all_profiles))
+    for profile_name in missing:
+        skipped.append({"api_profile": profile_name, "reason": "profile_missing"})
+    return {
+        "passed": not failed and bool(synced),
+        "synced_count": len(synced),
+        "skipped_count": len(skipped),
+        "failed_count": len(failed),
+        "synced": synced,
+        "skipped": skipped,
+        "failed": failed,
+    }

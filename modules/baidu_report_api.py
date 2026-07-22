@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from modules.validators import get_required_accounts, validate_baidu_report
-from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_token
+from modules.baidu_token_manager import BaiduTokenError, ensure_valid_access_token_cloud_first
 
 
 REPORT_API_URL = "https://api.baidu.com/json/sms/service/OpenApiReportService/getReportData"
@@ -547,7 +547,7 @@ def fetch_baidu_api_hourly(
     root: Path,
     logger,
     period: str | None = None,
-    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token_cloud_first,
     commit_standard_report: bool = True,
     transport: Callable[[str, dict[str, Any], int], dict[str, Any]] = _post_json,
     task_context: dict[str, Any] | None = None,
@@ -580,7 +580,7 @@ def fetch_baidu_api_daily(
     root: Path,
     logger,
     target_date: str | None = None,
-    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token,
+    token_provider: Callable[..., tuple[str, dict[str, Any]]] = ensure_valid_access_token_cloud_first,
     commit_standard_report: bool = True,
     transport: Callable[[str, dict[str, Any], int], dict[str, Any]] = _post_json,
     task_context: dict[str, Any] | None = None,

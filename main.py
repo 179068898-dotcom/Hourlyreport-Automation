@@ -24,7 +24,7 @@ from modules.baidu_validator import print_baidu_validate_summary, validate_baidu
 from modules.baidu_report_api import fetch_baidu_api_probe
 from modules.baidu_api_simulation import simulate_baidu_api_hourly
 from modules.baidu_api_readiness import run_baidu_api_readiness
-from modules.baidu_oauth_bundle import BaiduOAuthImportError, import_baidu_oauth_bundle
+from modules.baidu_oauth_bundle import BaiduOAuthImportError, import_baidu_oauth_bundle, sync_baidu_oauth_profiles_to_cloud
 from modules.browser_manager import test_browser_connect, test_browser_launch
 from modules.data_merger import merge_daily_files, merge_data_files
 from modules.daily_excel_inspector import inspect_daily_excel_structure
@@ -67,6 +67,7 @@ def main() -> int | None:
         "test-baidu-api-readiness",
         "simulate-baidu-api-hourly",
         "import-baidu-oauth",
+        "sync-baidu-cloud-token-store",
         "baidu-detect",
         "baidu-open-overview",
         "baidu-prepare-overview",
@@ -101,6 +102,8 @@ def main() -> int | None:
     parser.add_argument("--verbose", action="store_true", help="启用详细终端输出")
     parser.add_argument("--api-profile", default=None, help="百度 OAuth 授权导入使用的本地 API profile，推荐填 auto")
     parser.add_argument("--older-than-days", type=int, default=14, help="archive-logs 归档多少天以前的 .log 文件")
+    parser.add_argument("--sync-cloud-token-store", action="store_true", help="导入百度 OAuth 后同步到云端集中 token 存储")
+    parser.add_argument("--profiles", default=None, help="逗号分隔的百度 API profile；仅 sync-baidu-cloud-token-store 使用")
     args = parser.parse_args()
 
     if args.verbose:
@@ -322,7 +325,12 @@ def main() -> int | None:
             print_error("导入授权需要同时提供 --file 和 --api-profile")
             return 1
         try:
-            report = import_baidu_oauth_bundle(ROOT, args.file, args.api_profile)
+            report = import_baidu_oauth_bundle(
+                ROOT,
+                args.file,
+                args.api_profile,
+                sync_cloud_token_store=args.sync_cloud_token_store,
+            )
         except BaiduOAuthImportError as exc:
             print_error(f"百度 OAuth 授权导入失败：{exc}")
             return 1
@@ -331,6 +339,23 @@ def main() -> int | None:
             source_name = report.get("matched_source_id") or "单来源"
             print_quiet_line(f"自动匹配项目：{report['matched_project_id']}；来源：{source_name}")
         print_quiet_line(f"识别子账户 {report['sub_account_count']} 个；授权文件请立即人工删除")
+        if (report.get("cloud_sync") or {}).get("passed"):
+            print_success("百度 OAuth 授权已同步到云端集中 token 存储")
+        return 0
+    if args.mode == "sync-baidu-cloud-token-store":
+        profiles = [item.strip() for item in str(args.profiles or "").split(",") if item.strip()] or None
+        try:
+            report = sync_baidu_oauth_profiles_to_cloud(ROOT, profiles)
+        except BaiduOAuthImportError as exc:
+            print_error(f"百度 OAuth 云端同步失败：{exc}")
+            return 1
+        out = ROOT / "reports" / "baidu_cloud_token_sync_report.json"
+        out.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        if report.get("failed_count"):
+            print_error(f"百度 OAuth 云端同步存在失败：成功 {report['synced_count']}，失败 {report['failed_count']}，已输出 reports/baidu_cloud_token_sync_report.json")
+            return 1
+        print_success(f"百度 OAuth 云端同步完成：成功 {report['synced_count']}，跳过 {report['skipped_count']}")
+        print_quiet_line("报告：reports/baidu_cloud_token_sync_report.json")
         return 0
     if args.mode == "baidu-detect":
         report = baidu_detect(config=config, root=ROOT, logger=logger)

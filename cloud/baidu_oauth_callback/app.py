@@ -3,7 +3,7 @@ import os
 from urllib.parse import parse_qs
 from wsgiref.simple_server import make_server
 
-from index import main_handler, refresh_handler
+from index import main_handler, refresh_handler, store_profile_handler, token_handler
 
 
 STATUS_TEXT = {
@@ -27,7 +27,14 @@ def _query_from_environ(environ):
 def application(environ, start_response):
     path = environ.get("PATH_INFO", "/")
     method = str(environ.get("REQUEST_METHOD", "GET")).upper()
-    if path in ("/baidu/oauth/refresh", "/baidu/oauth/refresh/"):
+    if path in (
+        "/baidu/oauth/refresh",
+        "/baidu/oauth/refresh/",
+        "/baidu/oauth/token",
+        "/baidu/oauth/token/",
+        "/baidu/oauth/store-profile",
+        "/baidu/oauth/store-profile/",
+    ):
         if method != "POST":
             result = {
                 "statusCode": 405,
@@ -53,7 +60,12 @@ def application(environ, start_response):
                 }
             else:
                 body = environ.get("wsgi.input").read(content_length).decode("utf-8")
-                result = refresh_handler(
+                handler = refresh_handler
+                if path.rstrip("/") == "/baidu/oauth/token":
+                    handler = token_handler
+                elif path.rstrip("/") == "/baidu/oauth/store-profile":
+                    handler = store_profile_handler
+                result = handler(
                     {
                         "httpMethod": method,
                         "path": path,

@@ -128,6 +128,22 @@ def _post_refresh(
     return result
 
 
+def _signed_post(
+    url: str,
+    payload: dict[str, Any],
+    client_key: str,
+    current_time: datetime,
+    timeout_seconds: float,
+    transport: Callable[[str, dict[str, Any], dict[str, str], float], dict[str, Any]],
+) -> dict[str, Any]:
+    timestamp = str(int(current_time.timestamp()))
+    headers = {
+        REFRESH_TIMESTAMP_HEADER: timestamp,
+        REFRESH_SIGNATURE_HEADER: _signature(timestamp, payload, client_key),
+    }
+    return transport(url, payload, headers, timeout_seconds)
+
+
 @contextmanager
 def _exclusive_lock(
     path: Path,
@@ -233,6 +249,26 @@ def _validate_refresh_config(
         raise BaiduTokenError("configuration_error", "百度 API 刷新地址必须使用 HTTPS")
     if str(profile.get("app_id") or "") != str(gateway["app_id"]):
         raise BaiduTokenError("configuration_error", "百度 API 授权与刷新服务应用不匹配")
+    return profile, gateway
+
+
+def _validate_cloud_token_config(
+    secrets: dict[str, Any],
+    api_profile: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    profile = (secrets.get("baidu_api") or {}).get(api_profile)
+    gateway = secrets.get("baidu_api_gateway")
+    if not isinstance(profile, dict) or not isinstance(gateway, dict):
+        return None
+    token_url = str(gateway.get("token_url") or "").strip()
+    client_key = str(gateway.get("client_key") or "").strip()
+    app_id = str(gateway.get("app_id") or "").strip()
+    if not token_url:
+        return None
+    if not token_url.lower().startswith("https://") or not client_key or not app_id:
+        raise BaiduTokenError("configuration_error", "baidu cloud token config incomplete")
+    if str(profile.get("app_id") or "") != app_id:
+        raise BaiduTokenError("configuration_error", "baidu cloud token app mismatch")
     return profile, gateway
 
 
@@ -375,3 +411,86 @@ def ensure_valid_access_token(
             "refreshed",
             updated_profile.get("expires_time"),
         )
+
+
+def ensure_valid_access_token_cloud_first(
+    config: dict[str, Any],
+    root: Path,
+    api_profile: str,
+    now: datetime | None = None,
+    transport: Callable[[str, dict[str, Any], dict[str, str], int], dict[str, Any]] | None = None,
+    force_refresh: bool = False,
+    timeout_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[str, dict[str, Any]]:
+    profile_name = str(api_profile or "").strip()
+    if not profile_name:
+        raise BaiduTokenError("configuration_error", "current project missing baidu api profile")
+    root = Path(root)
+    credentials_path = Path(config.get("credentials_path", "secrets/secrets.json"))
+    if not credentials_path.is_absolute():
+        credentials_path = root / credentials_path
+    current_time = now or datetime.now().astimezone()
+    request_transport = transport or _post_refresh
+
+    secrets = _read_secrets(credentials_path)
+    cloud_config = _validate_cloud_token_config(secrets, profile_name)
+    if cloud_config is None:
+        return ensure_valid_access_token(
+            config,
+            root,
+            profile_name,
+            now=current_time,
+            transport=transport,
+            force_refresh=force_refresh,
+            timeout_seconds=timeout_seconds,
+            clock=clock,
+            sleep=sleep,
+        )
+    _profile, gateway = cloud_config
+    request_timeout = float(REFRESH_TIMEOUT_SECONDS)
+    if timeout_seconds is not None:
+        request_timeout = min(request_timeout, max(0.0, float(timeout_seconds)))
+    if request_timeout <= 0:
+        raise BaiduTokenError("token_refresh_error", "baidu cloud token budget exhausted")
+
+    payload = {"apiProfile": profile_name, "forceRefresh": bool(force_refresh)}
+    try:
+        response = _signed_post(
+            str(gateway["token_url"]),
+            payload,
+            str(gateway["client_key"]),
+            current_time,
+            request_timeout,
+            request_transport,
+        )
+    except BaiduTokenError:
+        raise
+    except Exception as exc:
+        raise BaiduTokenError("token_refresh_error", "baidu cloud token service unavailable") from exc
+
+    authorization = response.get("authorization") if isinstance(response, dict) else None
+    if response.get("status") != "ok" or not isinstance(authorization, dict):
+        if str(response.get("code") or "") in {
+            "reauthorization_required",
+            "token_profile_missing",
+            "cloud_token_refresh_failed",
+        }:
+            raise BaiduTokenError(
+                "reauthorization_required",
+                "baidu cloud authorization requires reauthorization",
+                reauthorization_required=True,
+            )
+        raise BaiduTokenError("token_refresh_error", "baidu cloud token request failed")
+    access_token = str(authorization.get("access_token") or "").strip()
+    if not access_token:
+        raise BaiduTokenError("token_refresh_error", "baidu cloud token response incomplete")
+    metadata = _safe_metadata(
+        profile_name,
+        str(authorization.get("token_refresh") or "cloud"),
+        authorization.get("expires_time"),
+    )
+    metadata["token_source"] = "cloud"
+    metadata["user_id"] = authorization.get("user_id")
+    return access_token, metadata
