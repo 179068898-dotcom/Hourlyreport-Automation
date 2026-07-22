@@ -1,83 +1,220 @@
 # AGENTS.md
 
-本文件给所有参与本仓库开发的 AI Agent / 自动化助手使用。无论使用 Codex、Claude、HERMES（夏思道）或其他平台，都必须优先遵守本文件。
+本文件面向所有参与本仓库开发、排障、维护、构建和发布的 AI Agent / 自动化助手 / 人工协作者。无论使用 Codex、Claude、HERMES（夏思道）或其他平台，都必须优先遵守本文件。
 
-## 基本约定
+## 项目概览
+
+- 产品名：`蚁之力 · 竞价数据自动化`
+- 平台：Windows 10/11 本地运行
+- 当前标准版本：`2026.7.22.107`
+- 主要用途：百度竞价日报/小时报自动化
+- 核心流程：百度数据读取、快商通人工导出文件解析、本地 Excel 安全写入、日志与报告输出
+- 用户入口：桌面 GUI、控制台菜单、HERMES 固定 BAT
+
+当前版本不做 QQ/微信自动发送，不操作快商通客户端，不做 OCR，不自动截图发送，不把业务数据交给外部 AI 分析服务。
+
+## 全局协作原则
 
 - 全程使用中文回复。
-- 当前产品名为“蚁之力 · 竞价数据自动化”，是 Windows 本地运行的百度竞价日报/小时报自动化工具。
-- 当前版本只做百度数据读取、快商通人工导出文件解析、本地 Excel 写入、日志和报告输出。
-- 当前版本不做 QQ、不做截图、不自动发送任何消息。
-- 不要向用户索要真实百度密码，不要输出、记录或提交 secrets。
+- 先读代码和配置，再动手改。
+- 尽量做最小范围修改，避免顺手重构。
+- 不要回滚用户或其他 Agent 的已有改动；无关脏文件只忽略。
+- 不要运行真实 `run` / `run-daily` 或写目标 Excel，除非用户明确要求。
+- 每次修改后说明改了哪些文件、改了什么、做了哪些验证。
+- 每次运行后说明日志、报告或测试结果。
+- 不向用户索要真实百度密码，不输出、不记录、不提交 secrets。
 
 ## 最高优先级硬规则
 
-1. 分阶段开发，不允许一次性做全流程。
+1. 分阶段开发，不允许一次性做全流程大改。
 2. Excel 写入前必须先备份原文件。
-3. 不允许重建 Excel 文件。
+3. 不允许重建目标 Excel。
 4. 不允许修改无关 sheet。
-5. 不允许修改“每日时段统计数据 / 汇总区域 / 截图区域 / 公式区域”。
-6. Excel 区域识别必须通过扫描表头、账户区域和字段名称完成，不允许写死固定坐标。
+5. 不允许修改公式区、汇总区、截图区、非目标区域和用户模板样式。
+6. Excel 区域识别必须扫描表头、账户区域和字段名称；禁止写死固定坐标。
 7. 遇到不确定的 Excel 结构，不要猜测写入，必须中断并输出诊断信息。
 8. 浏览器自动化不允许依赖绝对屏幕坐标，优先使用 URL、文本、表头、表格结构、选择器。
 9. 浏览器自动化必须优先使用 Google Chrome，不允许默认启动 Edge。
 10. Chrome 启动失败时必须输出明确错误并等待人工确认，不允许静默降级到 Edge。
-11. 每次修改后必须说明修改了哪些文件、修改了什么。
-12. 每次运行后必须输出日志和自检结果。
-13. 不要运行真实 `run` / `run-daily` 或写 Excel，除非用户明确要求。
-14. 不要回滚用户或其他 Agent 的已有改动；如果工作区已有无关改动，只忽略，不要清理。
+11. API 与浏览器均失败时必须停止，不得继续解析、合并或写 Excel。
+12. 发布包不得包含真实凭据、OAuth Token、日志、报告、备份、诊断包、浏览器数据或快商通导出数据。
+13. `.baidu-secrets`、`secrets/secrets.json` 和本机授权数据禁止提交 Git。
+14. 不要手工补 Excel 数字；失败后输出原因并让流程重跑。
 
-## 开发流程与 Superpowers 使用优先级
+## Superpowers 使用优先级
 
-- 默认采用轻量开发流程，不要把完整 Superpowers 流程机械套用到每次修改。
-- 用户在当前任务中明确要求“使用 Superpowers”或“不要使用 Superpowers”时，优先遵从；若与系统级强制规则或本文件安全硬规则冲突，则执行更高优先级规则。
-- 微小修改：文案、字号、间距、颜色、单个明确条件、局部配置或说明文档等低风险且易回退的改动，直接做最小修改，只检查 diff 并运行最相关测试。
-- 普通修改：先做简短分析，再实施并运行相关测试；不强制 brainstorming、书面实施计划、TDD 仪式或独立代码评审。
-- 高风险修改：启用完整 Superpowers，包括必要的诊断、需求澄清、计划、测试驱动、代码审查和完成前验证。
-- 无论代码量大小，涉及安全、权限、账号授权、secrets、数据迁移、支付、并发、破坏性文件操作、Excel 写入保护边界、在线更新或发布包覆盖规则时，都按高风险修改处理。
-- 新功能、复杂 Bug、跨模块重构、公共接口变化、架构调整或难以回退的行为变化，默认按高风险修改处理。
-- 轻量任务实施中一旦发现会影响多个模块、公共接口、用户数据、安全或发布兼容性，必须停止扩张修改范围，向用户说明并升级为完整流程。
-- 不使用完整 Superpowers 不等于降低质量：所有修改仍必须保持最小 diff、不回滚无关改动、查看最终差异、运行与风险匹配的验证，并明确说明修改文件和验证结果。
+默认采用轻量开发流程，不要机械套用完整 Superpowers。
 
-## 版本与在线更新规则
+- 微小修改：文案、字号、间距、单个明确条件、局部说明文档等低风险改动，直接做最小修改，查看 diff，必要时跑相关测试。
+- 普通修改：先做简短分析，再实施，并运行相关测试。
+- 高风险修改：启用完整 Superpowers，包括诊断、计划、测试驱动、代码审查和完成前验证。
 
-- `2026.7.22.107` 是当前标准安装器基线；新电脑只分发 `Hourlyreport_automation_setup_v2026.7.22.107.exe`，不再要求先解压旧版再覆盖更新包。
-- 在线版本号固定为 `发布年.月.日.永久累计序号`，累计序号从 `100` 起并跨日期永久递增，不得按天归零。
-- 示例：`2026.7.15.101` 的下一次发布若发生在 2026-07-16，版本号必须是 `2026.7.16.102`；同日再次发布则为 `2026.7.16.103`。
-- GitHub Release 仓库固定为 `179068898-dotcom/Hourlyreport-Automation`，tag 使用 `v<版本号>`，在线更新 ZIP 使用 `Hourlyreport_automation_v<版本号>.zip`。
-- 每次发布必须同时生成一份与版本号对应的中文更新说明，至少列出用户可感知改动、稳定性修复和兼容性注意事项，供 GitHub Release 正文直接复制使用。
-- 发布前必须用上一正式版本号验证最新 Release 元数据可被更新器识别；只看到 GitHub 页面存在资源不算完成验证。
-- 104 及后续版本只访问新仓库；现有 104/105 可以在线升级，但新部署统一从 106 标准安装器开始。
-- 在线更新包只能包含程序文件，不得覆盖 `configs/`、`secrets/`、日志、报告、备份、快商通导出目录或浏览器数据。
-- `.baidu-secrets` 是包含完整账号密码和 OAuth Token 的明文授权配置包，禁止提交 Git、写入日志或打入任何发布包。
-- 普通包、内部包和在线更新包都不得包含 `secrets/secrets.json`；真实凭据只能通过独立 `.baidu-secrets` 配置包传递。
-- 桌面主程序统一命名为 `hourlyreport_automation.exe`，不再生成旧中文 EXE 副本。
-- 完整安装器使用 Inno Setup 构建，必须允许选择安装目录、创建快捷方式，并在重复安装时保留已有 `configs/`、`secrets/`、日志、报告和备份。
+以下情况无论代码量大小，都按高风险处理：
 
-## 百度 API 开发边界
+- 安全、权限、账号授权、secrets
+- Excel 写入、备份、恢复、筛选/保护元数据
+- 在线更新、安装器、发布包覆盖规则
+- 百度 API 主通道、Token 自修复、浏览器降级
+- 并发、多项目执行、数据迁移、破坏性文件操作
+- 公共接口变化、跨模块重构、难以回退的行为变化
 
-- 服务商应用 `openBD` 已审核通过，九个项目、十一个授权已导入。正式发布前必须显式运行只读验收：`.venv\Scripts\python.exe main.py --mode test-baidu-api-readiness`。
-- 生产任务统一读取应用级 `baidu_data_source_preference`。缺失或无效时按 `api`；`A` / `api` 表示 API 优先，`B` / `browser` 表示强制浏览器。
-- `A` 模式默认先走 API；配置、授权、Token、网络或完整性失败时，先执行有限自修复，再自动整项目降级浏览器。`B` 模式不得发起 API 请求，是生产异常时的紧急回退入口。
-- 项目 JSON 中的 `api_profile` 只负责授权映射；旧 `data_source_mode`、`api_shadow`、`api_preferred` 仅保留给兼容测试和显式开发入口，不再决定普通生产任务的有效通道。
-- API 主通道先执行有限自修复：Token 最多刷新一次，网络错误最多额外重试两次，完整性错误最多额外读取一次，总预算 20 秒；仍失败时自动降级现有浏览器抓数。
-- API 与浏览器均失败时必须停止，不得继续解析、合并或写 Excel。
-- 百度应用 secretKey 只允许保存在腾讯云 SCF 环境变量；桌面端只保存独立 HMAC 客户端密钥和 OAuth Token，日志、报告不得包含任何令牌或密钥。
-- `test-baidu-api`、`test-baidu-api-readiness`、`simulate-baidu-api-hourly` 和 OAuth 导入属于显式开发入口，普通 GUI 不得自动调用。
-- `test-baidu-api-readiness` 只读百度数据，不读写 Excel，也不启动 Chrome。Token 过期时允许按生产自修复规则备份并原子更新 `secrets/secrets.json`；原文件及备份均为敏感文件，不得提交、打包或写入日志。
-- OAuth 自动匹配优先要求推广 ID 集合完全一致；超管包含停用户时，仅允许授权集合完整覆盖单一项目/来源的唯一超集匹配，并必须报告被忽略 ID。若同时覆盖多个候选，必须拒绝导入。
-- 沈阳牛、沈阳白必须两路 API 全部成功后才合并；任一路失败或合并校验异常时，丢弃本次 API 临时结果并整项目降级浏览器，禁止混合 API 与浏览器的部分数据。
-- 多项目并行尚未投入生产；不得因为全局 API 模式而提前启用多项目并行。
+不使用完整 Superpowers 不等于降低质量：仍必须保持最小 diff、不回滚无关改动、查看最终差异、运行与风险匹配的验证。
 
-## 固定运行入口
+## 版本与发布规则
 
-普通用户优先运行菜单：
+- 当前标准安装器基线：`2026.7.22.107`
+- 新电脑只分发：`Hourlyreport_automation_setup_v2026.7.22.107.exe`
+- 在线更新仓库：`179068898-dotcom/Hourlyreport-Automation`
+- tag 格式：`v<版本号>`
+- 在线更新包：`Hourlyreport_automation_v<版本号>.zip`
+- 完整安装器：`Hourlyreport_automation_setup_v<版本号>.exe`
+- 桌面主程序：`hourlyreport_automation.exe`
+
+版本号固定为：
+
+```text
+发布年.月.日.永久累计序号
+例如：2026.7.22.107
+```
+
+累计序号从 `100` 起，跨日期永久递增，不得按天归零。
+
+每次发布必须：
+
+1. 更新 `gui/version.py` 中的 `CURRENT_VERSION`。
+2. 重新构建 `hourlyreport_automation.exe`。
+3. 生成在线更新包和完整安装器。
+4. 生成 `docs/releases/<version>.md` 中文更新说明。
+5. 验证在线更新包不包含用户配置和运行数据。
+6. 用更新器逻辑验证最新 Release 元数据可被识别。
+7. 提交源码变更，再推送到 GitHub。
+
+在线更新包和普通发布包不得覆盖：
+
+- `configs/`
+- `secrets/`
+- `logs/`
+- `reports/`
+- `backups/`
+- `diagnostics/`
+- `kst_exports/`
+- `browser_profile/`
+
+完整安装器可包含默认项目配置，但不得包含真实 `secrets/secrets.json` 或 `.baidu-secrets`。
+
+## 百度 API 规则
+
+- 服务商应用：`openBD`
+- 当前为 9 个项目、11 个授权。
+- 生产任务统一读取应用级 `baidu_data_source_preference`。
+- 缺失或无效时按 `api`。
+- `A` / `api` 表示 API 优先。
+- `B` / `browser` 表示强制浏览器。
+
+API 主通道自修复预算：
+
+- Token 最多刷新一次。
+- 网络错误最多额外重试两次。
+- 完整性错误最多额外读取一次。
+- 总预算 20 秒。
+- 仍失败时整项目降级现有浏览器抓数。
+
+关键边界：
+
+- `B` 模式不得发起 API 请求。
+- API 与浏览器均失败时必须停止。
+- 百度应用 secretKey 只允许保存在腾讯云 SCF 环境变量。
+- 桌面端只保存独立 HMAC 客户端密钥和 OAuth Token。
+- 日志、报告、诊断包不得包含令牌或密钥。
+- `test-baidu-api-readiness` 只读百度数据，不写 Excel，不启动 Chrome。
+- 沈阳牛、沈阳白必须两路 API 全部成功后才合并；任一路失败则丢弃 API 临时结果并整项目降级浏览器。
+- 禁止混合 API 与浏览器的部分数据。
+- 多项目并行尚未投入生产，不得提前启用。
+
+## Chrome 与浏览器规则
+
+默认只连接 Chrome 调试端口：
+
+```text
+http://127.0.0.1:9222
+```
+
+优先使用：
+
+```python
+chromium.connect_over_cdp("http://127.0.0.1:9222")
+```
+
+约束：
+
+- 禁止默认启动 Edge。
+- 禁止在 `connect_existing` 模式下另起普通 Chrome。
+- 不要关闭老 Chrome 后新开普通 Chrome 来跑任务。
+- `A` 模式 preflight 不提前启动 Chrome；只有 API 实际降级时才延迟启动并检查 Chrome。
+- `B` 模式 preflight / run 继续检查 Chrome 9222，未启动时自动尝试启动项目专用调试 Chrome。
+- 自动切换百度账号、清 cookie、CAS 登录不应把 Chrome 抢到前台。
+- 只有验证码、安全校验、滑块或人工确认等确实需要人工介入的场景，才显示 Chrome。
+
+## 快商通数据规则
+
+当前不走快商通 API，不读网页，不读桌面控件，不做 OCR，不自动操作快商通软件。
+
+快商通数据只从用户手动导出的 Excel/CSV 文件读取，文件放入项目配置目录或 `kst_exports/`，也可通过 `--file` 指定。
+
+小时报字段口径：
+
+- `总对话`：有访客消息的有效行。
+- `有效对话`：`有效-三句话` + `转潜-有效`。
+- `一般有效`：`有效-一般`。
+- `有效转潜`：`转潜-有效`。
+- `总转潜`：包含 `转潜-`。
+
+日报字段口径：
+
+- `有效对话` 不包含 `有效-一般`。
+- `一般有效对话` 独立统计 `有效-一般`。
+- `转潜-有效` 同时计入 `有效对话` 和 `有效转潜`。
+
+字段识别必须通过表头，不允许写死列号。无法归属账户的行必须输出到报告，不得静默丢弃。
+
+## Excel 写入规则
+
+小时报常用流程：
 
 ```cmd
+.venv\Scripts\python.exe main.py --mode inspect-excel
+.venv\Scripts\python.exe main.py --mode fetch-baidu-auto --period 15点
+.venv\Scripts\python.exe main.py --mode parse-kst-export --period 15点
+.venv\Scripts\python.exe main.py --mode merge-data
+.venv\Scripts\python.exe main.py --mode write-excel --period 15点
+.venv\Scripts\python.exe main.py --mode run --period 15点 --yes
+```
+
+日报常用流程：
+
+```cmd
+.venv\Scripts\python.exe main.py --mode inspect-daily-excel
+.venv\Scripts\python.exe main.py --mode fetch-baidu-daily --date 2026-05-26
+.venv\Scripts\python.exe main.py --mode parse-kst-daily --date 2026-05-26
+.venv\Scripts\python.exe main.py --mode merge-daily --date 2026-05-26
+.venv\Scripts\python.exe main.py --mode write-daily --date 2026-05-26
+.venv\Scripts\python.exe main.py --mode run-daily --date 2026-05-26 --yes
+```
+
+`run-daily` 不传 `--date` 时默认处理昨天。
+
+日报抓取不能把“DOM 元素出现”当作“数据已加载完成”。必须等表格快照稳定，并做基础完整性校验。`networkidle` 超时后不得静默使用早期残值。
+
+## 运行入口
+
+普通用户优先运行 GUI 或菜单：
+
+```cmd
+hourlyreport_automation.exe
 .venv\Scripts\python.exe menu.py
 ```
 
-HERMES（夏思道）/ 自动代执行必须走 2026-07-10 更新的固定 BAT 入口，不要绕过 BAT 自己拼 `main.py`：
+HERMES / 夏思道 / 自动代执行必须走固定 BAT：
 
 ```cmd
 run_hermes_hourly.bat 11点
@@ -89,34 +226,34 @@ run_hermes_daily.bat 2026-07-09
 
 固定窗口规则：
 
-- 小时报窗口标题应为 `HERMES Hourly - fixed entry - 20260710`。
-- 日报窗口标题应为 `HERMES Daily - fixed entry - 20260710`。
+- 小时报窗口标题：`HERMES Hourly - fixed entry - 20260710`
+- 日报窗口标题：`HERMES Daily - fixed entry - 20260710`
 - BAT 会固定工作目录、UTF-8 环境和 `.venv` Python。
-- BAT 会先跑 preflight，失败则停止，不得继续写 Excel。
-- 不要自行拆分 `fetch/parse/merge/write` 去代替完整任务。
+- BAT 会先跑 preflight，失败则停止。
+- 不要自行拆分 `fetch/parse/merge/write` 代替完整任务。
 - 失败后不要手工补 Excel 数字。
 
 ## Preflight 规则
 
-HERMES 默认使用快速预检以减少多项目排队耗时：
+快速预检：
 
 ```cmd
 .venv\Scripts\python.exe main.py --mode preflight --quick
 .venv\Scripts\python.exe main.py --mode preflight --task daily --quick
 ```
 
-快速预检会检查：
+快速预检检查：
 
 - 项目根目录。
-- `A` / API 模式的 preflight 不提前启动 Chrome；只有 API 最终失败、实际降级时才延迟启动并检查项目专用调试 Chrome。
-- `B` / 强制浏览器模式继续检查 Chrome 9222；未启动时会自动尝试启动项目专用调试 Chrome。
 - 当前项目配置是否合法。
 - Excel 路径是否存在。
 - 快商通导出目录是否存在。
-- `secrets/secrets.json` 是否是合法 JSON。
-- 当前项目所需 `credential_profile` 是否存在，且 `username` / `password` 非空。
+- `secrets/secrets.json` 是否为合法 JSON。
+- 当前项目所需 `credential_profile` 是否存在且账号密码非空。
+- `B` 模式检查 Chrome 9222。
+- `A` 模式不提前启动 Chrome。
 
-快速预检会跳过耗时的 Excel sheet 结构扫描。完整预检仍保留：
+完整预检：
 
 ```cmd
 .venv\Scripts\python.exe main.py --mode preflight
@@ -125,108 +262,16 @@ HERMES 默认使用快速预检以减少多项目排队耗时：
 
 完整预检只用于新项目上线、Excel 模板变更、结构识别异常或排障。
 
-## Chrome 与登录态规则
+## 日志、报告与维护工具
 
-默认只连接 Chrome 调试端口：
-
-```cmd
-http://127.0.0.1:9222
-```
-
-优先使用：
-
-```python
-chromium.connect_over_cdp("http://127.0.0.1:9222")
-```
-
-禁止默认启动 Edge。`connect_existing` 模式下不要另起普通 Chrome。Chrome 连接失败时，提示人工先运行：
-
-```cmd
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --profile-directory="Default" https://cc.baidu.com/report
-```
-
-`start_chrome_debug.bat` 用于人工准备项目专用调试 Chrome。`B` 模式的 preflight / run 会先复用 9222；`A` 模式仅在实际降级时延迟执行同一套 Chrome 就绪逻辑。不要关闭老 Chrome。
-
-静默规则：
-
-- 自动切换百度账号、自动清 cookie、自动 CAS 登录不应把 Chrome 抢到前台。
-- 只有验证码、安全校验、滑块或人工确认等确实需要人工介入的场景，才显示 Chrome。
-- 旧百度账号退出失败时，程序应降级为清理当前上下文 cookie / storage / 本地登录状态，再跳 CAS 登录当前项目账号。
-- 不要手动删除 `browser_profile/chrome_debug` 作为常规处理；只有明确排障时才允许人工清理。
-
-## 百度日报数据稳定性
-
-日报抓取不能把“DOM 元素出现”当成“数据已加载完成”。
-
-`fetch-baidu-daily` 必须等表格快照稳定后才允许输出可写入数据：
-
-- 连续两次读取的账号指标签名一致。
-- 读取后做基础完整性校验。
-- 能识别“总计-N”行时，必须校验总计展现、点击、消费与账户求和一致。
-- `networkidle` 超时后不得静默使用早期残值。
-- 数据不稳定时必须中断，写入错误报告，不得继续写 Excel。
-
-遇到“百度日报表格数据未稳定”，正确处理方式是等待页面/API 加载稳定后整次重跑，不手工补 Excel。
-
-## 快商通数据规则
-
-当前不走 API，不读网页，不读桌面控件，不做 OCR，不自动操作快商通软件。
-
-快商通数据只从用户手动导出的 Excel/CSV 文件读取，文件放入 `kst_exports/`，或通过 `--file` 指定。
-
-小时报：
-
-```cmd
-.venv\Scripts\python.exe main.py --mode parse-kst-export --period 15点 --file "导出文件路径"
-.venv\Scripts\python.exe main.py --mode parse-kst-export --period 15点
-```
-
-日报：
-
-```cmd
-.venv\Scripts\python.exe main.py --mode parse-kst-daily --date 2026-05-26 --file "导出文件路径"
-```
-
-字段识别必须通过表头，不允许写死列号。无法归属账户的行必须输出到报告，不得静默丢弃。
-
-## 日报独立流程
-
-日报不得破坏小时报 `run` 流程。日报阶段如下：
-
-```cmd
-.venv\Scripts\python.exe main.py --mode inspect-daily-excel
-.venv\Scripts\python.exe main.py --mode fetch-baidu-daily --date 2026-05-26
-.venv\Scripts\python.exe main.py --mode parse-kst-daily --date 2026-05-26 --file "导出文件路径"
-.venv\Scripts\python.exe main.py --mode merge-daily --date 2026-05-26
-.venv\Scripts\python.exe main.py --mode write-daily --date 2026-05-26
-.venv\Scripts\python.exe main.py --mode run-daily --date 2026-05-26 --yes
-```
-
-`run-daily` 不传 `--date` 时默认处理昨天。
-
-## 小时报流程
-
-小时报常用阶段如下：
-
-```cmd
-.venv\Scripts\python.exe main.py --mode inspect-excel
-.venv\Scripts\python.exe main.py --mode fetch-baidu-auto --period 15点
-.venv\Scripts\python.exe main.py --mode parse-kst-export --period 15点 --file "导出文件路径"
-.venv\Scripts\python.exe main.py --mode merge-data
-.venv\Scripts\python.exe main.py --mode write-excel --period 15点
-.venv\Scripts\python.exe main.py --mode run --period 15点 --yes
-```
-
-## 输出与诊断
-
-所有阶段必须尽量输出：
+常规输出：
 
 - `logs/run.log`
+- `logs/gui_history.log`
 - `reports/*.json`
 - 必要时输出 `reports/sheet_text_dump.csv`
-- 必要时输出页面 debug HTML 或截图，但当前业务流程不做自动截图发送
 
-重要报告包括：
+重要报告：
 
 - `reports/preflight_report.json`
 - `reports/final_run_report.json`
@@ -236,25 +281,51 @@ chromium.connect_over_cdp("http://127.0.0.1:9222")
 - `reports/write_report.json`
 - `reports/daily_write_report.json`
 
+维护入口：
+
+```cmd
+.venv\Scripts\python.exe main.py --mode lock-dependencies
+.venv\Scripts\python.exe main.py --mode diagnostic-bundle
+.venv\Scripts\python.exe main.py --mode archive-logs
+```
+
+诊断包必须脱敏，并跳过 `secrets/`。日志归档默认只归档旧 `.log`，不改业务报告和 Excel。
+
 ## 测试与验证
 
-修改代码后优先运行相关测试；改动跨模块或入口时运行全量基础测试：
+修改代码后优先运行相关测试。改动跨模块、入口、安装器、发布包或 Excel 写入时，运行更宽的测试集。
+
+基础命令：
 
 ```cmd
 .venv\Scripts\python.exe -m pytest tests\test_basic.py
 ```
 
-文档或 BAT 入口变更也要确认对应测试断言。不得在未验证时声称已修复。
+不得在未验证时声称已修复。若测试失败，必须说明失败项是否与本次改动相关。
 
-## 文档同步
+## 文档同步规则
 
-修改固定入口、Chrome 策略、preflight、日报稳定性或 HERMES 执行方式时，至少同步检查这些文件：
+修改以下内容时，至少同步检查相关文档：
+
+- 固定入口
+- Chrome 策略
+- preflight
+- 日报稳定性
+- HERMES 执行方式
+- 百度 API 模式
+- 在线更新与发布规则
+- 安装器和依赖安装
+
+重点文件：
 
 - `AGENTS.md`
 - `CLAUDE.md`
+- `README.md`
+- `README_同事使用说明.md`
 - `xia_sidao使用说明.md`
 - `docs/hermes_hourly_sop.md`
 - `docs/hermes_daily_sop.md`
+- `docs/online_update_sop.md`
 - `run_hermes_hourly.bat`
 - `run_hermes_daily.bat`
 
@@ -263,13 +334,14 @@ chromium.connect_over_cdp("http://127.0.0.1:9222")
 ## 禁止行为清单
 
 - 禁止自动启动 Edge。
-- 禁止在 `connect_existing` 模式下另起普通 Chrome。
-- 禁止关闭老 Chrome 后新开普通 Chrome 来跑任务。
-- 禁止用绝对屏幕坐标操作百度页面。
+- 禁止关闭老 Chrome 后新开普通 Chrome 跑任务。
+- 禁止使用绝对屏幕坐标操作百度页面。
 - 禁止猜测 Excel 单元格坐标写入。
 - 禁止重建目标 Excel。
 - 禁止修改无关 sheet、公式区、汇总区、截图区。
 - 禁止跳过备份直接写 Excel。
 - 禁止失败后手工补 Excel 数字。
 - 禁止把真实账号密码写入文档、日志、测试或示例。
-- 禁止提交 `secrets/secrets.json`、本机账号密码、个人导出数据。
+- 禁止提交 `secrets/secrets.json`、`.baidu-secrets`、本机账号密码、个人导出数据。
+- 禁止把 `diagnostics/`、`logs/`、`reports/`、`backups/`、`kst_exports/` 打进在线更新包。
+- 禁止在 API 部分失败时混合浏览器部分数据继续写入。
