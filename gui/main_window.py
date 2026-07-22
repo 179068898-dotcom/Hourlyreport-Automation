@@ -2428,8 +2428,18 @@ class MainWindow(QMainWindow):
                 text-align: center;
             }}
             QPushButton#updateButton[updateState="available"],
-            QPushButton#updateButton[updateState="ready"] {{ padding: 0 8px; }}
+            QPushButton#updateButton[updateState="ready"],
+            QPushButton#updateButton[updateState="failed"] {{ padding: 0 8px; }}
+            QPushButton#updateButton[updateState="failed"] {{
+                background: #f1f6ff;
+                border-color: #b9d2f4;
+                color: #2f6fed;
+            }}
             QPushButton#updateButton:hover {{ background: #2689df; border-color: #237dc9; }}
+            QPushButton#updateButton[updateState="failed"]:hover {{
+                background: #e6f0ff;
+                border-color: #9fc3f4;
+            }}
             QPushButton#updateButton:pressed {{ background: #1f7dcc; }}
             QPushButton#updateButton:disabled {{ color: #ffffff; }}
             QPushButton#windowControlButton, QPushButton#windowCloseButton {{
@@ -2728,6 +2738,13 @@ class MainWindow(QMainWindow):
             self.update_button.setEnabled(True)
             self.update_button.setToolTip(tooltip)
             self.update_button.show()
+        elif state == "checking":
+            self.update_button.setIcon(make_line_icon("download", "#ffffff", 16))
+            self.update_button.setText("")
+            self.update_button.setFixedSize(22, 22)
+            self.update_button.setEnabled(False)
+            self.update_button.setToolTip(tooltip or "正在检查更新")
+            self.update_button.show()
         elif state == "downloading":
             text = "下载中" if progress is None or progress <= 0 else f"{progress}%"
             self.update_button.setText(text)
@@ -2752,12 +2769,20 @@ class MainWindow(QMainWindow):
             self.update_button.setEnabled(False)
             self.update_button.setToolTip(tooltip or "正在安装更新")
             self.update_button.show()
+        elif state == "failed":
+            self.update_button.setIcon(QIcon())
+            self.update_button.setText("重试")
+            width = self.update_button.fontMetrics().horizontalAdvance("重试") + 18
+            self.update_button.setFixedSize(width, 22)
+            self.update_button.setEnabled(True)
+            self.update_button.setToolTip(tooltip or "检查更新失败，点击重试")
+            self.update_button.show()
         else:
             self.update_button.hide()
         self._refresh_widget_style(self.update_button)
 
     def on_update_checking(self) -> None:
-        self._set_update_button_state("hidden")
+        self._set_update_button_state("checking", tooltip="正在检查更新")
 
     def on_update_available(self, update: ReleaseUpdate) -> None:
         self.pending_update_release = update
@@ -2777,6 +2802,9 @@ class MainWindow(QMainWindow):
             return
         if state == "ready":
             self.install_downloaded_update()
+            return
+        if state == "failed":
+            self.start_update_check()
 
     def on_update_download_progress(self, value: int) -> None:
         progress = max(0, min(100, int(value)))
@@ -2794,14 +2822,15 @@ class MainWindow(QMainWindow):
     def on_update_up_to_date(self) -> None:
         self._set_update_button_state("hidden")
 
-    def on_update_failed(self, _message: str) -> None:
+    def on_update_failed(self, message: str) -> None:
         if self.pending_update_release is not None and self.update_button.property("updateState") == "downloading":
             self._set_update_button_state(
                 "available",
                 tooltip="下载失败，点击重新下载",
             )
             return
-        self._set_update_button_state("hidden")
+        detail = f"检查更新失败，点击重试：{message}" if message else "检查更新失败，点击重试"
+        self._set_update_button_state("failed", tooltip=detail)
 
     def install_downloaded_update(self) -> None:
         if not self.pending_update_archive or not self.pending_update_version:

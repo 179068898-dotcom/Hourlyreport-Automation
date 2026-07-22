@@ -8907,7 +8907,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     release = build_release(
         root,
-        version="2026.7.19.106",
+        version="2026.7.22.107",
         online_update=True,
         output_dir=tmp_path,
     )
@@ -8916,9 +8916,9 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.19.106.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.22.107.zip"
     assert release.parent == tmp_path
-    assert release_name("2026.7.19.106", online_update=True) == release.name
+    assert release_name("2026.7.22.107", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -8928,6 +8928,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     assert not any(name.startswith("reports/") for name in names)
     assert not any(name.startswith("backups/") for name in names)
     assert not any(name.startswith("browser_profile/") for name in names)
+    assert not any(name.endswith(".lock") for name in names)
 
 
 def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
@@ -9064,6 +9065,7 @@ def test_internal_build_excludes_secrets_json():
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
     assert "secrets/secrets.json" not in names
+    assert not any(name.endswith(".lock") for name in names)
     assert "secrets/secrets.example.json" in names
 
 
@@ -10053,13 +10055,18 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert window.credentials_config_path() == Path(__file__).resolve().parents[1] / "secrets" / "secrets.json"
     assert window.update_button.isHidden()
     window.on_update_checking()
-    assert window.update_button.isHidden()
+    assert not window.update_button.isHidden()
+    assert window.update_button.property("updateState") == "checking"
+    window.on_update_failed("network unavailable")
+    assert not window.update_button.isHidden()
+    assert window.update_button.property("updateState") == "failed"
+    assert window.update_button.text() == "重试"
 
     from gui.update_manager import ReleaseUpdate
     update = ReleaseUpdate(
-        version="2026.7.19.107",
+        version="2026.7.22.108",
         download_url="https://example/update.zip",
-        asset_name="Hourlyreport_automation_v2026.7.19.107.zip",
+        asset_name="Hourlyreport_automation_v2026.7.22.108.zip",
         sha256="a" * 64,
         size=123,
     )
@@ -10086,11 +10093,11 @@ def test_desktop_gui_config_actions_live_in_title_menu(monkeypatch):
     assert download_calls == [update, update]
     window.on_update_download_progress(100)
     assert window.update_button.text() == "100%"
-    window.on_update_ready("2026.7.19.107", Path("update.zip"))
+    window.on_update_ready("2026.7.22.108", Path("update.zip"))
     assert window.update_button.property("updateState") == "ready"
     assert window.update_button.text() == "更新重启"
     assert window.update_button.icon().isNull()
-    assert "2026.7.19.107" in window.update_button.toolTip()
+    assert "2026.7.22.108" in window.update_button.toolTip()
     window.on_update_up_to_date()
     assert window.update_button.isHidden()
     window.close()
@@ -10982,12 +10989,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.19.107",
+        "tag_name": "v2026.7.22.108",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.19.107.zip",
+                "name": "Hourlyreport_automation_v2026.7.22.108.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11015,7 +11022,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.19.107"]
+    assert [item.version for item in available] == ["2026.7.22.108"]
     assert ready == []
 
 

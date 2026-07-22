@@ -14,7 +14,7 @@ DESKTOP_EXE = "hourlyreport_automation.exe"
 DESKTOP_BUILD_MANIFEST = "hourlyreport_automation.build.json"
 EXCLUDE_RUNTIME_DIRS = {"reports", "logs", "backups"}
 RUNTIME_KEEP_DIRS = {"kst_exports"}
-EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".spec", ".baidu-secrets", ".baidu-auth"}
+EXCLUDE_SUFFIXES = {".pyc", ".tmp", ".bak", ".lock", ".spec", ".baidu-secrets", ".baidu-auth"}
 EXCLUDE_FILES = {
     "config.json",
     "credentials.local.json",

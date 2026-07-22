@@ -105,7 +105,7 @@
 ## 百度 API 规则
 
 - 服务商应用：`openBD`
-- 当前为 9 个项目、11 个授权。
+- 当前为九个项目、十一个授权。
 - 生产任务统一读取应用级 `baidu_data_source_preference`。
 - 缺失或无效时按 `api`。
 - `A` / `api` 表示 API 优先。
@@ -126,7 +126,8 @@ API 主通道自修复预算：
 - 百度应用 secretKey 只允许保存在腾讯云 SCF 环境变量。
 - 桌面端只保存独立 HMAC 客户端密钥和 OAuth Token。
 - 日志、报告、诊断包不得包含令牌或密钥。
-- `test-baidu-api-readiness` 只读百度数据，不写 Excel，不启动 Chrome。
+- `test-baidu-api-readiness` 只读百度数据，不读写 Excel，不启动 Chrome。
+- Token 过期时可按生产规则备份并原子更新 `secrets/secrets.json`，原文件和备份均为敏感文件。
 - 沈阳牛、沈阳白必须两路 API 全部成功后才合并；任一路失败则丢弃 API 临时结果并整项目降级浏览器。
 - 禁止混合 API 与浏览器的部分数据。
 - 多项目并行尚未投入生产，不得提前启用。

@@ -107,7 +107,7 @@ logs/run.log
 | 当前项目不对 | 默认配置是昆明牛，切其他项目时未改配置 | `--project` 标志临时覆盖，或人工切项目后重跑 | 接到任务先确认当前项目，用 `--project` 不碰配置 |
 | 做完额外项目后忘了跑当前任务 | 切项目后注意力未回当前任务 | 以当前任务为准，做完一个项目回到用户要求 | 多项目任务做完后立刻回到用户当前要求，不凭记忆补流程 |
 | 绕过BAT自己拼main.py | 不知道BAT或为省事 | 交互式用 `--project` 直连main.py（API模式推荐）；自动执行必须走BAT | 区分：交互式→main.py+--project，自动执行→BAT |
-| 用了cronjob run代替BAT，导致多跑一轮 | 误用cronjob手动触发 | 日报/小时报固定走BAT或main.py直连，不用cronjob手动触发代替 | cronjob只用于定时任务，不用于手动触发 |
+| 用定时任务入口代替BAT，导致多跑一轮 | 误用非固定入口手动触发 | 日报/小时报固定走BAT或main.py直连，不用其他入口手动触发代替 | 定时入口只用于计划任务，不用于手动触发 |
 | BAT从bash直接跑报编码错 | bash解析bat语法导致乱码 | 用 venv python 直接跑 main.py，或 `cmd.exe /c` 包装 | 记住：bash不能直接跑.bat |
 | Chrome 9222 test-browser-connect误判 | 代理网络导致err_proxy_connection_failed假阴性 | 用 `curl -s http://localhost:9222/json/version` 验证，跳过test直接preflight | 确认方法：curl返回"Chrome/..."即正常，不要信test-browser-connect |
 | 预检包含Chrome导致15分钟延迟 | 旧版预检必须检查Chrome（浏览器模式） | API模式预检自动跳过Chrome检查，只有降级时才启动Chrome | 默认用API模式，无需单独检查Chrome |
