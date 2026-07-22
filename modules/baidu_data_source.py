@@ -141,7 +141,7 @@ def _api_attempts(
             last_category = _failure_category(exc)
             retry_limit = API_RETRY_LIMITS.get(last_category, 1)
             if attempts >= retry_limit or clock() >= deadline_at:
-                _log(logger, "warning", "百度 API 通道失败，准备切换浏览器：%s", last_category)
+                _log(logger, "warning", "百度 API 通道失败：%s", last_category)
                 return None, measured_attempts(), actions, last_category
             action = "network_retry" if last_category == "network_error" else "integrity_retry"
             actions.append(action)
@@ -271,6 +271,7 @@ def _collect_baidu_multi_source_api(
     clock: Callable[[], float],
     sleep: Callable[[float], None],
     commit_standard_report: bool,
+    commit_attempt_report: bool = True,
 ) -> tuple[dict[str, Any] | None, int, list[str], str | None]:
     sources = resolve_baidu_sources(config)
     started = clock()
@@ -290,6 +291,7 @@ def _collect_baidu_multi_source_api(
             "config": source_config,
             "root": root,
             "logger": logger,
+            "commit_attempt_report": commit_attempt_report,
         }
         if task == "daily":
             api_kwargs["target_date"] = target_date
@@ -378,6 +380,124 @@ def fetch_baidu_multi_source_api(
         clock=clock,
         sleep=sleep,
         commit_standard_report=True,
+    )
+
+
+def _fetch_baidu_api_only(
+    *,
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    api_fetcher: Callable[..., dict[str, Any]],
+    task: str,
+    period: str | None,
+    target_date: str | None,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> dict[str, Any]:
+    if len(resolve_baidu_sources(config)) > 1:
+        report, attempts, actions, failure = _collect_baidu_multi_source_api(
+            config=config,
+            root=root,
+            logger=logger,
+            api_fetcher=api_fetcher,
+            task=task,
+            period=period,
+            target_date=target_date,
+            clock=clock,
+            sleep=sleep,
+            commit_standard_report=True,
+            commit_attempt_report=False,
+        )
+    else:
+        api_kwargs: dict[str, Any] = {
+            "config": config,
+            "root": root,
+            "logger": logger,
+            "commit_attempt_report": False,
+        }
+        if task == "daily":
+            api_kwargs["target_date"] = target_date
+        else:
+            api_kwargs["period"] = period
+        report, attempts, actions, failure = _api_attempts(
+            api_fetcher=api_fetcher,
+            api_kwargs=api_kwargs,
+            commit_standard_report=True,
+            clock=clock,
+            sleep=sleep,
+            logger=logger,
+        )
+
+    if report is None:
+        return {
+            "project_id": config.get("project_id"),
+            "project_name": config.get("project_name"),
+            "date": target_date,
+            "period": None if task == "daily" else period,
+            "accounts": {},
+            "errors": [f"百度 API 读取失败：{failure or 'api_error'}"],
+            "data_source": "failed",
+            "api_attempts": attempts,
+            "self_heal_actions": list(actions),
+            "fallback_reason": failure or "api_error",
+        }
+
+    routed = _with_route_metadata(
+        report,
+        data_source="api",
+        api_attempts=attempts,
+        actions=actions,
+        fallback_reason=None,
+    )
+    _commit_routed_report(root, task, config, routed)
+    _log_actual_source(logger, "api")
+    return routed
+
+
+def fetch_baidu_api_only_hourly(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    period: str | None = None,
+    *,
+    api_fetcher: Callable[..., dict[str, Any]] = fetch_baidu_api_hourly,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    return _fetch_baidu_api_only(
+        config=config,
+        root=root,
+        logger=logger,
+        api_fetcher=api_fetcher,
+        task="hourly",
+        period=period,
+        target_date=None,
+        clock=clock,
+        sleep=sleep,
+    )
+
+
+def fetch_baidu_api_only_daily(
+    config: dict[str, Any],
+    root: Path,
+    logger,
+    target_date: str | None = None,
+    *,
+    api_fetcher: Callable[..., dict[str, Any]] = fetch_baidu_api_daily,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    return _fetch_baidu_api_only(
+        config=config,
+        root=root,
+        logger=logger,
+        api_fetcher=api_fetcher,
+        task="daily",
+        period=None,
+        target_date=target_date,
+        clock=clock,
+        sleep=sleep,
     )
 
 

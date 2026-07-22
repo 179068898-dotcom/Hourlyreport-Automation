@@ -4826,7 +4826,8 @@ def test_documentation_api_mode_requires_readiness_and_atomic_dual_source_fallba
     assert "两路 API 全部成功后才合并" in combined
     assert "任一路失败" in combined and "整项目降级" in combined
     assert "禁止混合 API 与浏览器的部分数据" in combined
-    assert "多项目并行尚未投入生产" in combined
+    assert "多项目模式只允许 API 并行准备" in combined
+    assert "Excel 写入必须按选择顺序串行" in combined
 
     stale_phrases = [
         "其余十个超管仍需逐个授权",
@@ -8907,7 +8908,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     release = build_release(
         root,
-        version="2026.7.22.108",
+        version="2026.7.22.109",
         online_update=True,
         output_dir=tmp_path,
     )
@@ -8916,9 +8917,9 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.22.108.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.22.109.zip"
     assert release.parent == tmp_path
-    assert release_name("2026.7.22.108", online_update=True) == release.name
+    assert release_name("2026.7.22.109", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -8946,6 +8947,12 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
         "secrets_file": "secrets/secrets.json",
     }), encoding="utf-8")
     (tmp_path / "configs" / "projects" / "demo.json").write_text('{"project_id":"demo"}', encoding="utf-8")
+    (tmp_path / "configs" / "current_project.json").write_text(
+        '{"current_project_id":"private-local-state"}', encoding="utf-8"
+    )
+    (tmp_path / "configs" / "multi_project_selection.json").write_text(
+        '{"project_ids":["private-local-state"]}', encoding="utf-8"
+    )
     (tmp_path / "secrets").mkdir()
     (tmp_path / "secrets" / "secrets.example.json").write_text('{"baidu":{}}', encoding="utf-8")
     (tmp_path / "secrets" / "secrets.json").write_text('{"secret":"must-not-ship"}', encoding="utf-8")
@@ -8967,6 +8974,8 @@ def test_first_install_build_is_standalone_but_excludes_real_secrets(tmp_path):
     assert "hourlyreport_automation.exe" in names
     assert "configs/app_config.json" in names
     assert "configs/projects/demo.json" in names
+    assert "configs/current_project.json" not in names
+    assert "configs/multi_project_selection.json" not in names
     assert "secrets/secrets.example.json" in names
     assert "secrets/secrets.json" not in names
     assert "install_env.bat" in names
@@ -10581,8 +10590,21 @@ def test_desktop_gui_defaults_to_kunming_project(monkeypatch):
 def test_desktop_gui_project_selector_supports_multi_project_ui_without_running(monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QApplication, QMessageBox
-    from gui.main_window import MainWindow
+    from PySide6.QtWidgets import QApplication
+    import gui.main_window as main_window
+
+    saved_selections = []
+    monkeypatch.setattr(
+        main_window,
+        "save_multi_project_selection",
+        lambda _root, project_ids: saved_selections.append(list(project_ids)),
+    )
+    monkeypatch.setattr(
+        main_window,
+        "load_multi_project_selection",
+        lambda _root, available_ids, fallback_id="": [fallback_id or list(available_ids)[0]],
+    )
+    MainWindow = main_window.MainWindow
 
     app = QApplication.instance() or QApplication([])
     window = MainWindow(Path(__file__).resolve().parents[1])
@@ -10600,11 +10622,10 @@ def test_desktop_gui_project_selector_supports_multi_project_ui_without_running(
     window.multi_project_button.click()
     app.processEvents()
     assert window.project_combo.is_multi_mode()
-    assert window.multi_preview_hint.isVisible()
-    assert window.project_mode_segment.indicator.property("preview") is True
-    assert "#fff1f2" in window.styleSheet()
+    assert not window.multi_preview_hint.isVisible()
+    assert window.project_mode_segment.indicator.property("preview") is False
     assert window.project_combo.selected_project_ids() == ["kunming_niu"]
-    assert "至少选择 2 个" in window.progress_text.text()
+    assert "已按顺序选择 1 个项目" in window.progress_text.text()
     assert window.project_combo.summary_label.isHidden()
 
     second_project = next(project.project_id for project in window.projects if project.project_id != "kunming_niu")
@@ -10638,6 +10659,7 @@ def test_desktop_gui_project_selector_supports_multi_project_ui_without_running(
     assert popup.confirm_button.isEnabled()
     popup._confirm()
     assert window.project_combo.selected_project_ids() == ["kunming_niu", second_project]
+    assert saved_selections[-1] == ["kunming_niu", second_project]
     assert window.project_combo.border_overlay.geometry() == window.project_combo.rect()
     assert window.project_combo.border_overlay.isVisible()
     chip_names = [
@@ -10662,24 +10684,122 @@ def test_desktop_gui_project_selector_supports_multi_project_ui_without_running(
     )
     popup._clear_selection()
     assert popup._selected_ids == ["kunming_niu"]
-    assert not popup.confirm_button.isEnabled()
+    assert popup.confirm_button.isEnabled()
     extra_projects = [project.project_id for project in window.projects if project.project_id != "kunming_niu"][:3]
     for project_id in extra_projects:
         popup._toggle_project(project_id, True)
     assert len(popup._selected_ids) == 3
     assert popup.summary.text() == "最多选择 3 个项目"
 
-    messages = []
     starts = []
-    monkeypatch.setattr(QMessageBox, "information", lambda *args: messages.append(args[2]))
     monkeypatch.setattr(window, "start_command", lambda *args: starts.append(args))
     window.run_hourly()
-    assert messages and "不会只执行" in messages[0]
-    assert starts == []
+    assert len(starts) == 1
+    assert "run-multi" in starts[0][1]
+    assert starts[0][1][starts[0][1].index("--projects") + 1] == f"kunming_niu,{second_project}"
 
     selector_bottom = window.project_combo.mapTo(window.task_control_card, window.project_combo.rect().bottomLeft()).y()
     assert selector_bottom < window.task_control_card.height()
     popup.hide()
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_multi_project_completion_opens_successful_excels_in_order(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    first = tmp_path / "first.xlsx"
+    second = tmp_path / "second.xlsx"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    reports = tmp_path / "reports"
+    reports.mkdir(exist_ok=True)
+    (reports / "multi_project_run_report.json").write_text(
+        json.dumps(
+            {
+                "summary": {"success": 3, "failed": 1, "stopped": 0},
+                "projects": [
+                    {"project_id": "a", "status": "success", "excel_path": str(first)},
+                    {"project_id": "b", "status": "failed", "excel_path": str(tmp_path / "failed.xlsx")},
+                    {"project_id": "c", "status": "success", "excel_path": str(first)},
+                    {"project_id": "d", "status": "success", "excel_path": str(second)},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    opened = []
+    window.open_path = lambda path: opened.append(path)
+    window.desktop_pet.announce = lambda *_args, **_kwargs: None
+    window.current_task_type = "hourly"
+    window._multi_task_active = True
+
+    window.finish_multi_project_task()
+
+    assert opened == [first, second]
+    assert window.status_title.text() == "多项目任务部分完成"
+    assert window.current_status_badge.text() == "部分完成"
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_multi_project_stop_remains_available_during_excel_stage(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    window._multi_task_active = True
+    window._task_active = True
+    window.current_task_type = "hourly"
+    window.runner.is_running = lambda: True
+    window._task_stop_locked = False
+    window._task_stop_requested = False
+
+    window.mark_stage("excel")
+    window.set_stop_controls()
+
+    assert window.hourly_stop_button.isEnabled()
+    assert window._task_stop_locked is False
+    window._quitting = True
+    window.close()
+
+
+def test_desktop_gui_multi_project_uses_queue_stop_gate_not_single_pipeline_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    from gui.main_window import MainWindow
+    from modules.multi_project_stop import MULTI_QUEUE_STOP_GATE_ENV
+    from modules.task_stop_gate import STOP_GATE_ENV, read_task_stop_decision
+
+    _write_minimal_gui_project(tmp_path)
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(tmp_path)
+    starts = []
+    window.runner.start = lambda command, root, extra_env=None: starts.append((command, root, extra_env))
+    window.runner.is_running = lambda: True
+    window.project_mode_segment.set_multi_mode(True, animate=False)
+
+    window.run_hourly()
+    environment = starts[-1][2]
+    gate = Path(environment[MULTI_QUEUE_STOP_GATE_ENV])
+
+    assert STOP_GATE_ENV not in environment
+    window.on_task_started()
+    window.mark_stage("excel")
+    assert window.hourly_stop_button.isEnabled()
+    window.stop_current_task()
+    assert read_task_stop_decision(gate) == "cancel"
+    assert "当前项目完成后停止队列" in window.progress_text.text()
     window._quitting = True
     window.close()
 
@@ -11130,7 +11250,7 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.22.108"
+    assert CURRENT_VERSION == "2026.7.22.109"
     assert GITHUB_LATEST_RELEASE_URL == (
         "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
     )
@@ -11138,13 +11258,13 @@ def test_online_update_selects_newer_github_release_asset():
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.22.109",
+        "tag_name": "v2026.7.22.110",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.22.109.zip",
+                "name": "Hourlyreport_automation_v2026.7.22.110.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11155,10 +11275,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.22.109"
+    assert update.version == "2026.7.22.110"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.22.109") is None
+    assert select_release_update(payload, "2026.7.22.110") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -11251,12 +11371,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.22.109",
+        "tag_name": "v2026.7.22.110",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.22.109.zip",
+                "name": "Hourlyreport_automation_v2026.7.22.110.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11284,7 +11404,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.22.109"]
+    assert [item.version for item in available] == ["2026.7.22.110"]
     assert ready == []
 
 
@@ -11397,6 +11517,49 @@ def test_update_helper_uses_progress_dialog_and_canonical_exe():
     assert "rollback" in UPDATE_HELPER_SOURCE
 
 
+def test_frozen_update_launcher_copies_itself_and_waits_for_ready_marker(tmp_path, monkeypatch):
+    import sys
+    import zipfile
+
+    from gui import update_manager
+
+    root = tmp_path / "app"
+    storage = tmp_path / "updates"
+    root.mkdir()
+    storage.mkdir()
+    launcher = root / update_manager.APP_EXE_NAME
+    launcher.write_bytes(b"frozen-exe")
+    archive = tmp_path / "update.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr(update_manager.APP_EXE_NAME, b"new-exe")
+        package.writestr("main.py", "print('new')")
+        package.writestr("gui/version.py", "CURRENT_VERSION='2026.7.23.109'")
+
+    commands = []
+
+    class Process:
+        def poll(self):
+            return None
+
+    def fake_popen(command, **_kwargs):
+        commands.append(command)
+        Path(command[-1]).write_text("ready\n", encoding="utf-8")
+        return Process()
+
+    monkeypatch.setattr(update_manager, "_update_storage_dir", lambda: storage)
+    monkeypatch.setattr(update_manager.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(launcher))
+
+    update_manager.launch_update_helper(root, archive, "2026.7.23.109", launcher)
+
+    helper = storage / "hourlyreport_update_helper.exe"
+    assert helper.read_bytes() == b"frozen-exe"
+    assert commands[0][0] == str(helper)
+    assert commands[0][1] == "--apply-update-helper"
+    assert not (root / ".venv" / "Scripts" / "pythonw.exe").exists()
+
+
 def _load_update_helper_namespace(root: Path, monkeypatch):
     import sys
 
@@ -11407,6 +11570,62 @@ def _load_update_helper_namespace(root: Path, monkeypatch):
     exec(compile(UPDATE_HELPER_SOURCE, "apply_update.py", "exec"), namespace)
     namespace["wait_for_exit"] = lambda _pid: None
     return namespace
+
+
+def test_update_helper_retries_short_lived_restart_and_logs_success(tmp_path, monkeypatch):
+    root = tmp_path / "app"
+    storage = tmp_path / "storage"
+    root.mkdir()
+    storage.mkdir()
+    launcher = root / "hourlyreport_automation.exe"
+    launcher.write_bytes(b"exe")
+    namespace = _load_update_helper_namespace(root, monkeypatch)
+    processes = [
+        type("Process", (), {"pid": 101, "poll": lambda self: 1})(),
+        type("Process", (), {"pid": 202, "poll": lambda self: None})(),
+    ]
+    calls = []
+
+    def fake_popen(command, **kwargs):
+        calls.append((command, kwargs))
+        return processes.pop(0)
+
+    monkeypatch.setattr(namespace["subprocess"], "Popen", fake_popen)
+    monkeypatch.setattr(namespace["time"], "sleep", lambda _seconds: None)
+
+    pid = namespace["restart_updated_app"](launcher, root, storage, attempts=2, settle_seconds=0)
+
+    assert pid == 202
+    assert len(calls) == 2
+    log = (storage / "update_apply.log").read_text(encoding="utf-8")
+    assert "restart=ok" in log
+    assert "pid=202" in log
+
+
+def test_gui_app_dispatches_frozen_update_helper_before_normal_startup(monkeypatch, tmp_path):
+    import gui.app as desktop_app
+
+    calls = []
+    monkeypatch.setattr(
+        desktop_app,
+        "run_update_helper_from_argv",
+        lambda argv: calls.append(list(argv)) or 7,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        desktop_app,
+        "resolve_app_root",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("normal startup must not run")),
+    )
+    argv = [
+        "hourlyreport_update_helper.exe",
+        "--apply-update-helper",
+        str(tmp_path),
+    ]
+    monkeypatch.setattr(desktop_app.sys, "argv", argv)
+
+    assert desktop_app.main() == 7
+    assert calls == [argv]
 
 
 def test_update_helper_applies_program_files_without_touching_config(tmp_path, monkeypatch):

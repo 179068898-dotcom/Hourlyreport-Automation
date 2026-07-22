@@ -13,6 +13,7 @@ from gui.branding import PRODUCT_DISPLAY_NAME
 from gui.font_manager import load_private_ui_font
 from gui.main_window import create_window
 from gui.single_instance import SingleInstanceGuard
+from gui.update_manager import UPDATE_HELPER_MODE, run_update_helper_from_argv
 
 
 GUI_SCALE_FACTOR = "1.0"
@@ -84,6 +85,8 @@ def configure_windows_app_identity(root: str | Path) -> bool:
 
 
 def main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == UPDATE_HELPER_MODE:
+        return run_update_helper_from_argv(list(sys.argv))
     try:
         root = resolve_app_root()
     except IncompleteInstallationError as exc:

@@ -39,6 +39,8 @@ from modules.project_config import build_runtime_config_from_project, get_curren
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
 from modules.run_pipeline import run_daily_pipeline, run_half_auto_pipeline
+from modules.multi_project_runner import run_multi_project_pipeline
+from modules.multi_project_stop import resolve_multi_queue_stop_gate
 from modules.task_stop_gate import pipeline_exit_code
 
 ROOT = Path(__file__).resolve().parent
@@ -80,6 +82,7 @@ def main() -> int | None:
         "write-daily",
         "run",
         "run-daily",
+        "run-multi",
         "list-projects",
         "show-project",
         "validate-project",
@@ -96,6 +99,7 @@ def main() -> int | None:
     parser.add_argument("--yes", action="store_true", help="run 模式跳过运行前确认清单")
     parser.add_argument("--date", default=None, help="日报日期，例如：2026-05-07；不传则默认昨天")
     parser.add_argument("--project", default=None, help="临时指定项目 ID，不修改 configs/app_config.json")
+    parser.add_argument("--projects", default=None, help="多项目模式使用的逗号分隔项目 ID，按输入顺序执行")
     parser.add_argument("--task", choices=["hourly", "daily"], default="hourly", help="preflight 任务类型，默认检查小时报")
     parser.add_argument("--quick", action="store_true", help="preflight 快速模式：跳过耗时的 Excel sheet 结构扫描")
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
@@ -464,6 +468,32 @@ def main() -> int | None:
         else:
             print_success(f"日报 Excel 写入完成并复核通过：reports/daily_write_report.json")
         return
+    if args.mode == "run-multi":
+        project_ids = [item.strip() for item in str(args.projects or "").split(",") if item.strip()]
+        try:
+            report = run_multi_project_pipeline(
+                root=ROOT,
+                logger=logger,
+                project_ids=project_ids,
+                task=args.task,
+                period=args.period,
+                target_date=args.date,
+                stop_gate=resolve_multi_queue_stop_gate(ROOT),
+            )
+        except Exception as exc:
+            print_final_failure(f"多项目任务无法启动：{exc}")
+            return 1
+        summary = report.get("summary") or {}
+        message = (
+            f"多项目任务结束：成功 {summary.get('success', 0)}，"
+            f"失败 {summary.get('failed', 0)}，停止 {summary.get('stopped', 0)}；"
+            "报告：reports/multi_project_run_report.json"
+        )
+        if summary.get("failed") or summary.get("stopped"):
+            print_warning(message)
+        else:
+            print_final_success(message)
+        return 0
     if args.mode == "run":
         credential_report = check_baidu_credentials(ROOT, config)
         if not credential_report.get("passed"):

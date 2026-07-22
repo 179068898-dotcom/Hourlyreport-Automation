@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import sys
@@ -50,7 +51,13 @@ from PySide6.QtWidgets import (
 
 from gui.branding import PRODUCT_DISPLAY_NAME, WINDOW_HEADER_TITLE
 from gui.clawd import ClawdAnimator
-from gui.command_builder import build_daily_command, build_hourly_command, build_preflight_command
+from gui.command_builder import (
+    build_daily_command,
+    build_hourly_command,
+    build_multi_daily_command,
+    build_multi_hourly_command,
+    build_preflight_command,
+)
 from gui.desktop_pet import ClawdDesktopPet
 from gui.excel_open_settings import load_auto_open_excel, save_auto_open_excel
 from gui.environment_check import (
@@ -79,6 +86,8 @@ from modules.task_stop_gate import (
     clear_task_stop_gate,
     request_task_stop,
 )
+from modules.multi_project_stop import MULTI_QUEUE_STOP_GATE_ENV
+from modules.multi_project_selection import load_multi_project_selection, save_multi_project_selection
 from gui.update_manager import APP_EXE_NAME, GitHubUpdateManager, ReleaseUpdate, launch_update_helper
 from gui.version import CURRENT_VERSION
 from modules.project_config import (
@@ -924,7 +933,7 @@ class SlidingProjectModeControl(QFrame):
         self._multi = value
         self.single_button.setChecked(not value)
         self.multi_button.setChecked(value)
-        self.indicator.setProperty("preview", value)
+        self.indicator.setProperty("preview", False)
         self.indicator.style().unpolish(self.indicator)
         self.indicator.style().polish(self.indicator)
         self.animation.stop()
@@ -1147,11 +1156,8 @@ class ProjectSelectionPopup(QFrame):
             button.setChecked(project_id in self._selected_ids)
             button.blockSignals(False)
         count = len(self._selected_ids)
-        if self._multi and count < 2:
-            self.summary.setText(f"已选择 {count} 个，至少选择 2 个")
-        else:
-            self.summary.setText(f"已选择 {count} 个项目")
-        self.confirm_button.setEnabled(count >= (2 if self._multi else 1))
+        self.summary.setText(f"已选择 {count} 个项目")
+        self.confirm_button.setEnabled(count >= 1)
 
     def _clear_selection(self) -> None:
         self._selected_ids = [self._default_project_id] if self._default_project_id else []
@@ -1321,6 +1327,26 @@ class ProjectSelectorButton(QPushButton):
 
     def selected_project_ids(self) -> list[str]:
         return list(self._selected_ids)
+
+    def set_selected_project_ids(self, selected_ids: list[str], emit: bool = False) -> None:
+        valid_ids = {data for _, data in self._items}
+        selected: list[str] = []
+        for project_id in selected_ids:
+            value = str(project_id or "")
+            if value in valid_ids and value not in selected:
+                selected.append(value)
+            if len(selected) == 3:
+                break
+        if not self._multi and selected:
+            selected = selected[:1]
+        self._selected_ids = selected
+        if selected:
+            index = self.findData(selected[0])
+            if index >= 0:
+                self._current_index = index
+        self._refresh_display()
+        if emit:
+            self.selection_changed.emit(self.selected_project_ids())
 
     def show_project_popup(self) -> None:
         default_project_id = self._default_project_id or str(self.currentData() or "")
@@ -1549,6 +1575,8 @@ class MainWindow(QMainWindow):
         self._task_stop_locked = False
         self._task_active = False
         self._task_stop_gate: Path | None = None
+        self._multi_task_active = False
+        self._saved_multi_project_ids: list[str] = []
         self._quit_after_task = False
         self._pet_scale_save_timer = QTimer(self)
         self._pet_scale_save_timer.setSingleShot(True)
@@ -3110,12 +3138,23 @@ class MainWindow(QMainWindow):
             self.project_combo.set_default_project_id("kunming_niu")
         elif self.project_combo.currentData():
             self.project_combo.set_default_project_id(str(self.project_combo.currentData()))
+        available_ids = [project.project_id for project in self.projects]
+        fallback_id = str(self.project_combo.currentData() or "")
+        self._saved_multi_project_ids = load_multi_project_selection(
+            self.root,
+            available_ids=available_ids,
+            fallback_id=fallback_id,
+        )
         has_projects = bool(self.projects)
         self.set_task_buttons_enabled(has_projects)
 
     def set_project_selection_mode(self, multi: bool) -> None:
+        if not multi and self.project_combo.is_multi_mode():
+            self._saved_multi_project_ids = self.project_combo.selected_project_ids()
         self.project_combo.set_multi_mode(multi)
-        self.multi_preview_hint.setVisible(multi)
+        self.multi_preview_hint.hide()
+        if multi:
+            self.project_combo.set_selected_project_ids(self._saved_multi_project_ids, emit=False)
         self.on_project_selection_changed(self.project_combo.selected_project_ids())
 
     def on_project_selection_changed(self, selected_ids: list[str]) -> None:
@@ -3123,21 +3162,16 @@ class MainWindow(QMainWindow):
             self.progress_text.setText("环境已就绪，请选择任务开始执行")
             return
         count = len(selected_ids)
-        if count < 2:
-            self.progress_text.setText(f"多项目模式：已选择 {count} 个，请至少选择 2 个")
-        else:
-            self.progress_text.setText(f"多项目模式：已按顺序选择 {count} 个项目")
+        self._saved_multi_project_ids = list(selected_ids)
+        if selected_ids:
+            try:
+                save_multi_project_selection(self.root, selected_ids)
+            except OSError as exc:
+                self.append_log(f"[失败] 多项目选择保存失败：{exc}")
+        self.progress_text.setText(f"多项目模式：已按顺序选择 {count} 个项目")
 
     def multi_project_execution_pending(self) -> bool:
-        if not self.project_combo.is_multi_mode():
-            return False
-        QMessageBox.information(
-            self,
-            "多项目执行尚未接入",
-            "多项目选择界面已经就绪，任务队列执行代码将在后续接入。\n\n"
-            "当前请切换到“单项目”后运行，程序不会只执行所选项目中的第一个。",
-        )
-        return True
+        return False
 
     def _sync_pet_menu(self) -> None:
         self.clawd_pet_action.setChecked(self.pet_mode == PET_CLAWD)
@@ -3273,6 +3307,10 @@ class MainWindow(QMainWindow):
         if " (" in text:
             return text.split(" (", 1)[0]
         return text
+
+    def selected_project_names(self) -> list[str]:
+        names = {project.project_id: project.project_name for project in self.projects}
+        return [names[project_id] for project_id in self.project_combo.selected_project_ids() if project_id in names]
 
     def selected_project_config_path(self) -> Path:
         project_id = self.selected_project_id()
@@ -3663,25 +3701,39 @@ class MainWindow(QMainWindow):
         self.desktop_pet.announce("环境安装无法启动，请打开控制台查看。", "failed", 12000, "failed")
 
     def run_hourly(self) -> None:
-        if self.multi_project_execution_pending():
-            return
-        project_id = self.selected_project_id()
         period = self.selected_period()
-        command = build_hourly_command(self.root, period, project_id=project_id)
-        self.set_current_flow("hourly", "运行小时报", f"{self.selected_project_name()} {period}", "运行中")
+        selected_ids = self.project_combo.selected_project_ids()
+        self._multi_task_active = self.project_combo.is_multi_mode()
+        if self._multi_task_active:
+            command = build_multi_hourly_command(self.root, period, selected_ids)
+            names = self.selected_project_names()
+            subtitle = f"{'、'.join(names)} {period}"
+        else:
+            command = build_hourly_command(self.root, period, project_id=self.selected_project_id())
+            subtitle = f"{self.selected_project_name()} {period}"
+        self.set_current_flow("hourly", "运行小时报", subtitle, "运行中")
+        if self._multi_task_active:
+            self.current_project_name = "、".join(self.selected_project_names())
         self._last_pet_event = ""
-        self.desktop_pet.announce(f"{self.selected_project_name()} {period}小时报正在做。", "running")
+        self.desktop_pet.announce(f"{subtitle}小时报正在做。", "running")
         self.start_command("小时报执行中", command)
 
     def run_daily(self) -> None:
-        if self.multi_project_execution_pending():
-            return
-        project_id = self.selected_project_id()
         date_text = self.selected_daily_date()
-        command = build_daily_command(self.root, date_text, project_id=project_id)
-        self.set_current_flow("daily", "运行日报", f"{self.selected_project_name()} {self.display_daily_date()}", "运行中")
+        selected_ids = self.project_combo.selected_project_ids()
+        self._multi_task_active = self.project_combo.is_multi_mode()
+        if self._multi_task_active:
+            command = build_multi_daily_command(self.root, date_text, selected_ids)
+            names = self.selected_project_names()
+            subtitle = f"{'、'.join(names)} {self.display_daily_date()}"
+        else:
+            command = build_daily_command(self.root, date_text, project_id=self.selected_project_id())
+            subtitle = f"{self.selected_project_name()} {self.display_daily_date()}"
+        self.set_current_flow("daily", "运行日报", subtitle, "运行中")
+        if self._multi_task_active:
+            self.current_project_name = "、".join(self.selected_project_names())
         self._last_pet_event = ""
-        self.desktop_pet.announce(f"{self.selected_project_name()} {self.display_daily_date()}日报正在做。", "running")
+        self.desktop_pet.announce(f"{subtitle}日报正在做。", "running")
         self.start_command("日报执行中", command)
 
     def run_environment_preflight(self, allow_multi: bool = False) -> None:
@@ -3739,9 +3791,11 @@ class MainWindow(QMainWindow):
         self.progress_text.setText("任务已创建，等待启动...")
         self.reset_log_display()
         if self.current_task_type in {"hourly", "daily"}:
-            self._task_stop_gate = self.root / "reports" / f".gui_task_stop_{os.getpid()}.gate"
+            gate_name = ".gui_multi_queue_stop" if self._multi_task_active else ".gui_task_stop"
+            self._task_stop_gate = self.root / "reports" / f"{gate_name}_{os.getpid()}.gate"
             clear_task_stop_gate(self._task_stop_gate)
-            self.runner.start(command, self.root, {STOP_GATE_ENV: str(self._task_stop_gate)})
+            gate_env = MULTI_QUEUE_STOP_GATE_ENV if self._multi_task_active else STOP_GATE_ENV
+            self.runner.start(command, self.root, {gate_env: str(self._task_stop_gate)})
         else:
             self.runner.start(command, self.root)
 
@@ -3764,9 +3818,14 @@ class MainWindow(QMainWindow):
         self._task_stop_requested = True
         self._task_stop_locked = True
         self.set_stop_controls()
-        self.progress_text.setText("已提交停止请求，正在等待安全节点...")
-        self.append_log("[停止] 已收到停止请求，将在 Excel 写入前的安全节点停止。")
-        self.desktop_pet.announce("收到停止请求，我会在写入 Excel 前安全停下。", "review", 4200)
+        if self._multi_task_active:
+            self.progress_text.setText("已提交停止请求，当前项目完成后停止队列...")
+            self.append_log("[停止] 当前项目将继续完成，不再开始下一个排队项目。")
+            self.desktop_pet.announce("收到停止请求，当前项目做完就不再开始下一项。", "review", 5200)
+        else:
+            self.progress_text.setText("已提交停止请求，正在等待安全节点...")
+            self.append_log("[停止] 已收到停止请求，将在 Excel 写入前的安全节点停止。")
+            self.desktop_pet.announce("收到停止请求，我会在写入 Excel 前安全停下。", "review", 4200)
 
     def on_task_output(self, text: str) -> None:
         self.append_log(text)
@@ -3799,6 +3858,15 @@ class MainWindow(QMainWindow):
         self.set_data_source_control_locked(False)
         self._task_stop_locked = True
         self.set_stop_controls()
+        if exit_code == 0 and self._multi_task_active:
+            self.finish_multi_project_task()
+            self._task_stop_requested = False
+            self._task_stop_locked = False
+            self._multi_task_active = False
+            self.set_stop_controls()
+            self._refresh_widget_style(self.current_status_badge)
+            self._schedule_deferred_exit()
+            return
         if stopped_by_user:
             self.status_title.setText("任务已停止")
             self.status_detail.setText("任务已在 Excel 写入前停止。")
@@ -3812,6 +3880,7 @@ class MainWindow(QMainWindow):
             self.desktop_pet.announce("任务已经停下来了。", "idle", 5200)
             self._task_stop_requested = False
             self._task_stop_locked = False
+            self._multi_task_active = False
             self.set_stop_controls()
             self._refresh_widget_style(self.current_status_badge)
             self._schedule_deferred_exit()
@@ -3867,6 +3936,7 @@ class MainWindow(QMainWindow):
             )
         self._task_stop_requested = False
         self._task_stop_locked = False
+        self._multi_task_active = False
         self.set_stop_controls()
         self._refresh_widget_style(self.current_status_badge)
         self._schedule_deferred_exit()
@@ -3877,6 +3947,7 @@ class MainWindow(QMainWindow):
         self._task_active = False
         self._task_stop_requested = False
         self._task_stop_locked = False
+        self._multi_task_active = False
         self.desktop_pet.set_busy(False)
         self.set_task_buttons_enabled(True)
         self.set_stop_controls()
@@ -3926,7 +3997,7 @@ class MainWindow(QMainWindow):
         keys = [item[0] for item in STAGES]
         if stage not in keys:
             return
-        if stage == "excel":
+        if stage == "excel" and not self._multi_task_active:
             self._task_stop_locked = True
             self.set_stop_controls()
         index = keys.index(stage)
@@ -4025,6 +4096,88 @@ class MainWindow(QMainWindow):
             return
         self.open_path(excel_path)
         self.append_log(f"已打开当前项目 Excel：{excel_path}")
+
+    def load_multi_project_report(self) -> dict:
+        path = self.root / "reports" / "multi_project_run_report.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError) as exc:
+            self.append_log(f"[失败] 多项目汇总报告读取失败：{exc}")
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def open_multi_project_excels(self, report: dict | None = None) -> list[Path]:
+        payload = report or self.load_multi_project_report()
+        opened: list[Path] = []
+        seen: set[str] = set()
+        for item in payload.get("projects") or []:
+            if not isinstance(item, dict) or item.get("status") != "success":
+                continue
+            value = str(item.get("excel_path") or "").strip()
+            if not value:
+                continue
+            path = Path(value)
+            if not path.is_absolute():
+                path = self.root / path
+            key = os.path.normcase(os.path.abspath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            if not path.exists():
+                self.append_log(f"任务完成，但 Excel 文件不存在：{path}")
+                continue
+            self.open_path(path)
+            self.append_log(f"已打开项目 Excel：{path}")
+            opened.append(path)
+        return opened
+
+    def finish_multi_project_task(self) -> None:
+        report = self.load_multi_project_report()
+        summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+        success = int(summary.get("success") or 0)
+        failed = int(summary.get("failed") or 0)
+        stopped = int(summary.get("stopped") or 0)
+        if not report:
+            failed = max(failed, 1)
+
+        if failed == 0 and stopped == 0:
+            title = "多项目任务完成"
+            badge = "已完成"
+            badge_status = "done"
+            detail = f"成功完成 {success} 个项目。"
+            pet_mode = "jumping"
+        elif success > 0:
+            title = "多项目任务部分完成"
+            badge = "部分完成"
+            badge_status = "stopped" if stopped and not failed else "failed"
+            detail = f"成功 {success}，失败 {failed}，停止 {stopped}。"
+            pet_mode = "review"
+        else:
+            title = "多项目任务未完成"
+            badge = "已停止" if stopped and not failed else "失败"
+            badge_status = "stopped" if stopped and not failed else "failed"
+            detail = f"成功 {success}，失败 {failed}，停止 {stopped}。"
+            pet_mode = "failed" if failed else "idle"
+
+        if success:
+            self.mark_stage("done")
+        self.status_title.setText(title)
+        self.status_detail.setText(detail)
+        self.progress_text.setText(detail)
+        self.current_status_badge.setText(badge)
+        self.current_status_badge.setProperty("status", badge_status)
+        self.flow_idle_icon.hide()
+        self.flow_crab.set_mode("idle")
+        self.flow_crab.show()
+        self.append_log(f"[多项目][汇总] {detail}")
+
+        opened = []
+        if success and self.should_open_excel_after_task(self.current_task_type):
+            opened = self.open_multi_project_excels(report)
+        elif success:
+            self.append_log("[通知] 多项目任务已结束，按 Excel 自动模式设置跳过打开文件。")
+        open_text = f"，已打开 {len(opened)} 个 Excel" if opened else ""
+        self.desktop_pet.announce(f"多项目任务结束：{detail}{open_text}", pet_mode, 8500)
 
     def _refresh_widget_style(self, widget: QWidget) -> None:
         widget.style().unpolish(widget)

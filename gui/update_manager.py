@@ -4,10 +4,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -31,6 +33,8 @@ UPDATE_ASSET_PATTERN = re.compile(r"^Hourlyreport_automation_v(\d+(?:\.\d+){3})\
 RELEASE_TAG_PATTERN = re.compile(r"^(?:Hourlyreport_)?v(\d+(?:\.\d+){3})$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 APP_EXE_NAME = "hourlyreport_automation.exe"
+UPDATE_HELPER_EXE_NAME = "hourlyreport_update_helper.exe"
+UPDATE_HELPER_MODE = "--apply-update-helper"
 PROTECTED_UPDATE_ROOTS = {
     "configs",
     "secrets",
@@ -165,6 +169,23 @@ def _trusted_https_context() -> ssl.SSLContext:
     if certifi is not None:
         return ssl.create_default_context(cafile=certifi.where())
     return ssl.create_default_context()
+
+
+def _wait_for_update_helper_ready(
+    process: subprocess.Popen,
+    ready_marker: Path,
+    timeout_seconds: float = 8.0,
+) -> None:
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    while time.monotonic() < deadline:
+        if ready_marker.is_file():
+            ready_marker.unlink(missing_ok=True)
+            return
+        return_code = process.poll()
+        if return_code is not None:
+            raise RuntimeError(f"更新程序启动失败，退出码 {return_code}")
+        time.sleep(0.05)
+    raise TimeoutError("更新程序启动超时，主程序保持运行")
 
 
 class GitHubUpdateManager(QObject):
@@ -389,6 +410,52 @@ def rollback(root: Path, backup: Path, created: set[Path], backed_up: set[Path])
         raise RuntimeError("；".join(errors))
 
 
+def append_update_log(storage: Path, text: str) -> None:
+    storage.mkdir(parents=True, exist_ok=True)
+    with (storage / "update_apply.log").open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(text.rstrip("\n") + "\n")
+
+
+def restart_updated_app(
+    launcher: Path,
+    root: Path,
+    storage: Path,
+    attempts: int = 3,
+    settle_seconds: float = 2.0,
+) -> int:
+    if not launcher.is_file():
+        raise FileNotFoundError(f"找不到更新后的主程序：{launcher}")
+    flags = 0
+    if os.name == "nt":
+        flags = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    failures: list[str] = []
+    for attempt in range(1, max(1, int(attempts)) + 1):
+        try:
+            process = subprocess.Popen(
+                [str(launcher)],
+                cwd=str(root),
+                close_fds=True,
+                creationflags=flags,
+            )
+            time.sleep(max(0.0, float(settle_seconds)))
+            return_code = process.poll()
+            if return_code is None:
+                append_update_log(storage, f"restart=ok pid={process.pid} attempt={attempt}")
+                return int(process.pid)
+            failures.append(f"第 {attempt} 次启动后立即退出，退出码 {return_code}")
+        except Exception as exc:
+            failures.append(f"第 {attempt} 次启动失败：{exc}")
+        if attempt < attempts:
+            time.sleep(0.8)
+    message = "；".join(failures) or "新版主程序未能启动"
+    append_update_log(storage, f"restart=failed {message}")
+    raise RuntimeError(message)
+
+
 def apply_update(
     root: Path,
     package: Path,
@@ -447,6 +514,7 @@ def run_update_install_dialog(
     version: str,
     pid: int,
     storage: Path,
+    ready_marker: Path | None = None,
 ) -> int:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     dialog = UpdateInstallDialog(version)
@@ -458,17 +526,33 @@ def run_update_install_dialog(
         if ok:
             dialog.set_progress(100, "更新完成，正在重启…")
             QApplication.processEvents()
-            subprocess.Popen([launcher], cwd=str(root))
+            try:
+                restart_updated_app(Path(launcher), root, storage)
+            except Exception as exc:
+                result["ok"] = False
+                dialog.hide()
+                QMessageBox.critical(
+                    None,
+                    "更新完成但重启失败",
+                    f"程序文件已经更新，但新版未能自动启动。\n\n"
+                    f"请手动打开：{launcher}\n\n失败原因：{exc}",
+                )
         else:
             dialog.hide()
             QMessageBox.critical(None, "更新失败", f"程序已尝试恢复原版本。\n\n失败原因：{message}")
             if launcher and Path(launcher).is_file():
-                subprocess.Popen([launcher], cwd=str(root))
+                try:
+                    restart_updated_app(Path(launcher), root, storage)
+                except Exception as exc:
+                    append_update_log(storage, f"rollback_restart=failed {exc}")
         app.quit()
 
     signals.progress.connect(dialog.set_progress)
     signals.completed.connect(finished)
     dialog.show()
+    if ready_marker is not None:
+        ready_marker.parent.mkdir(parents=True, exist_ok=True)
+        ready_marker.write_text("ready\n", encoding="utf-8")
 
     def worker() -> None:
         ok, message, launcher = apply_update(root, package, version, pid, storage, signals)
@@ -485,12 +569,30 @@ def main() -> int:
     version = sys.argv[3]
     pid = int(sys.argv[5])
     storage = Path(sys.argv[6]).resolve()
-    return run_update_install_dialog(root, package, version, pid, storage)
+    ready_marker = Path(sys.argv[7]).resolve() if len(sys.argv) > 7 else None
+    return run_update_install_dialog(root, package, version, pid, storage, ready_marker)
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
 '''
+
+
+def run_update_helper_from_argv(argv: list[str]) -> int:
+    if len(argv) < 9 or argv[1] != UPDATE_HELPER_MODE:
+        raise ValueError("更新程序启动参数不完整")
+    root = Path(argv[2]).resolve()
+    package = Path(argv[3]).resolve()
+    version = str(argv[4])
+    pid = int(argv[6])
+    storage = Path(argv[7]).resolve()
+    ready_marker = Path(argv[8]).resolve()
+    namespace: dict[str, Any] = {
+        "__name__": "hourlyreport_embedded_update_helper",
+        "__file__": "apply_update.py",
+    }
+    exec(compile(UPDATE_HELPER_SOURCE, "apply_update.py", "exec"), namespace)
+    return int(namespace["run_update_install_dialog"](root, package, version, pid, storage, ready_marker))
 
 
 def launch_update_helper(
@@ -502,11 +604,6 @@ def launch_update_helper(
     root_path = Path(root).resolve()
     archive = Path(archive_path).resolve()
     validate_update_archive(archive)
-    pythonw = root_path / ".venv" / "Scripts" / "pythonw.exe"
-    if not pythonw.exists():
-        pythonw = root_path / ".venv" / "Scripts" / "python.exe"
-    if not pythonw.exists():
-        raise FileNotFoundError("缺少项目 Python，无法启动更新程序")
 
     launcher = root_path / APP_EXE_NAME
     if not launcher.exists() and launcher_path:
@@ -515,17 +612,34 @@ def launch_update_helper(
         raise FileNotFoundError("找不到更新后需要重启的 GUI 程序")
 
     storage = _update_storage_dir()
-    helper = storage / "apply_update.py"
-    helper.write_text(UPDATE_HELPER_SOURCE, encoding="utf-8")
-    flags = 0
-    if os.name == "nt":
-        flags = (
-            getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-            | getattr(subprocess, "DETACHED_PROCESS", 0)
-        )
-    subprocess.Popen(
-        [
+    ready_marker = storage / f"update_helper_ready_{os.getpid()}.flag"
+    ready_marker.unlink(missing_ok=True)
+    if getattr(sys, "frozen", False) and Path(sys.executable).is_file():
+        helper = storage / UPDATE_HELPER_EXE_NAME
+        staged_helper = helper.with_suffix(".exe.new")
+        staged_helper.unlink(missing_ok=True)
+        shutil.copy2(Path(sys.executable), staged_helper)
+        os.replace(staged_helper, helper)
+        command = [
+            str(helper),
+            UPDATE_HELPER_MODE,
+            str(root_path),
+            str(archive),
+            version,
+            str(launcher),
+            str(os.getpid()),
+            str(storage),
+            str(ready_marker),
+        ]
+    else:
+        pythonw = root_path / ".venv" / "Scripts" / "pythonw.exe"
+        if not pythonw.exists():
+            pythonw = root_path / ".venv" / "Scripts" / "python.exe"
+        if not pythonw.exists():
+            raise FileNotFoundError("缺少项目 Python，无法启动更新程序")
+        helper = storage / "apply_update.py"
+        helper.write_text(UPDATE_HELPER_SOURCE, encoding="utf-8")
+        command = [
             str(pythonw),
             str(helper),
             str(root_path),
@@ -534,8 +648,22 @@ def launch_update_helper(
             str(launcher),
             str(os.getpid()),
             str(storage),
-        ],
+            str(ready_marker),
+        ]
+    flags = 0
+    if os.name == "nt":
+        flags = (
+            getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    process = subprocess.Popen(
+        command,
         cwd=str(root_path),
         close_fds=True,
         creationflags=flags,
     )
+    try:
+        _wait_for_update_helper_ready(process, ready_marker)
+    finally:
+        ready_marker.unlink(missing_ok=True)

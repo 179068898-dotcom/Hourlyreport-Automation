@@ -101,6 +101,11 @@ def should_include_file(
     first_install: bool = False,
 ) -> bool:
     parts = path.parts
+    if first_install and path.as_posix() in {
+        "configs/current_project.json",
+        "configs/multi_project_selection.json",
+    }:
+        return False
     if online_update and parts and parts[0] in {
         "configs", "secrets", "reports", "logs", "backups", "browser_profile", "kst_exports", "samples", ".venv", "runtime"
     }:

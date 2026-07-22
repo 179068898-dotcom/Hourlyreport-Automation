@@ -201,7 +201,10 @@ def merge_daily_files(
     target_date: str | None = None,
 ) -> dict[str, Any]:
     reports_dir = root / "reports"
-    baidu_path = reports_dir / "baidu_daily_data.json"
+    baidu_path = _resolve_report_path(
+        root,
+        config.get("baidu", {}).get("daily_output_path", "reports/baidu_daily_data.json"),
+    )
     kst_path = reports_dir / "kst_daily_data.json"
     merged_path = reports_dir / "merged_daily_data.json"
     validate_path = reports_dir / "daily_merge_validate_report.json"
