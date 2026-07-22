@@ -34,6 +34,7 @@ from modules.excel_writer import mock_write_excel, write_merged_daily_data, writ
 from modules.kst_export_parser import find_latest_kst_export, parse_kst_export_file, write_empty_kst_export_result
 from modules.kst_daily_parser import parse_kst_daily_file, write_empty_kst_daily_result
 from modules.logger import setup_logger
+from modules.maintenance import archive_logs, build_runtime_dependency_lock, create_diagnostic_bundle
 from modules.project_config import build_runtime_config_from_project, get_current_project, list_projects, load_project_config, validate_project_config
 from modules.preflight import check_baidu_credentials, print_credential_report, print_preflight_report, run_preflight
 from modules.validators import get_required_accounts
@@ -84,6 +85,9 @@ def main() -> int | None:
         "doctor",
         "preflight",
         "test-baidu-credentials",
+        "lock-dependencies",
+        "diagnostic-bundle",
+        "archive-logs",
     ])
     parser.add_argument("--period", default=None, help="时段，例如：11点 / 15点 / 18点")
     parser.add_argument("--file", default=None, help="快商通人工导出的 Excel/CSV 文件路径")
@@ -96,12 +100,28 @@ def main() -> int | None:
     parser.add_argument("--config", default=str(ROOT / "config.json"), help="配置文件路径")
     parser.add_argument("--verbose", action="store_true", help="启用详细终端输出")
     parser.add_argument("--api-profile", default=None, help="百度 OAuth 授权导入使用的本地 API profile，推荐填 auto")
+    parser.add_argument("--older-than-days", type=int, default=14, help="archive-logs 归档多少天以前的 .log 文件")
     args = parser.parse_args()
 
     if args.verbose:
         set_verbose(True)
 
     logger = setup_logger(ROOT / "logs" / "run.log")
+    if args.mode == "lock-dependencies":
+        lock_path = build_runtime_dependency_lock(ROOT)
+        print_success(f"依赖锁定文件已生成：{lock_path}")
+        return 0
+    if args.mode == "diagnostic-bundle":
+        bundle_path = create_diagnostic_bundle(ROOT)
+        print_success(f"脱敏诊断包已生成：{bundle_path}")
+        return 0
+    if args.mode == "archive-logs":
+        result = archive_logs(ROOT, older_than_days=args.older_than_days)
+        if result["archived_count"]:
+            print_success(f"日志归档完成：{result['archive_path']}；数量：{result['archived_count']}")
+        else:
+            print_quiet_line("没有需要归档的旧日志。")
+        return 0
     if args.mode == "test-baidu-api-readiness":
         report = run_baidu_api_readiness(
             ROOT,

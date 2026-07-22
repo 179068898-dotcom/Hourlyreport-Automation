@@ -38,12 +38,13 @@ def default_daily_kst_date(today: date | None = None) -> str:
 
 def classify_daily_dialog_by_tags(tags: str | None) -> dict[str, int]:
     text = normalize_for_display(tags)
-    is_valid = any(key in text for key in ["转潜-有效", "有效-一般", "有效-三句"])
+    is_valid = any(key in text for key in ["转潜-有效", "有效-三句"])
+    is_general = "有效-一般" in text
     return {
         "总对话": 1,
         "有效对话": 1 if is_valid else 0,
-        "无效对话": 0 if is_valid else 1,
-        "一般有效对话": 1 if "有效-一般" in text else 0,
+        "无效对话": 0 if is_valid or is_general else 1,
+        "一般有效对话": 1 if is_general else 0,
         "有效转潜": 1 if "转潜-有效" in text else 0,
         "总转潜": 1 if "转潜-" in text else 0,
     }
@@ -165,12 +166,15 @@ def _validate_daily_accounts(accounts: dict[str, dict[str, int]], expected_accou
         total = row.get("总对话", 0)
         valid = row.get("有效对话", 0)
         invalid = row.get("无效对话", 0)
+        general_valid = row.get("一般有效对话", 0)
         valid_qian = row.get("有效转潜", 0)
         total_qian = row.get("总转潜", 0)
         if valid > total:
             errors.append(f"账户 {account} 有效对话大于总对话")
-        if invalid != total - valid:
-            errors.append(f"账户 {account} 无效对话不等于总对话减有效对话")
+        if valid + general_valid + invalid < total:
+            errors.append(f"账户 {account} 有效、一般与无效对话未覆盖总对话")
+        if max(valid, general_valid) + invalid > total:
+            errors.append(f"账户 {account} 无效对话与有效或一般对话存在重复")
         if valid_qian > valid:
             errors.append(f"账户 {account} 有效转潜大于有效对话")
         if total_qian > total:

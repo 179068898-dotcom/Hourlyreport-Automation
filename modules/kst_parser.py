@@ -8,7 +8,7 @@ from modules.validators import get_required_accounts, validate_kst_report
 from modules.project_config import load_default_runtime_config
 
 
-KST_METRICS = ["总对话", "有效", "有效转潜", "总转潜"]
+KST_METRICS = ["总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
 ACCOUNT_KEYS = ["账户", "推广账户", "来源账户", "项目", "来源", "账户名称"]
 REMARK_KEYS = ["备注说明", "备注", "说明"]
 TAG_KEYS = ["名片标签", "标签", "客户标签", "访客标签"]
@@ -40,10 +40,12 @@ def extract_promotion_id(value: Any) -> str | None:
 
 def classify_dialog_by_tags(tags: str | None) -> dict[str, int]:
     text = normalize_for_display(tags)
+    is_valid_lead = "转潜-有效" in text
     return {
         "总对话": 1,
-        "有效": 1 if any(key in text for key in ["转潜-有效", "有效-一般", "有效-三句"]) else 0,
-        "有效转潜": 1 if "转潜-有效" in text else 0,
+        "有效对话": 1 if is_valid_lead or "有效-三句" in text else 0,
+        "一般有效": 1 if "有效-一般" in text else 0,
+        "有效转潜": 1 if is_valid_lead else 0,
         "总转潜": 1 if "转潜-" in text else 0,
     }
 

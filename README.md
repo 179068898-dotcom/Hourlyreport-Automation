@@ -71,7 +71,7 @@
 
 - **预检系统**：快速预检（秒级）用于排队任务，完整预检用于新项目上线
 - **任务状态追踪**：日报/小时报是否已跑的持久化状态
-- **环境自包含**：`install_env.bat` 自动下载 Python、校验 SHA-256、创建 venv
+- **环境自包含**：`install_env.bat` 自动下载隔离的 Python NuGet 运行时、校验 SHA-256、创建 venv，不依赖或修改系统 Python
 - **多项目管理**：CRUD + 校验的配置系统，单实例切换 9 个项目
 
 ---
@@ -150,7 +150,7 @@ Hourlyreport_automation_setup_v2026.7.19.106.exe
 git clone <repo-url>
 cd hourly_report_bot
 
-:: 2. 安装运行环境（自动下载项目专用 Python 3.11 64-bit，校验 SHA-256）
+:: 2. 安装运行环境（自动下载隔离的项目专用 Python 3.14.5 64-bit，校验 SHA-256）
 install_env.bat
 
 :: 3. 补充开发依赖

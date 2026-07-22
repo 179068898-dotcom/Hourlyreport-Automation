@@ -5,7 +5,7 @@ from typing import Any
 
 REQUIRED_ACCOUNTS: list[str] = []
 REQUIRED_BAIDU_FIELDS = ["日期", "时段", "展现", "点击", "消费"]
-KST_FIELDS = ["总对话", "有效", "有效转潜", "总转潜"]
+KST_FIELDS = ["总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
 DAILY_KST_FIELDS = ["总对话", "有效对话", "无效对话", "一般有效对话", "有效转潜", "总转潜"]
 BAIDU_ACCOUNT_FIELDS = ["展现", "点击", "消费"]
 MERGED_FIELDS = BAIDU_ACCOUNT_FIELDS + KST_FIELDS
@@ -76,13 +76,16 @@ def validate_excel_report_v2(report: dict[str, Any], required_accounts: list[str
 def validate_kst_counts(row: dict[str, int]) -> list[str]:
     errors = []
     total = int(row.get("总对话", 0) or 0)
-    valid = int(row.get("有效", 0) or 0)
+    valid = int(row.get("有效对话", 0) or 0)
+    general_valid = int(row.get("一般有效", 0) or 0)
     valid_lead = int(row.get("有效转潜", 0) or 0)
     total_lead = int(row.get("总转潜", 0) or 0)
     if valid > total:
-        errors.append("有效不能大于总对话")
+        errors.append("有效对话不能大于总对话")
+    if general_valid > total:
+        errors.append("一般有效不能大于总对话")
     if valid_lead > valid:
-        errors.append("有效转潜不能大于有效")
+        errors.append("有效转潜不能大于有效对话")
     if total_lead > total:
         errors.append("总转潜不能大于总对话")
     return errors
@@ -231,10 +234,10 @@ def validate_daily_kst_counts(row: dict[str, int]) -> list[str]:
     total_lead = int(row.get("总转潜", 0) or 0)
     if valid > total:
         errors.append("有效对话不能大于总对话")
-    if invalid != total - valid:
-        errors.append("无效对话不等于总对话减有效对话")
-    if general_valid > valid:
-        errors.append("一般有效对话不能大于有效对话")
+    if valid + general_valid + invalid < total:
+        errors.append("有效、一般与无效对话未覆盖总对话")
+    if max(valid, general_valid) + invalid > total:
+        errors.append("无效对话与有效或一般对话存在重复")
     if valid_lead > valid:
         errors.append("有效转潜不能大于有效对话")
     if total_lead > total:

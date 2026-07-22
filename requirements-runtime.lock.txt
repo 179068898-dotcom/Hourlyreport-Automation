@@ -1,0 +1,22 @@
+# Runtime dependency lock for 蚁之力 · 竞价数据自动化
+# Generated from the local verified environment. Keep requirements-runtime.txt as the readable source list.
+colorama==0.4.6
+greenlet==3.5.0
+linkify-it-py==2.1.0
+markdown-it-py==4.2.0
+mdit-py-plugins==0.6.1
+mdurl==0.1.2
+numpy==2.4.4
+openpyxl==3.1.5
+packaging==26.2
+pandas==3.0.2
+playwright==1.59.0
+pyee==13.0.1
+pygments==2.20.0
+python-dateutil==2.9.0.post0
+rich==15.0.0
+six==1.17.0
+typing-extensions==4.15.0
+tzdata==2026.2
+uc-micro-py==2.0.0
+xlrd==2.0.2

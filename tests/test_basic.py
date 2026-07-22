@@ -993,6 +993,16 @@ def test_run_menu_installs_or_repairs_missing_dependencies_before_importing_menu
     assert 'import openpyxl, pandas, xlrd, dateutil, playwright, rich' in script
 
 
+def test_install_env_prefers_runtime_lock_when_available():
+    root = Path(__file__).resolve().parents[1]
+    script = (root / "install_env.bat").read_text(encoding="utf-8")
+
+    assert "requirements-runtime.lock.txt" in script
+    assert 'set "RUNTIME_REQUIREMENTS=%~dp0requirements-runtime.txt"' in script
+    assert 'if exist "%~dp0requirements-runtime.lock.txt" set "RUNTIME_REQUIREMENTS=%~dp0requirements-runtime.lock.txt"' in script
+    assert '-r "%RUNTIME_REQUIREMENTS%"' in script
+
+
 def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path("main.py")) is True
     assert should_include_file(Path("modules") / "doctor.py") is True
@@ -1008,6 +1018,119 @@ def test_release_builder_excludes_sensitive_and_runtime_files():
     assert should_include_file(Path(".venv") / "pyvenv.cfg") is False
     assert should_include_file(Path("tests") / "test_basic.py") is False
     assert should_include_file(Path("run_11.bat")) is False
+
+
+def test_dependency_lock_file_contains_exact_runtime_versions(tmp_path):
+    from modules.maintenance import build_runtime_dependency_lock
+
+    (tmp_path / "requirements-runtime.txt").write_text(
+        "openpyxl>=3.1.2\npandas>=2.0.0\n",
+        encoding="utf-8",
+    )
+
+    lock_path = build_runtime_dependency_lock(
+        tmp_path,
+        installed_packages={
+            "openpyxl": "3.1.5",
+            "pandas": "3.0.2",
+            "pytest": "9.0.3",
+        },
+    )
+
+    content = lock_path.read_text(encoding="utf-8")
+    assert lock_path.name == "requirements-runtime.lock.txt"
+    assert "openpyxl==3.1.5" in content
+    assert "pandas==3.0.2" in content
+    assert "pytest" not in content
+
+
+def test_diagnostic_bundle_redacts_sensitive_values_and_skips_secrets(tmp_path):
+    import zipfile
+    from modules.maintenance import create_diagnostic_bundle
+
+    (tmp_path / "configs" / "projects").mkdir(parents=True)
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "configs" / "app_config.json").write_text(
+        json.dumps({"current_project_id": "demo", "hmac_client_key": "real-key"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "configs" / "projects" / "demo.json").write_text(
+        json.dumps({"project_name": "演示", "excel": {"path": "D:/data/demo.xlsx"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "secrets" / "secrets.json").write_text(
+        json.dumps({"password": "real-password", "accessToken": "real-token"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "logs" / "run.log").write_text("password=real-password accessToken=eyJabcdef.ghijklmnop.qrstuvwxyz\n", encoding="utf-8")
+    (tmp_path / "reports" / "final_run_report.json").write_text(
+        json.dumps({"authorization": "Bearer real-token", "passed": False}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    bundle = create_diagnostic_bundle(tmp_path, now_label="20260722_101500")
+
+    with zipfile.ZipFile(bundle) as archive:
+        names = set(archive.namelist())
+        payload = "\n".join(archive.read(name).decode("utf-8", errors="ignore") for name in names)
+
+    assert "manifest.json" in names
+    assert "configs/app_config.json" in names
+    assert "secrets/secrets.json" not in names
+    assert "real-password" not in payload
+    assert "real-token" not in payload
+    assert "eyJabcdef" not in payload
+    assert "***" in payload
+
+
+def test_diagnostic_bundle_skips_files_removed_during_collection(tmp_path, monkeypatch):
+    import zipfile
+    import modules.maintenance as maintenance
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    removed = logs / "removed.log"
+    removed.write_text("old", encoding="utf-8")
+
+    monkeypatch.setattr(maintenance, "_diagnostic_candidates", lambda root: [removed])
+    removed.unlink()
+
+    bundle = maintenance.create_diagnostic_bundle(tmp_path, now_label="20260722_102000")
+
+    with zipfile.ZipFile(bundle) as archive:
+        assert "manifest.json" in archive.namelist()
+        assert "logs/removed.log" not in archive.namelist()
+
+
+def test_archive_logs_moves_only_old_log_files(tmp_path):
+    from datetime import datetime, timedelta
+    import zipfile
+    from modules.maintenance import archive_logs
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    old_log = logs / "old.log"
+    current_log = logs / "run.log"
+    old_log.write_text("old", encoding="utf-8")
+    current_log.write_text("current", encoding="utf-8")
+    old_ts = (datetime(2026, 7, 1) - datetime(1970, 1, 1)).total_seconds()
+    os.utime(old_log, (old_ts, old_ts))
+
+    result = archive_logs(
+        tmp_path,
+        older_than_days=7,
+        now=datetime(2026, 7, 22, 10, 20, 0),
+    )
+
+    assert result["archived_count"] == 1
+    assert not old_log.exists()
+    assert current_log.exists()
+    archive_path = Path(result["archive_path"])
+    assert archive_path.exists()
+    with zipfile.ZipFile(archive_path) as archive:
+        assert "old.log" in archive.namelist()
 
 
 def test_project_template_and_demo_project_are_complete():
@@ -1223,15 +1346,22 @@ def test_normalize_text():
 def test_kst_tags():
     r = classify_dialog_by_tags("转潜-有效")
     assert r["总对话"] == 1
-    assert r["有效"] == 1
+    assert r["有效对话"] == 1
+    assert r["一般有效"] == 0
     assert r["有效转潜"] == 1
     assert r["总转潜"] == 1
 
     general = classify_dialog_by_tags("有效-一般")
     assert general["总对话"] == 1
-    assert general["有效"] == 1
+    assert general["有效对话"] == 0
+    assert general["一般有效"] == 1
     assert general["有效转潜"] == 0
     assert general["总转潜"] == 0
+
+    three_messages = classify_dialog_by_tags("有效-三句话")
+    assert three_messages["有效对话"] == 1
+    assert three_messages["一般有效"] == 0
+    assert three_messages["有效转潜"] == 0
 
 
 def test_visitor_dialog_requires_message_count_at_least_one():
@@ -1269,6 +1399,40 @@ def test_kst_daily_tags_do_not_count_invalid_as_valid():
     assert valid["有效转潜"] == 1
     assert valid["总转潜"] == 1
 
+    three_messages = classify_daily_dialog_by_tags("有效-三句话")
+    assert three_messages["有效对话"] == 1
+    assert three_messages["无效对话"] == 0
+    assert three_messages["一般有效对话"] == 0
+
+    general = classify_daily_dialog_by_tags("有效-一般")
+    assert general["有效对话"] == 0
+    assert general["无效对话"] == 0
+    assert general["一般有效对话"] == 1
+
+
+def test_daily_kst_validation_treats_general_as_independent_category():
+    from modules.validators import validate_daily_kst_counts
+
+    general_only = {
+        "总对话": 1,
+        "有效对话": 0,
+        "无效对话": 0,
+        "一般有效对话": 1,
+        "有效转潜": 0,
+        "总转潜": 0,
+    }
+    valid_and_general = {
+        "总对话": 1,
+        "有效对话": 1,
+        "无效对话": 0,
+        "一般有效对话": 1,
+        "有效转潜": 1,
+        "总转潜": 1,
+    }
+
+    assert validate_daily_kst_counts(general_only) == []
+    assert validate_daily_kst_counts(valid_and_general) == []
+
 
 def test_aggregate_kst_export_rows_maps_remark_promotion_ids_and_counts_tags():
     rows = [
@@ -1283,12 +1447,15 @@ def test_aggregate_kst_export_rows_maps_remark_promotion_ids_and_counts_tags():
 
     assert parsed["errors"] == []
     assert parsed["accounts"]["银康01"]["总对话"] == 2
-    assert parsed["accounts"]["银康01"]["有效"] == 2
+    assert parsed["accounts"]["银康01"]["有效对话"] == 1
+    assert parsed["accounts"]["银康01"]["一般有效"] == 1
     assert parsed["accounts"]["银康01"]["有效转潜"] == 1
     assert parsed["accounts"]["银康01"]["总转潜"] == 1
-    assert parsed["accounts"]["银康银屑02"]["有效"] == 1
+    assert parsed["accounts"]["银康银屑02"]["有效对话"] == 1
+    assert parsed["accounts"]["银康银屑02"]["一般有效"] == 0
     assert parsed["accounts"]["银康03"]["总对话"] == 1
-    assert parsed["accounts"]["银康03"]["有效"] == 0
+    assert parsed["accounts"]["银康03"]["有效对话"] == 0
+    assert parsed["accounts"]["银康03"]["一般有效"] == 0
     assert parsed["summary"]["unmatched_rows"] == 1
     assert parsed["account_dialog_details"]["银康01"][0]["promotion_id"] == "72828178"
 
@@ -1302,7 +1469,8 @@ def test_aggregate_kst_export_rows_skips_rows_without_visitor_messages():
     parsed = aggregate_kst_export_rows(rows, _kunming_niu_runtime_config())
 
     assert parsed["accounts"]["银康01"]["总对话"] == 1
-    assert parsed["accounts"]["银康01"]["有效"] == 1
+    assert parsed["accounts"]["银康01"]["有效对话"] == 0
+    assert parsed["accounts"]["银康01"]["一般有效"] == 1
     assert parsed["accounts"]["银康01"]["有效转潜"] == 0
     assert parsed["accounts"]["银康01"]["总转潜"] == 0
     assert parsed["summary"]["skipped_no_visitor_messages"] == 1
@@ -1325,7 +1493,8 @@ def test_parse_kst_export_csv_outputs_reports(tmp_path):
     result = parse_kst_export_file(export, config, tmp_path, "15点")
 
     assert result["dialog_data"]["accounts"]["银康01"]["总对话"] == 1
-    assert result["dialog_data"]["accounts"]["银康01"]["有效"] == 1
+    assert result["dialog_data"]["accounts"]["银康01"]["有效对话"] == 1
+    assert result["dialog_data"]["accounts"]["银康01"]["一般有效"] == 0
     assert result["dialog_data"]["accounts"]["银康03"]["总对话"] == 1
     assert result["dialog_data"]["summary"]["raw_rows"] == 2
     assert (reports / "kst_dialog_data.json").exists()
@@ -1349,7 +1518,7 @@ def test_parse_kst_export_accepts_visitor_sent_count_header(tmp_path):
     assert result["parse_report"]["passed"] is True
     assert result["parse_report"]["field_info"]["has_visitor_messages"] is True
     assert result["dialog_data"]["accounts"]["银康01"]["总对话"] == 1
-    assert result["dialog_data"]["accounts"]["银康01"]["有效"] == 1
+    assert result["dialog_data"]["accounts"]["银康01"]["有效对话"] == 1
 
 
 def test_parse_kst_export_accepts_visitor_sent_message_count_header(tmp_path):
@@ -1368,7 +1537,7 @@ def test_parse_kst_export_accepts_visitor_sent_message_count_header(tmp_path):
     assert result["parse_report"]["passed"] is True
     assert result["parse_report"]["field_info"]["has_visitor_messages"] is True
     assert result["dialog_data"]["accounts"]["银康01"]["总对话"] == 1
-    assert result["dialog_data"]["accounts"]["银康01"]["有效"] == 1
+    assert result["dialog_data"]["accounts"]["银康01"]["有效对话"] == 1
 
 
 def test_parse_kst_export_filters_non_current_date_without_marking_unmatched(tmp_path):
@@ -1439,7 +1608,7 @@ def test_parse_kst_daily_file_filters_date_and_outputs_daily_counts(tmp_path):
     assert result["daily_data"]["date"] == "2026-05-07"
     assert result["daily_data"]["source"] == "kst_daily_export"
     assert result["daily_data"]["accounts"]["银康01"]["总对话"] == 2
-    assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 2
+    assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 1
     assert result["daily_data"]["accounts"]["银康01"]["无效对话"] == 0
     assert result["daily_data"]["accounts"]["银康01"]["一般有效对话"] == 1
     assert result["daily_data"]["accounts"]["银康01"]["有效转潜"] == 1
@@ -1502,8 +1671,9 @@ def test_parse_kst_daily_file_skips_rows_without_visitor_messages(tmp_path):
     result = parse_kst_daily_file(export, _kunming_niu_runtime_config(), tmp_path, "2026-05-07")
 
     assert result["daily_data"]["accounts"]["银康01"]["总对话"] == 1
-    assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 1
+    assert result["daily_data"]["accounts"]["银康01"]["有效对话"] == 0
     assert result["daily_data"]["accounts"]["银康01"]["无效对话"] == 0
+    assert result["daily_data"]["accounts"]["银康01"]["一般有效对话"] == 1
     assert result["daily_data"]["accounts"]["银康01"]["有效转潜"] == 0
     assert result["daily_data"]["summary"]["skipped_no_visitor_messages"] == 1
 
@@ -2838,9 +3008,9 @@ def test_merge_hourly_data_requires_three_accounts_and_strict_field_types():
         "date": "2026-05-07",
         "period": "15点",
         "accounts": {
-            "银康01": {"总对话": 8, "有效": 4, "有效转潜": 1, "总转潜": 2},
-            "银康银屑02": {"总对话": 9, "有效": 2, "有效转潜": 1, "总转潜": 1},
-            "银康03": {"总对话": 3, "有效": 1, "有效转潜": 1, "总转潜": 2},
+            "银康01": {"总对话": 8, "有效对话": 4, "一般有效": 2, "有效转潜": 1, "总转潜": 2},
+            "银康银屑02": {"总对话": 9, "有效对话": 2, "一般有效": 1, "有效转潜": 1, "总转潜": 1},
+            "银康03": {"总对话": 3, "有效对话": 1, "一般有效": 0, "有效转潜": 1, "总转潜": 2},
         },
     }
 
@@ -2891,7 +3061,7 @@ def test_merge_daily_data_combines_baidu_and_kst_daily_fields():
 
     merged["accounts"]["银康01"]["无效对话"] = 9
     errors = validate_merged_daily_data(merged, baidu, kst, required_accounts=km_accounts)
-    assert any("无效对话不等于总对话减有效对话" in error for error in errors)
+    assert any("有效、一般与无效对话未覆盖总对话" in error for error in errors)
 
 
 def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
@@ -2904,25 +3074,25 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
     ws["A1"] = "每日时段统计数据"
     ws.merge_cells("A1:E1")
     ws["F1"] = "银康01"
-    ws.merge_cells("F1:L1")
-    ws["M1"] = "银康银屑02"
-    ws.merge_cells("M1:S1")
-    ws["T1"] = "银康03"
-    ws.merge_cells("T1:Z1")
+    ws.merge_cells("F1:M1")
+    ws["N1"] = "银康银屑02"
+    ws.merge_cells("N1:U1")
+    ws["V1"] = "银康03"
+    ws.merge_cells("V1:AC1")
     ws["A2"] = "日期"
     ws["B2"] = "时段"
-    headers = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+    headers = ["展现", "点击", "消费", "总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
     for offset, header in enumerate(headers):
         ws.cell(row=2, column=6 + offset).value = header
-        ws.cell(row=2, column=13 + offset).value = header
-        ws.cell(row=2, column=20 + offset).value = header
+        ws.cell(row=2, column=14 + offset).value = header
+        ws.cell(row=2, column=22 + offset).value = header
     ws["A3"] = "2026-05-07"
     ws.merge_cells("A3:A6")
     ws["B3"] = "昨日数据"
     ws["B4"] = "11点"
     ws["B5"] = "3点"
     ws["B6"] = "6点"
-    ws.auto_filter.ref = "A2:Z6"
+    ws.auto_filter.ref = "A2:AC6"
     notes_ws = wb.create_sheet("说明")
     notes_ws["A1"] = "无关工作表"
     excel_path = tmp_path / "target.xlsx"
@@ -2937,9 +3107,9 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
   "period": "15点",
   "source": {"baidu": "reports/baidu_account_data.json", "kst": "reports/kst_dialog_data.json"},
   "accounts": {
-    "银康01": {"展现": 4169, "点击": 187, "消费": 1873.41, "总对话": 8, "有效": 4, "有效转潜": 1, "总转潜": 2},
-    "银康银屑02": {"展现": 2397, "点击": 150, "消费": 829.67, "总对话": 9, "有效": 2, "有效转潜": 1, "总转潜": 1},
-    "银康03": {"展现": 225, "点击": 20, "消费": 91.75, "总对话": 3, "有效": 1, "有效转潜": 1, "总转潜": 2}
+    "银康01": {"展现": 4169, "点击": 187, "消费": 1873.41, "总对话": 8, "有效对话": 4, "一般有效": 2, "有效转潜": 1, "总转潜": 2},
+    "银康银屑02": {"展现": 2397, "点击": 150, "消费": 829.67, "总对话": 9, "有效对话": 2, "一般有效": 1, "有效转潜": 1, "总转潜": 1},
+    "银康03": {"展现": 225, "点击": 20, "消费": 91.75, "总对话": 3, "有效对话": 1, "一般有效": 0, "有效转潜": 1, "总转潜": 2}
   }
 }
 """,
@@ -2960,7 +3130,8 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
             "点击": ["点击"],
             "消费": ["消费"],
             "总对话": ["总对话"],
-            "有效": ["有效"],
+            "有效对话": ["有效对话"],
+            "一般有效": ["一般有效"],
             "有效转潜": ["有效转潜"],
             "总转潜": ["总转潜"],
         },
@@ -2972,7 +3143,7 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
     assert report["self_check"]["backup_created"] is True
     assert report["self_check"]["verification_passed"] is True
     assert report["overwrite_summary"]["overwrite_count"] == 0
-    assert len(report["writes"]) == 21
+    assert len(report["writes"]) == 24
     assert (tmp_path / "reports" / "write_report.json").exists()
     assert (tmp_path / "backups").exists()
 
@@ -2980,9 +3151,9 @@ def test_write_merged_hourly_data_backs_up_writes_and_verifies(tmp_path):
     verify_ws = verify_wb["时段数据"]
     assert verify_ws["F5"].value == 4169
     assert verify_ws["H5"].value == 1873.41
-    assert verify_ws["T5"].value == 225
-    assert verify_ws["Z5"].value == 2
-    assert verify_ws.auto_filter.ref == "A2:Z6"
+    assert verify_ws["V5"].value == 225
+    assert verify_ws["AC5"].value == 2
+    assert verify_ws.auto_filter.ref == "A2:AC6"
     assert verify_wb["说明"].auto_filter.ref is None
 
 
@@ -3071,18 +3242,18 @@ def test_write_merged_hourly_data_reports_overwrites(tmp_path):
     ws["A1"] = "每日时段统计数据"
     ws.merge_cells("A1:E1")
     ws["F1"] = "银康01"
-    ws.merge_cells("F1:L1")
-    ws["M1"] = "银康银屑02"
-    ws.merge_cells("M1:S1")
-    ws["T1"] = "银康03"
-    ws.merge_cells("T1:Z1")
+    ws.merge_cells("F1:M1")
+    ws["N1"] = "银康银屑02"
+    ws.merge_cells("N1:U1")
+    ws["V1"] = "银康03"
+    ws.merge_cells("V1:AC1")
     ws["A2"] = "日期"
     ws["B2"] = "时段"
-    headers = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+    headers = ["展现", "点击", "消费", "总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
     for offset, header in enumerate(headers):
         ws.cell(row=2, column=6 + offset).value = header
-        ws.cell(row=2, column=13 + offset).value = header
-        ws.cell(row=2, column=20 + offset).value = header
+        ws.cell(row=2, column=14 + offset).value = header
+        ws.cell(row=2, column=22 + offset).value = header
     ws["A3"] = "2026-05-07"
     ws.merge_cells("A3:A6")
     ws["B5"] = "3点"
@@ -3097,9 +3268,9 @@ def test_write_merged_hourly_data_reports_overwrites(tmp_path):
   "date": "2026-05-07",
   "period": "15点",
   "accounts": {
-    "银康01": {"展现": 4169, "点击": 187, "消费": 1873.41, "总对话": 8, "有效": 4, "有效转潜": 1, "总转潜": 2},
-    "银康银屑02": {"展现": 2397, "点击": 150, "消费": 829.67, "总对话": 9, "有效": 2, "有效转潜": 1, "总转潜": 1},
-    "银康03": {"展现": 225, "点击": 20, "消费": 91.75, "总对话": 3, "有效": 1, "有效转潜": 1, "总转潜": 2}
+    "银康01": {"展现": 4169, "点击": 187, "消费": 1873.41, "总对话": 8, "有效对话": 4, "一般有效": 2, "有效转潜": 1, "总转潜": 2},
+    "银康银屑02": {"展现": 2397, "点击": 150, "消费": 829.67, "总对话": 9, "有效对话": 2, "一般有效": 1, "有效转潜": 1, "总转潜": 1},
+    "银康03": {"展现": 225, "点击": 20, "消费": 91.75, "总对话": 3, "有效对话": 1, "一般有效": 0, "有效转潜": 1, "总转潜": 2}
   }
 }
 """,
@@ -3120,7 +3291,8 @@ def test_write_merged_hourly_data_reports_overwrites(tmp_path):
             "点击": ["点击"],
             "消费": ["消费"],
             "总对话": ["总对话"],
-            "有效": ["有效"],
+            "有效对话": ["有效对话"],
+            "一般有效": ["一般有效"],
             "有效转潜": ["有效转潜"],
             "总转潜": ["总转潜"],
         },
@@ -8891,7 +9063,7 @@ def test_desktop_gui_requirements_keep_updater_ui_in_runtime_and_packager_in_dev
 
     assert "PySide6" in requirements
     assert "pyinstaller" in requirements
-    assert "PySide6" in runtime
+    assert "PySide6" not in runtime
     assert "pyinstaller" not in runtime
     assert "playwright" in runtime
 
@@ -10645,10 +10817,10 @@ def test_update_helper_rollback_continues_after_one_restore_error(tmp_path, monk
     assert (root / "b.txt").read_text(encoding="utf-8") == "old-b.txt"
 
 
-def test_runtime_dependencies_include_update_dialog_toolkit():
+def test_runtime_dependencies_exclude_gui_toolkit_bundled_in_exe():
     root = Path(__file__).resolve().parents[1]
     requirements = (root / "requirements-runtime.txt").read_text(encoding="utf-8").lower()
-    assert "pyside6" in requirements
+    assert "pyside6" not in requirements
 
 
 def test_online_release_refuses_source_or_exe_version_mismatch(tmp_path):
@@ -10701,18 +10873,32 @@ def test_desktop_gui_startup_check_attempts_hidden_install_when_environment_miss
     assert calls[0][0][0] == ["cmd.exe", "/d", "/c", str(install)]
 
 
-def test_desktop_gui_python_bootstrap_is_pinned_and_hash_verified():
+def test_desktop_gui_python_bootstrap_uses_isolated_nuget_runtime():
     root = Path(__file__).resolve().parents[1]
     bootstrap = (root / "tools" / "bootstrap_python.ps1").read_text(encoding="utf-8")
     installer = (root / "install_env.bat").read_text(encoding="utf-8")
 
-    assert 'Version = "3.14.6"' in bootstrap
-    assert "python.org/ftp/python/$Version" in bootstrap
-    assert "14b3e9a710a3fcf0bd9b55ab6b60412bd91227563f813fc49040cabc0209e0bd" in bootstrap
+    assert 'Version = "3.14.5"' in bootstrap
+    assert "www.nuget.org/api/v2/package/python/$Version" in bootstrap
+    assert "03ad5810986afd8273a34a28c15cb594300ba7f4749f24362d69206fa1b6ac15" in bootstrap
     assert "Get-FileHash" in bootstrap
+    assert "Expand-Archive" in bootstrap
+    assert 'Join-Path $StagingDir "tools"' in bootstrap
     assert "runtime\\python" in installer
     assert "bootstrap_python.ps1" in installer
     assert "requirements-runtime.txt" in installer
+
+
+def test_install_env_uses_verified_private_python_instead_of_system_python():
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "install_env.bat").read_text(encoding="ascii")
+
+    assert "%LocalAppData%\\Programs\\Python" not in installer
+    assert "%ProgramFiles%\\Python" not in installer
+    assert "py -3 --version" not in installer
+    assert "python --version" not in installer
+    assert "python3 --version" not in installer
+    assert installer.index("bootstrap_python.ps1") < installer.index("-m venv .venv")
 
 
 def test_windows_user_entry_bats_are_ascii_and_use_crlf():
@@ -14387,16 +14573,16 @@ def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp
     ws["A1"] = "日期"
     ws["B1"] = "时段"
     ws["F2"] = "华厦npx1"
-    ws.merge_cells("F2:L2")
-    ws["M2"] = "华厦npx3"
-    ws.merge_cells("M2:S2")
-    ws["T2"] = "华厦npx5"
-    ws.merge_cells("T2:Z2")
-    headers = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+    ws.merge_cells("F2:M2")
+    ws["N2"] = "华厦npx3"
+    ws.merge_cells("N2:U2")
+    ws["V2"] = "华厦npx5"
+    ws.merge_cells("V2:AC2")
+    headers = ["展现", "点击", "消费", "总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
     for offset, header in enumerate(headers):
         ws.cell(row=3, column=6 + offset).value = header
-        ws.cell(row=3, column=13 + offset).value = header
-        ws.cell(row=3, column=20 + offset).value = header
+        ws.cell(row=3, column=14 + offset).value = header
+        ws.cell(row=3, column=22 + offset).value = header
     ws["A4"] = "2026-05-07"
     ws.merge_cells("A4:A6")
     ws["B4"] = "11点"
@@ -14413,9 +14599,9 @@ def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp
   "date": "2026-05-07",
   "period": "15点",
   "accounts": {
-    "华厦npx1": {"展现": 101, "点击": 11, "消费": 12.5, "总对话": 3, "有效": 2, "有效转潜": 1, "总转潜": 1},
-    "华厦npx3": {"展现": 202, "点击": 22, "消费": 23.5, "总对话": 4, "有效": 2, "有效转潜": 1, "总转潜": 1},
-    "华厦npx5": {"展现": 303, "点击": 33, "消费": 34.5, "总对话": 5, "有效": 3, "有效转潜": 1, "总转潜": 2}
+    "华厦npx1": {"展现": 101, "点击": 11, "消费": 12.5, "总对话": 3, "有效对话": 2, "一般有效": 0, "有效转潜": 1, "总转潜": 1},
+    "华厦npx3": {"展现": 202, "点击": 22, "消费": 23.5, "总对话": 4, "有效对话": 2, "一般有效": 1, "有效转潜": 1, "总转潜": 1},
+    "华厦npx5": {"展现": 303, "点击": 33, "消费": 34.5, "总对话": 5, "有效对话": 3, "一般有效": 1, "有效转潜": 1, "总转潜": 2}
   }
 }
 """,
@@ -14437,7 +14623,8 @@ def test_write_merged_hourly_data_finds_date_and_period_above_account_titles(tmp
             "点击": ["点击"],
             "消费": ["消费"],
             "总对话": ["总对话"],
-            "有效": ["有效"],
+            "有效对话": ["有效对话"],
+            "一般有效": ["一般有效"],
             "有效转潜": ["有效转潜"],
             "总转潜": ["总转潜"]
         },
@@ -14461,16 +14648,16 @@ def test_inspector_and_writer_share_global_date_period_field_locations(tmp_path)
     ws["B3"] = "日期"
     ws["C3"] = "时段"
     ws["F5"] = "南京账户1"
-    ws.merge_cells("F5:L5")
-    ws["M5"] = "南京账户2"
-    ws.merge_cells("M5:S5")
-    ws["T5"] = "南京账户3"
-    ws.merge_cells("T5:Z5")
-    headers = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+    ws.merge_cells("F5:M5")
+    ws["N5"] = "南京账户2"
+    ws.merge_cells("N5:U5")
+    ws["V5"] = "南京账户3"
+    ws.merge_cells("V5:AC5")
+    headers = ["展现", "点击", "消费", "总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
     for offset, header in enumerate(headers):
         ws.cell(row=6, column=6 + offset).value = header
-        ws.cell(row=6, column=13 + offset).value = header
-        ws.cell(row=6, column=20 + offset).value = header
+        ws.cell(row=6, column=14 + offset).value = header
+        ws.cell(row=6, column=22 + offset).value = header
     ws["B7"] = "2026-05-07"
     ws.merge_cells("B7:B9")
     ws["C7"] = "11点"
@@ -14487,9 +14674,9 @@ def test_inspector_and_writer_share_global_date_period_field_locations(tmp_path)
                 "date": "2026-05-07",
                 "period": "15点",
                 "accounts": {
-                    "南京账户1": {"展现": 101, "点击": 11, "消费": 12.5, "总对话": 3, "有效": 2, "有效转潜": 1, "总转潜": 1},
-                    "南京账户2": {"展现": 202, "点击": 22, "消费": 23.5, "总对话": 4, "有效": 3, "有效转潜": 1, "总转潜": 1},
-                    "南京账户3": {"展现": 303, "点击": 33, "消费": 34.5, "总对话": 5, "有效": 4, "有效转潜": 2, "总转潜": 2},
+                    "南京账户1": {"展现": 101, "点击": 11, "消费": 12.5, "总对话": 3, "有效对话": 2, "一般有效": 0, "有效转潜": 1, "总转潜": 1},
+                    "南京账户2": {"展现": 202, "点击": 22, "消费": 23.5, "总对话": 4, "有效对话": 3, "一般有效": 1, "有效转潜": 1, "总转潜": 1},
+                    "南京账户3": {"展现": 303, "点击": 33, "消费": 34.5, "总对话": 5, "有效对话": 4, "一般有效": 0, "有效转潜": 2, "总转潜": 2},
                 },
             },
             ensure_ascii=False,
@@ -14512,7 +14699,8 @@ def test_inspector_and_writer_share_global_date_period_field_locations(tmp_path)
             "点击": ["点击"],
             "消费": ["消费"],
             "总对话": ["总对话"],
-            "有效": ["有效"],
+            "有效对话": ["有效对话"],
+            "一般有效": ["一般有效"],
             "有效转潜": ["有效转潜"],
             "总转潜": ["总转潜"],
         },
@@ -14531,8 +14719,8 @@ def test_inspector_and_writer_share_global_date_period_field_locations(tmp_path)
     verify_wb = load_workbook(excel_path, data_only=False, read_only=False)
     verify_ws = verify_wb["时段数据"]
     assert verify_ws["F8"].value == 101
-    assert verify_ws["M8"].value == 202
-    assert verify_ws["T8"].value == 303
+    assert verify_ws["N8"].value == 202
+    assert verify_ws["V8"].value == 303
 
 
 _API_READINESS_SINGLE_PROFILES = {

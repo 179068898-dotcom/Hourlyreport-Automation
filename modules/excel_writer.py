@@ -29,7 +29,7 @@ from modules.text_normalizer import normalize_text
 from modules.validators import get_required_accounts, validate_merged_daily_data, validate_merged_hourly_data
 
 
-WRITE_FIELDS = ["展现", "点击", "消费", "总对话", "有效", "有效转潜", "总转潜"]
+WRITE_FIELDS = ["展现", "点击", "消费", "总对话", "有效对话", "一般有效", "有效转潜", "总转潜"]
 PERIOD_TO_EXCEL = {
     "11点": "11点",
     "15点": "3点",
@@ -322,7 +322,8 @@ def build_mock_account_data(config: dict[str, Any] | None = None) -> dict[str, d
             "点击": 50 + index,
             "消费": 300 + index + 0.17,
             "总对话": 10 + index,
-            "有效": 4 + index,
+            "有效对话": 4 + index,
+            "一般有效": 1 + index,
             "有效转潜": 2 + index,
             "总转潜": 3 + index,
         }

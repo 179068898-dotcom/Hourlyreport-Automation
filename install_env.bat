@@ -18,25 +18,7 @@ if exist ".venv\Scripts\python.exe" (
     set "USING_EXISTING_VENV=1"
   )
 )
-if not defined PYTHON_EXE if exist "runtime\python\python.exe" set "PYTHON_EXE=%CD%\runtime\python\python.exe"
-if not defined PYTHON_EXE if exist "%LocalAppData%\Programs\Python\Python314\python.exe" set "PYTHON_EXE=%LocalAppData%\Programs\Python\Python314\python.exe"
-if not defined PYTHON_EXE if exist "%ProgramFiles%\Python314\python.exe" set "PYTHON_EXE=%ProgramFiles%\Python314\python.exe"
-
-if not defined PYTHON_EXE (
-  py -3 --version >nul 2>nul
-  if not errorlevel 1 (
-    set "PYTHON_EXE=py"
-    set "PYTHON_ARGS=-3"
-  )
-)
-if not defined PYTHON_EXE (
-  python --version >nul 2>nul
-  if not errorlevel 1 set "PYTHON_EXE=python"
-)
-if not defined PYTHON_EXE (
-  python3 --version >nul 2>nul
-  if not errorlevel 1 set "PYTHON_EXE=python3"
-)
+if not defined PYTHON_EXE if exist "runtime\python-3.14.5\python.exe" set "PYTHON_EXE=%CD%\runtime\python-3.14.5\python.exe"
 
 if /i "%~1"=="--check" goto :check_only
 
@@ -44,7 +26,7 @@ if not defined PYTHON_EXE (
   echo [ENV][2/5] Python was not found. Downloading the private runtime...
   powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%~dp0tools\bootstrap_python.ps1"
   if errorlevel 1 goto :python_failed
-  set "PYTHON_EXE=%CD%\runtime\python\python.exe"
+  set "PYTHON_EXE=%CD%\runtime\python-3.14.5\python.exe"
 )
 
 echo [ENV][2/5] Python: %PYTHON_EXE% %PYTHON_ARGS%
@@ -62,7 +44,9 @@ if defined USING_EXISTING_VENV (
 echo [ENV][4/5] Installing runtime dependencies. The first setup may take a few minutes...
 ".venv\Scripts\python.exe" -m pip install --upgrade pip --disable-pip-version-check
 if errorlevel 1 goto :dependency_failed
-".venv\Scripts\python.exe" -m pip install -r "%~dp0requirements-runtime.txt" --disable-pip-version-check
+set "RUNTIME_REQUIREMENTS=%~dp0requirements-runtime.txt"
+if exist "%~dp0requirements-runtime.lock.txt" set "RUNTIME_REQUIREMENTS=%~dp0requirements-runtime.lock.txt"
+".venv\Scripts\python.exe" -m pip install -r "%RUNTIME_REQUIREMENTS%" --disable-pip-version-check
 if errorlevel 1 goto :dependency_failed
 
 echo [ENV][5/5] Environment setup completed.
