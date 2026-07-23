@@ -17,12 +17,14 @@ REFRESH_TOKEN_URL = "https://u.baidu.com/oauth/refreshToken"
 USER_INFO_URL = "https://u.baidu.com/oauth/getUserInfo"
 EXPORT_FORMAT = "baidu-oauth-export-v1"
 TOKEN_STORE_FORMAT = "baidu-token-store-v1"
+TOKEN_PROFILE_FORMAT = "baidu-token-profile-v1"
 REQUIRED_QUERY_FIELDS = ("appId", "authCode", "state", "userId", "timestamp", "signature")
 REFRESH_REQUEST_FIELDS = frozenset(("appId", "userId", "refreshToken"))
 REFRESH_TIMESTAMP_HEADER = "X-Baidu-Refresh-Timestamp"
 REFRESH_SIGNATURE_HEADER = "X-Baidu-Refresh-Signature"
 PROFILE_PATTERN = re.compile(r"^[a-z0-9_]{3,80}$")
 TOKEN_REFRESH_WINDOW_SECONDS = 600
+BAIDU_TIMEZONE = timezone(timedelta(hours=8))
 
 
 class OAuthCallbackError(RuntimeError):
@@ -160,7 +162,13 @@ def _cos_authorization(
     ) % (secret_id, sign_time, key_time, ";".join(signed_headers), signature)
 
 
-def _cos_transport(method: str, bucket: str, region: str, key: str, body: Optional[str] = None) -> Dict[str, Any]:
+def _cos_transport(
+    method: str,
+    bucket: str,
+    region: str,
+    key: str,
+    body: Optional[str] = None,
+) -> Dict[str, Any]:
     secret_id = os.environ.get("TENCENT_SECRET_ID", "").strip()
     secret_key = os.environ.get("TENCENT_SECRET_KEY", "").strip()
     token = os.environ.get("TENCENT_TOKEN", "").strip()
@@ -265,8 +273,10 @@ def _normalize_token_store(raw: Dict[str, Any]) -> Dict[str, Any]:
     store = dict(raw)
     store["format"] = TOKEN_STORE_FORMAT
     profiles = store.get("profiles")
-    if not isinstance(profiles, dict):
+    if profiles is None:
         profiles = {}
+    elif not isinstance(profiles, dict):
+        raise OAuthCallbackError("token_store_invalid", "token store profiles invalid", 500)
     store["profiles"] = profiles
     return store
 
@@ -287,7 +297,7 @@ def load_token_store(
 def save_token_store(
     config: Dict[str, Any],
     store: Dict[str, Any],
-    cos_transport: Callable[[str, str, str, str, Optional[str]], Dict[str, Any]],
+    cos_transport: Callable[..., Dict[str, Any]],
 ) -> None:
     bucket, region, key = _token_store_location(config)
     store["format"] = TOKEN_STORE_FORMAT
@@ -339,6 +349,58 @@ def upsert_token_profile(
         record["sub_account_count"] = len(record["sub_accounts"])
     store.setdefault("profiles", {})[profile] = record
     return record
+
+
+def _token_profile_key(config: Dict[str, Any], api_profile: str) -> str:
+    profile = _validate_profile_name(api_profile)
+    _bucket, _region, store_key = _token_store_location(config)
+    base = store_key[:-5] if store_key.lower().endswith(".json") else store_key.rstrip("/")
+    return "%s/profiles/%s.json" % (base, profile)
+
+
+def load_token_profile(
+    config: Dict[str, Any],
+    api_profile: str,
+    cos_transport: Callable[..., Dict[str, Any]],
+) -> Dict[str, Any]:
+    profile = _validate_profile_name(api_profile)
+    bucket, region, _store_key = _token_store_location(config)
+    profile_key = _token_profile_key(config, profile)
+    try:
+        payload = cos_transport("GET", bucket, region, profile_key, None)
+    except OAuthCallbackError as exc:
+        if exc.status_code != 404 and exc.code != "token_store_not_found":
+            raise
+    else:
+        if not isinstance(payload, dict) or not isinstance(payload.get("authorization"), dict):
+            raise OAuthCallbackError("token_store_invalid", "token profile content invalid", 500)
+        if payload.get("format") not in (None, TOKEN_PROFILE_FORMAT):
+            raise OAuthCallbackError("token_store_invalid", "token profile format invalid", 500)
+        if payload.get("api_profile") not in (None, profile):
+            raise OAuthCallbackError("token_store_invalid", "token profile name mismatch", 500)
+        return _validate_authorization_record(payload["authorization"])
+    return _validate_authorization_record(
+        get_token_profile(load_token_store(config, cos_transport), profile)
+    )
+
+
+def save_token_profile(
+    config: Dict[str, Any],
+    api_profile: str,
+    record: Dict[str, Any],
+    cos_transport: Callable[..., Dict[str, Any]],
+) -> None:
+    profile = _validate_profile_name(api_profile)
+    authorization = _validate_authorization_record(record)
+    bucket, region, _store_key = _token_store_location(config)
+    payload = {
+        "format": TOKEN_PROFILE_FORMAT,
+        "api_profile": profile,
+        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "authorization": authorization,
+    }
+    body = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    cos_transport("PUT", bucket, region, _token_profile_key(config, profile), body)
 
 
 def process_refresh_request(
@@ -524,21 +586,23 @@ def _parse_baidu_time(value: Any) -> Optional[datetime]:
     if value in (None, ""):
         return None
     text = str(value).strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S"):
+    normalized = re.sub(r"([+-]\d{2}):(\d{2})$", r"\1\2", text.replace("Z", "+0000"))
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S.%f",
+    ):
         try:
-            parsed = datetime.strptime(text, fmt)
+            parsed = datetime.strptime(normalized, fmt)
             if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=timezone.utc)
+                return parsed.replace(tzinfo=BAIDU_TIMEZONE).astimezone(timezone.utc)
             return parsed.astimezone(timezone.utc)
         except ValueError:
             continue
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed.astimezone(timezone.utc)
-    except ValueError:
-        return None
+    return None
 
 
 def _cloud_token_needs_refresh(record: Dict[str, Any], now_timestamp: Optional[int] = None) -> bool:
@@ -588,6 +652,15 @@ def _refresh_record(
     return updated
 
 
+def _token_record_version(record: Dict[str, Any]) -> tuple:
+    return (
+        str(record.get("access_token") or ""),
+        str(record.get("refresh_token") or ""),
+        str(record.get("expires_time") or ""),
+        str(record.get("refresh_expires_time") or ""),
+    )
+
+
 def process_cloud_token_request(
     payload: Dict[str, Any],
     headers: Dict[str, Any],
@@ -602,23 +675,43 @@ def process_cloud_token_request(
     if set(payload) - {"apiProfile", "forceRefresh"}:
         raise OAuthCallbackError("invalid_token_request", "token request has unsupported fields")
     _validate_signed_payload(payload, headers, config, now_timestamp)
-    store = load_token_store(config, cos_transport)
-    record = get_token_profile(store, api_profile)
-    if config.get("app_id") and record.get("app_id") and str(record["app_id"]) != str(config["app_id"]):
+    record = load_token_profile(config, api_profile, cos_transport)
+    if config.get("app_id") and str(record.get("app_id") or "") != str(config["app_id"]):
         raise OAuthCallbackError("app_id_mismatch", "stored authorization app id mismatch", 401)
     refreshed = False
     if bool(payload.get("forceRefresh")) or _cloud_token_needs_refresh(record, now_timestamp):
-        record = _refresh_record(record, config, oauth_transport)
-        store.setdefault("profiles", {})[api_profile] = record
-        save_token_store(config, store, cos_transport)
-        refreshed = True
+        previous_record = dict(record)
+        try:
+            refreshed_record = _refresh_record(record, config, oauth_transport)
+        except OAuthCallbackError as exc:
+            if exc.code != "reauthorization_required":
+                raise
+            latest_record = load_token_profile(config, api_profile, cos_transport)
+            if (
+                _token_record_version(latest_record) == _token_record_version(previous_record)
+                or _cloud_token_needs_refresh(latest_record, now_timestamp)
+            ):
+                raise
+            record = latest_record
+            refreshed = "concurrent_refresh"
+        else:
+            latest_record = load_token_profile(config, api_profile, cos_transport)
+            if _token_record_version(latest_record) != _token_record_version(previous_record):
+                if _cloud_token_needs_refresh(latest_record, now_timestamp):
+                    raise OAuthCallbackError("token_store_conflict", "concurrent token refresh incomplete", 409)
+                record = latest_record
+                refreshed = "concurrent_refresh"
+            else:
+                save_token_profile(config, api_profile, refreshed_record, cos_transport)
+                record = refreshed_record
+                refreshed = "refreshed"
     return {
         "api_profile": api_profile,
         "access_token": record["access_token"],
         "open_id": record.get("open_id"),
         "user_id": record.get("user_id"),
         "expires_time": record.get("expires_time"),
-        "token_refresh": "refreshed" if refreshed else "not_needed",
+        "token_refresh": refreshed if refreshed else "not_needed",
     }
 
 
@@ -633,11 +726,16 @@ def process_store_profile_request(
         raise OAuthCallbackError("invalid_store_profile_request", "store profile request invalid")
     if set(payload) != {"apiProfile", "authorization"}:
         raise OAuthCallbackError("invalid_store_profile_request", "store profile request incomplete")
+    if not str(config.get("app_id") or "").strip():
+        raise OAuthCallbackError("server_config_error", "baidu app config missing", 500)
     _validate_signed_payload(payload, headers, config, now_timestamp)
     api_profile = _validate_profile_name(payload.get("apiProfile"))
-    store = load_token_store(config, cos_transport)
-    record = upsert_token_profile(store, api_profile, payload.get("authorization"), str(config.get("app_id") or ""))
-    save_token_store(config, store, cos_transport)
+    record = _validate_authorization_record(payload.get("authorization"))
+    record["app_id"] = str(config.get("app_id") or "")
+    record["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if isinstance(record.get("sub_accounts"), list):
+        record["sub_account_count"] = len(record["sub_accounts"])
+    save_token_profile(config, api_profile, record, cos_transport)
     return {
         "api_profile": api_profile,
         "user_id": record.get("user_id"),

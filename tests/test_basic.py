@@ -8208,6 +8208,264 @@ def test_cloud_token_store_loads_missing_store_as_empty_and_upserts_profile():
     assert saved["profiles"]["ningbo_niu_baidu"]["user_id"] == 45187067
 
 
+def test_cloud_token_naive_baidu_expiry_uses_china_standard_time():
+    from datetime import datetime, timezone
+
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_china_expiry_test")
+    expires = callback._parse_baidu_time("2026-07-23 12:25:35")
+
+    assert expires is not None
+    assert expires.isoformat() == "2026-07-23T04:25:35+00:00"
+    now = int(datetime(2026, 7, 23, 7, 20, tzinfo=timezone.utc).timestamp())
+    assert callback._cloud_token_needs_refresh(
+        {
+            "access_token": "old.access.token",
+            "refresh_token": "old.refresh.token",
+            "expires_time": "2026-07-23 12:25:35",
+        },
+        now,
+    )
+
+
+def test_cloud_token_explicit_utc_expiry_remains_utc():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_utc_expiry_test")
+
+    expires = callback._parse_baidu_time("2026-07-23T12:25:35Z")
+
+    assert expires is not None
+    assert expires.isoformat() == "2026-07-23T12:25:35+00:00"
+
+
+def test_cloud_token_expiry_parser_is_python36_compatible(monkeypatch):
+    from datetime import datetime
+
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_python36_expiry_test")
+
+    class Python36DateTime:
+        strptime = staticmethod(datetime.strptime)
+
+    monkeypatch.setattr(callback, "datetime", Python36DateTime)
+
+    expires = callback._parse_baidu_time("2026-07-23T12:25:35.123456+08:00")
+
+    assert expires is not None
+    assert expires.isoformat() == "2026-07-23T04:25:35.123456+00:00"
+
+
+def test_cloud_token_profile_objects_isolate_concurrent_updates():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_profile_objects_test")
+    config = {
+        "token_store_bucket": "hourlyreport-1300869225",
+        "token_store_region": "ap-nanjing",
+        "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+    }
+    objects = {}
+
+    def fake_cos(method, _bucket, _region, key, body=None):
+        if method == "PUT":
+            objects[key] = json.loads(body)
+            return {"ok": True}
+        raise AssertionError(method)
+
+    callback.save_token_profile(
+        config,
+        "profile_a",
+        {
+            "access_token": "a2.access",
+            "refresh_token": "a2.refresh",
+            "open_id": "a.open",
+            "user_id": 1,
+        },
+        fake_cos,
+    )
+    callback.save_token_profile(
+        config,
+        "profile_b",
+        {
+            "access_token": "b.access",
+            "refresh_token": "b.refresh",
+            "open_id": "b.open",
+            "user_id": 2,
+        },
+        fake_cos,
+    )
+
+    assert set(objects) == {
+        "baidu-oauth/token-store/baidu_oauth_tokens/profiles/profile_a.json",
+        "baidu-oauth/token-store/baidu_oauth_tokens/profiles/profile_b.json",
+    }
+    assert objects[
+        "baidu-oauth/token-store/baidu_oauth_tokens/profiles/profile_a.json"
+    ]["authorization"]["refresh_token"] == "a2.refresh"
+    assert objects[
+        "baidu-oauth/token-store/baidu_oauth_tokens/profiles/profile_b.json"
+    ]["authorization"]["refresh_token"] == "b.refresh"
+
+
+def test_cloud_token_refresh_failure_uses_newer_concurrent_record():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_concurrent_refresh_test")
+    now = 1784700000
+    payload = {"apiProfile": "ningbo_niu_baidu", "forceRefresh": True}
+    headers = _signed_refresh_headers(callback, payload, "client-key", now)
+    reads = 0
+    old_record = {
+        "app_id": "app-1",
+        "access_token": "old.access.token",
+        "refresh_token": "old.refresh.token",
+        "open_id": "open",
+        "user_id": 45187067,
+        "expires_time": "2026-07-22 11:18:00",
+    }
+    new_record = {
+        **old_record,
+        "access_token": "new.access.token",
+        "refresh_token": "new.refresh.token",
+        "expires_time": "2026-07-24 11:18:00",
+    }
+
+    def fake_cos(method, _bucket, _region, _key, body=None):
+        nonlocal reads
+        assert method == "GET"
+        reads += 1
+        record = old_record if reads == 1 else new_record
+        return {
+            "format": "baidu-token-profile-v1",
+            "api_profile": "ningbo_niu_baidu",
+            "authorization": dict(record),
+        }
+
+    def failed_refresh(*_args):
+        raise callback.OAuthCallbackError("reauthorization_required", "refresh failed", 401)
+
+    result = callback.process_cloud_token_request(
+        payload,
+        headers,
+        {
+            "app_id": "app-1",
+            "secret_key": "server-secret-key",
+            "refresh_client_key": "client-key",
+            "refresh_max_timestamp_skew_seconds": 300,
+            "token_store_bucket": "hourlyreport-1300869225",
+            "token_store_region": "ap-nanjing",
+            "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+        },
+        fake_cos,
+        failed_refresh,
+        now,
+    )
+
+    assert reads == 2
+    assert result["access_token"] == "new.access.token"
+    assert result["token_refresh"] == "concurrent_refresh"
+
+
+def test_token_store_rejects_non_mapping_profiles():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_invalid_store_test")
+
+    with pytest.raises(callback.OAuthCallbackError) as exc_info:
+        callback._normalize_token_store({"format": "baidu-token-store-v1", "profiles": []})
+
+    assert exc_info.value.code == "token_store_invalid"
+
+
+def test_load_token_profile_rejects_incomplete_legacy_record():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_incomplete_legacy_profile_test")
+    config = {
+        "token_store_bucket": "hourlyreport-1300869225",
+        "token_store_region": "ap-nanjing",
+        "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+    }
+
+    def fake_cos(method, _bucket, _region, key, body=None):
+        assert method == "GET"
+        if "/profiles/" in key:
+            raise callback.OAuthCallbackError("token_store_not_found", "missing", 404)
+        return {
+            "format": "baidu-token-store-v1",
+            "profiles": {"ningbo_niu_baidu": {"access_token": "incomplete"}},
+        }
+
+    with pytest.raises(callback.OAuthCallbackError) as exc_info:
+        callback.load_token_profile(config, "ningbo_niu_baidu", fake_cos)
+
+    assert exc_info.value.code == "invalid_authorization"
+
+
+def test_cloud_token_endpoint_rejects_profile_missing_app_id():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_missing_profile_app_test")
+    now = 1784700000
+    payload = {"apiProfile": "ningbo_niu_baidu", "forceRefresh": False}
+    headers = _signed_refresh_headers(callback, payload, "client-key", now)
+
+    def fake_cos(method, _bucket, _region, _key, body=None):
+        assert method == "GET"
+        return {
+            "format": "baidu-token-profile-v1",
+            "api_profile": "ningbo_niu_baidu",
+            "authorization": {
+                "access_token": "cached.access.token",
+                "refresh_token": "cached.refresh.token",
+                "open_id": "open",
+                "user_id": 45187067,
+                "expires_time": "2026-07-23 11:17:33",
+            },
+        }
+
+    with pytest.raises(callback.OAuthCallbackError) as exc_info:
+        callback.process_cloud_token_request(
+            payload,
+            headers,
+            {
+                "app_id": "app-1",
+                "secret_key": "server-secret-key",
+                "refresh_client_key": "client-key",
+                "refresh_max_timestamp_skew_seconds": 300,
+                "token_store_bucket": "hourlyreport-1300869225",
+                "token_store_region": "ap-nanjing",
+                "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+            },
+            fake_cos,
+            lambda *_args: {},
+            now,
+        )
+
+    assert exc_info.value.code == "app_id_mismatch"
+    assert exc_info.value.status_code == 401
+
+
+def test_store_profile_rejects_missing_server_app_id():
+    callback = _load_baidu_oauth_callback_module("baidu_oauth_store_config_test")
+    now = 1784700000
+    payload = {
+        "apiProfile": "ningbo_niu_baidu",
+        "authorization": {
+            "access_token": "new.access.token",
+            "refresh_token": "new.refresh.token",
+            "open_id": "open",
+            "user_id": 45187067,
+        },
+    }
+    headers = _signed_refresh_headers(callback, payload, "client-key", now)
+
+    with pytest.raises(callback.OAuthCallbackError) as exc_info:
+        callback.process_store_profile_request(
+            payload,
+            headers,
+            {
+                "refresh_client_key": "client-key",
+                "refresh_max_timestamp_skew_seconds": 300,
+                "token_store_bucket": "hourlyreport-1300869225",
+                "token_store_region": "ap-nanjing",
+                "token_store_key": "baidu-oauth/token-store/baidu_oauth_tokens.json",
+            },
+            lambda *_args: {},
+            now,
+        )
+
+    assert exc_info.value.code == "server_config_error"
+    assert exc_info.value.status_code == 500
+
+
 def test_cloud_token_endpoint_returns_cached_access_token_without_refresh():
     callback = _load_baidu_oauth_callback_module("baidu_oauth_cloud_token_cached_test")
     now = 1784700000
@@ -8230,7 +8488,11 @@ def test_cloud_token_endpoint_returns_cached_access_token_without_refresh():
 
     def fake_cos(method, bucket, region, key, body=None):
         assert method == "GET"
-        return store
+        return {
+            "format": "baidu-token-profile-v1",
+            "api_profile": "ningbo_niu_baidu",
+            "authorization": dict(store["profiles"]["ningbo_niu_baidu"]),
+        }
 
     def fail_oauth(*_args):
         raise AssertionError("should not refresh")
@@ -8282,6 +8544,8 @@ def test_cloud_token_endpoint_refreshes_and_persists_rotated_token():
 
     def fake_cos(method, bucket, region, key, body=None):
         if method == "GET":
+            if key not in objects:
+                raise callback.OAuthCallbackError("token_store_not_found", "missing", 404)
             return json.loads(objects[key])
         if method == "PUT":
             objects[key] = body
@@ -8321,8 +8585,10 @@ def test_cloud_token_endpoint_refreshes_and_persists_rotated_token():
     )
 
     assert oauth_calls[0][1]["refreshToken"] == "old.refresh.token"
-    saved = json.loads(objects["baidu-oauth/token-store/baidu_oauth_tokens.json"])
-    assert saved["profiles"]["ningbo_niu_baidu"]["refresh_token"] == "new.refresh.token"
+    saved = json.loads(
+        objects["baidu-oauth/token-store/baidu_oauth_tokens/profiles/ningbo_niu_baidu.json"]
+    )
+    assert saved["authorization"]["refresh_token"] == "new.refresh.token"
     assert result["access_token"] == "new.access.token"
     assert result["token_refresh"] == "refreshed"
     assert "refresh_token" not in json.dumps(result)
@@ -8372,8 +8638,10 @@ def test_store_profile_endpoint_upserts_authorization_without_leaking_tokens():
         now,
     )
 
-    saved = json.loads(objects["baidu-oauth/token-store/baidu_oauth_tokens.json"])
-    assert saved["profiles"]["ningbo_niu_baidu"]["refresh_token"] == "new.refresh.token"
+    saved = json.loads(
+        objects["baidu-oauth/token-store/baidu_oauth_tokens/profiles/ningbo_niu_baidu.json"]
+    )
+    assert saved["authorization"]["refresh_token"] == "new.refresh.token"
     assert result["api_profile"] == "ningbo_niu_baidu"
     assert result["user_id"] == 45187067
     assert result["sub_account_count"] == 1
@@ -8908,7 +9176,7 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     root = Path(__file__).resolve().parents[1]
     release = build_release(
         root,
-        version="2026.7.22.109",
+        version="2026.7.23.110",
         online_update=True,
         output_dir=tmp_path,
     )
@@ -8917,9 +9185,9 @@ def test_online_update_build_contains_program_but_excludes_user_data(tmp_path):
     with zipfile.ZipFile(release) as archive:
         names = set(archive.namelist())
 
-    assert release.name == "Hourlyreport_automation_v2026.7.22.109.zip"
+    assert release.name == "Hourlyreport_automation_v2026.7.23.110.zip"
     assert release.parent == tmp_path
-    assert release_name("2026.7.22.109", online_update=True) == release.name
+    assert release_name("2026.7.23.110", online_update=True) == release.name
     assert "hourlyreport_automation.exe" in names
     assert "main.py" in names
     assert "gui/version.py" in names
@@ -9928,7 +10196,7 @@ def test_desktop_gui_help_menu_and_manual_update_check(tmp_path, monkeypatch):
     about_text = "\n".join(label.text() for label in window._last_about_dialog.findChildren(main_window.QLabel))
     assert "Clawd 小螃蟹" in about_text
     assert main_window.CURRENT_VERSION in about_text
-    assert "179068898-dotcom" in about_text
+    assert "kaiteJiang" in about_text
 
     window._quitting = True
     window.close()
@@ -10025,7 +10293,7 @@ def test_gui_uses_unified_hourlyreport_technical_names(monkeypatch):
     assert APP_EXE_NAME == "hourlyreport_automation.exe"
     assert APP_NAME == "hourlyreport_automation"
     assert DESKTOP_EXE == APP_EXE_NAME
-    assert GITHUB_LATEST_RELEASE_URL == "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
+    assert GITHUB_LATEST_RELEASE_URL == "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     assert UPDATE_ASSET_PATTERN.fullmatch("Hourlyreport_automation_v2026.7.17.103.zip")
     assert release_name("2026.7.17.103", internal=True).startswith("hourly_report_bot_internal_")
     assert release_name("2026.7.17.103") == "hourly_report_bot_release_v2026.7.17.103.zip"
@@ -11250,21 +11518,21 @@ def test_online_update_selects_newer_github_release_asset():
         select_release_update,
     )
 
-    assert CURRENT_VERSION == "2026.7.22.109"
+    assert CURRENT_VERSION == "2026.7.23.110"
     assert GITHUB_LATEST_RELEASE_URL == (
-        "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
+        "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
     )
     assert parse_version("v2026.7.19.104") == (2026, 7, 19, 104)
     assert parse_release_version("v2026.7.19.105") == "2026.7.19.105"
     assert parse_release_version("Hourlyreport_v2026.7.19.105") == "2026.7.19.105"
     payload = {
-        "tag_name": "v2026.7.22.110",
+        "tag_name": "v2026.7.23.111",
         "draft": False,
         "prerelease": False,
         "assets": [
             {"name": "notes.txt", "browser_download_url": "https://example/notes.txt"},
             {
-                "name": "Hourlyreport_automation_v2026.7.22.110.zip",
+                "name": "Hourlyreport_automation_v2026.7.23.111.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11275,10 +11543,10 @@ def test_online_update_selects_newer_github_release_asset():
     update = select_release_update(payload, CURRENT_VERSION)
 
     assert update is not None
-    assert update.version == "2026.7.22.110"
+    assert update.version == "2026.7.23.111"
     assert update.download_url == "https://example/update.zip"
     assert update.sha256 == "a" * 64
-    assert select_release_update(payload, "2026.7.22.110") is None
+    assert select_release_update(payload, "2026.7.23.111") is None
 
     for invalid in (
         {**payload, "draft": True},
@@ -11302,7 +11570,7 @@ def test_online_update_104_accepts_published_105_release_shape():
             {
                 "name": "Hourlyreport_automation_v2026.7.19.105.zip",
                 "browser_download_url": (
-                    "https://github.com/179068898-dotcom/Hourlyreport-Automation/releases/"
+                    "https://github.com/kaiteJiang/Hourlyreport-Automation/releases/"
                     "download/v2026.7.19.105/Hourlyreport_automation_v2026.7.19.105.zip"
                 ),
                 "digest": (
@@ -11371,12 +11639,12 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
     import gui.update_manager as update_manager
 
     payload = {
-        "tag_name": "v2026.7.22.110",
+        "tag_name": "v2026.7.23.111",
         "draft": False,
         "prerelease": False,
         "assets": [
             {
-                "name": "Hourlyreport_automation_v2026.7.22.110.zip",
+                "name": "Hourlyreport_automation_v2026.7.23.111.zip",
                 "browser_download_url": "https://example/update.zip",
                 "digest": "sha256:" + "a" * 64,
                 "size": 123,
@@ -11404,7 +11672,7 @@ def test_online_update_check_emits_available_without_downloading(monkeypatch):
 
     manager._check_for_update()
 
-    assert [item.version for item in available] == ["2026.7.22.110"]
+    assert [item.version for item in available] == ["2026.7.23.111"]
     assert ready == []
 
 

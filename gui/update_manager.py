@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - fallback for broken local environments
 
 
 GITHUB_LATEST_RELEASE_URL = (
-    "https://api.github.com/repos/179068898-dotcom/Hourlyreport-Automation/releases/latest"
+    "https://api.github.com/repos/kaiteJiang/Hourlyreport-Automation/releases/latest"
 )
 UPDATE_ASSET_PATTERN = re.compile(r"^Hourlyreport_automation_v(\d+(?:\.\d+){3})\.zip$")
 RELEASE_TAG_PATTERN = re.compile(r"^(?:Hourlyreport_)?v(\d+(?:\.\d+){3})$")

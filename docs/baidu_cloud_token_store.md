@@ -6,7 +6,7 @@
 
 - 桌面端默认从云端获取百度 `access_token`。
 - `refresh_token` 只保存在腾讯云 COS 内，不再依赖每台同事电脑各自刷新。
-- 云函数统一使用百度 `secretKey` 刷新 token，并把新 token 原子写回 COS。
+- 云函数统一使用百度 `secretKey` 刷新 token，并把新 token 写回对应授权的独立 COS 对象。
 - 云端失败时，桌面端 API 流程仍会按现有策略失败后降级浏览器抓数。
 
 ## SCF 接口
@@ -43,6 +43,22 @@ TENCENT_TOKEN=临时密钥 token（仅临时密钥需要）
 
 COS 存储桶必须保持私有读写。
 
+实际对象布局：
+
+```text
+baidu-oauth/token-store/baidu_oauth_tokens.json
+baidu-oauth/token-store/baidu_oauth_tokens/profiles/<api_profile>.json
+```
+
+旧的 `baidu_oauth_tokens.json` 保留为只读兼容来源。某个授权首次重新同步或刷新后，会写入自己的
+`profiles/<api_profile>.json`。各授权使用独立对象，多个项目并发刷新时不会再互相覆盖。
+
+SCF 的 COS 权限必须覆盖 `BAIDU_TOKEN_STORE_KEY` 以及同名前缀下的 `profiles/*`，至少允许
+`GetObject` 和 `PutObject`。
+
+百度返回的 `expiresTime` / `refreshExpiresTime` 如果不带时区，程序固定按北京时间
+`UTC+08:00` 解释；带 `Z` 或显式偏移的值按其自身时区解释。
+
 ## 桌面端网关配置
 
 每台电脑的 `secrets/secrets.json` 中，`baidu_api_gateway` 需要包含：
@@ -76,6 +92,16 @@ COS 存储桶必须保持私有读写。
 
 ## 敏感信息边界
 
-- `.baidu-auth`、`secrets/secrets.json`、COS 中的 `baidu_oauth_tokens.json` 都是敏感文件。
+- `.baidu-auth`、`secrets/secrets.json`、COS 中的总 store 和 `profiles/*.json` 都是敏感文件。
 - 不得提交 Git，不得写入日志，不得打入发布包。
 - `/token` 返回给桌面端的结果只包含 `access_token`，不会返回 `refresh_token`。
+
+## 部署后验收
+
+重新上传 SCF 包后执行：
+
+```cmd
+.venv\Scripts\python.exe main.py --mode test-baidu-api-readiness
+```
+
+该命令只读百度数据，不启动 Chrome、不读写业务 Excel。必须确认九个项目、十一个授权全部通过。

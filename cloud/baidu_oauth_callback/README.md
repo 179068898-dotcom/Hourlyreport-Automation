@@ -10,6 +10,8 @@ Web 函数部署配置：
 - 监听端口：9000，由 `app.py` 的 Python 标准库 WSGI 服务处理，不依赖 Flask。
 - 健康检查：根路径和 `/baidu/oauth/callback` 无参数访问时都返回 `status=ready`。
 - 令牌刷新：`POST /baidu/oauth/refresh`，仅接受桌面程序签名请求。
+- 集中取令牌：`POST /baidu/oauth/token`。
+- 同步授权：`POST /baidu/oauth/store-profile`。
 
 若新建普通事件函数，配置为：
 
@@ -37,6 +39,12 @@ BAIDU_ALLOWED_STATES=授权链接中的 state；多个值用英文逗号分隔
 BAIDU_MAX_TIMESTAMP_SKEW_SECONDS=600
 BAIDU_REFRESH_CLIENT_KEY=桌面程序与云函数共享的刷新签名密钥
 BAIDU_REFRESH_MAX_TIMESTAMP_SKEW_SECONDS=300
+BAIDU_TOKEN_STORE_BUCKET=私有 COS 存储桶
+BAIDU_TOKEN_STORE_REGION=COS 地域
+BAIDU_TOKEN_STORE_KEY=baidu-oauth/token-store/baidu_oauth_tokens.json
+TENCENT_SECRET_ID=COS 最小权限 SecretId
+TENCENT_SECRET_KEY=COS 最小权限 SecretKey
+TENCENT_TOKEN=临时密钥 token（仅临时密钥需要）
 ```
 
 `BAIDU_REFRESH_CLIENT_KEY` 必须使用独立随机值，不能与百度 `secretKey` 相同。桌面程序不保存
@@ -50,6 +58,13 @@ X-Baidu-Refresh-Signature
 
 刷新接口的请求正文、签名、access token、refresh token 和服务端密钥均不得写入腾讯云日志。
 
+COS 权限必须覆盖总 store 和派生的
+`baidu-oauth/token-store/baidu_oauth_tokens/profiles/*.json`。总 store 用于兼容已有授权；新同步或
+刷新后的授权按 `api_profile` 写入独立对象，避免多个项目并发刷新时互相覆盖。
+
+百度无时区的 Token 到期时间按北京时间 `UTC+08:00` 解释。代码保持 Python 3.6 兼容，不依赖
+`datetime.fromisoformat`。
+
 部署包由项目根目录执行下面的命令生成：
 
 ```cmd
@@ -61,5 +76,13 @@ X-Baidu-Refresh-Signature
 ```text
 cloud/baidu_oauth_callback/dist/baidu_oauth_callback_scf.zip
 ```
+
+上传新包后运行只读验收：
+
+```cmd
+.venv\Scripts\python.exe main.py --mode test-baidu-api-readiness
+```
+
+验收不启动 Chrome、不读写 Excel；必须确认九个项目、十一个授权全部通过。
 
 授权成功后浏览器会下载一个 `.baidu-auth` 文件。该文件包含敏感令牌，只能在本机导入，不要发送、截图或上传到聊天工具。导入完成后应人工删除下载文件。

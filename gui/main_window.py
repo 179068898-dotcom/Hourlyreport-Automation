@@ -2883,12 +2883,12 @@ class MainWindow(QMainWindow):
         version_label.setObjectName("aboutClawdText")
         layout.addWidget(version_label)
 
-        author_label = QLabel("来源：179068898-dotcom / Hourlyreport-Automation")
+        author_label = QLabel("来源：kaiteJiang / Hourlyreport-Automation")
         author_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         author_label.setObjectName("aboutClawdText")
         layout.addWidget(author_label)
 
-        copyright_label = QLabel("© 179068898-dotcom")
+        copyright_label = QLabel("© kaiteJiang")
         copyright_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         copyright_label.setObjectName("aboutClawdText")
         layout.addWidget(copyright_label)
